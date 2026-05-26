@@ -1,1 +1,13 @@
-__pycache__
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Testing / coverage
+.coverage
+htmlcov/
+
+.env
+
+# Alembic (keep versions, ignore cache)
+alembic/__pycache__/

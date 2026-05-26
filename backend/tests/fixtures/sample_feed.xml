@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+    xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+    xmlns:podcast="https://podcastindex.org/namespace/1.0">
+    <channel>
+        <title>The Sample Podcast</title>
+        <description>A podcast about things</description>
+        <itunes:image href="https://example.com/cover.jpg"/>
+
+        <item>
+            <title>Episode 1: Duration as HH:MM:SS</title>
+            <guid>ep-001</guid>
+            <description>First episode</description>
+            <pubDate>Mon, 01 Jan 2024 10:00:00 +0000</pubDate>
+            <enclosure url="https://example.com/ep1.mp3" type="audio/mpeg" length="12345"/>
+            <itunes:duration>1:03:42</itunes:duration>
+        </item>
+
+        <item>
+            <title>Episode 2: Duration as MM:SS</title>
+            <guid>ep-002</guid>
+            <description>Second episode</description>
+            <pubDate>Mon, 08 Jan 2024 10:00:00 +0000</pubDate>
+            <enclosure url="https://example.com/ep2.mp3" type="audio/mpeg" length="23456"/>
+            <itunes:duration>45:30</itunes:duration>
+        </item>
+
+        <item>
+            <title>Episode 3: With transcript tag</title>
+            <guid>ep-003</guid>
+            <description>Third episode with transcript</description>
+            <pubDate>Mon, 15 Jan 2024 10:00:00 +0000</pubDate>
+            <enclosure url="https://example.com/ep3.mp3" type="audio/mpeg" length="34567"/>
+            <itunes:duration>3600</itunes:duration>
+            <podcast:transcript url="https://example.com/ep3.vtt" type="text/vtt"/>
+        </item>
+    </channel>
+</rss>

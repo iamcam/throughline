@@ -30,10 +30,9 @@ source .venv/bin/activate
 ```
 uv sync
 ```
+### 4. Bootstrapping
 
-### 4. Database
-
-This project uses postgres with pgvector for embeddings.
+This project uses postgres with pgvector for embeddings and can be bootstrapped by running the following lines the postgres docker image (via podman)
 
 **Start the container**
 
@@ -41,11 +40,24 @@ This project uses postgres with pgvector for embeddings.
 podman compose -f docker-compose.dev.yml up -d
 ```
 
-**Run Migrations**
+Note the container name. It may be `backend-db-1`
+
+**Enable PGVector**
+
+```
+podman exec -it <container-name> psql -U <username> -d podcast_engine -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+**Run Migrations and create the test db**
 
 ```
 uv run alembic upgrade head
+PYTHONPATH=. uv run python scripts/create_test_db.py
+podman exec -it <container-name> psql -U <username> -d podcast_engine_test -c "CREATE EXTENSION IF NOT EXISTS vector;
 ```
+
+this will create a test database at `<database_name>_test` used by the testing suite. You only need to run it once
+
 
 ### 5. Run the dev server
 
@@ -61,6 +73,18 @@ Alternatively you can run uvicorn directly on your chosen port (default is 8000)
 
 ```
 uv run uvicorn src.api.main:app --reload --port 8080
+```
+
+## Useage
+
+**Ingesting Feed**
+
+To submit a feed for ingestion, pass the rss_url to the feeds endpoint:
+
+```
+curl -X POST http://localhost:3001/api/v1/feeds \
+  -H "Content-Type: application/json" \
+  -d '{"rss_url": "https://orvisffguide.libsyn.com/rss"}'
 ```
 
 ## Useful Commands

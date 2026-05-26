@@ -2,6 +2,9 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from fastapi import Request
 from src.config import get_settings
 
+from src.ingestion.queue import BackgroundTaskQueue, IngestionQueue
+from fastapi import Request
+
 settings = get_settings()
 
 engine = create_async_engine(settings.database_url, echo=False)
@@ -18,4 +21,5 @@ async def get_db():
             raise
 
 
-
+def get_ingestion_queue(request: Request) -> IngestionQueue:
+    return request.app.state.ingestion_queue

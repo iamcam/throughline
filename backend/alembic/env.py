@@ -2,8 +2,11 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, create_engine
 from sqlalchemy import pool
+from src.config import get_settings
 
 from alembic import context
+
+settings = get_settings()
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -27,7 +30,6 @@ target_metadata = Base.metadata
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
 
-
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 
@@ -40,9 +42,14 @@ def run_migrations_offline() -> None:
     script output.
 
     """
+    sync_url = settings.database_url.replace("postgresql+asyncpg", "postgresql+psycopg2")
+    config.set_main_option("sqlalchemy.url", sync_url)
+
     url = config.get_main_option("sqlalchemy.url")
+
+    sync_url = url.replace("postgresql+asyncpg", "postgresql")
     context.configure(
-        url=url,
+        url=sync_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},

@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     # Database
     database_url: str
     cors_origins: str
+
     # LLM
     llm_base_url: str
     llm_api_key: str = "none"
@@ -19,6 +20,7 @@ class Settings(BaseSettings):
     # App
     log_level: str = "INFO"
     audio_storage_path: str = "./data/audio"
+    max_concurrent_ingestions: int = 2
 
     model_config = SettingsConfigDict(
         env_file=".env",
