@@ -39,3 +39,6 @@ class PipelineStatusUpdate(BaseModel):
     progress: float | None = None
     position: int | None = None
     error: str | None = None
+
+class IngestRequest(BaseModel):
+    speaker_count_hint: int | None = None

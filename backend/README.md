@@ -27,9 +27,60 @@ source .venv/bin/activate
 
 ### 3. Install Dependencies
 
+All devices are supported, falling back to cpu if CUDA is not availabe. If you are running CUDA, it's one extra uv command.
+
+**All architectures**
 ```
 uv sync
 ```
+
+**Install Pytorch**
+
+By default `torch` and `torchaudio` are both installed on `uv sync`, but if you have a CUDA-capable GPU, you can install the appropriate versions:
+
+```
+# Linux / Windows — NVIDIA GPU
+uv add torch torchaudio --index https://download.pytorch.org/whl/cu121
+```
+
+**Whisper**
+
+The `faster-whisper` package is automatically installed, but Mac / Apple Silicon users might want a faster option via `mlx-whisper`:
+
+```
+# mlx-whisper — Apple Silicon only, faster than faster-whisper on Metal
+uv add mlx-whisper
+```
+Then update the .env to reflect your `mlx_whisper` choice
+
+```
+# Set in .env:
+WHISPER_BACKEND=mlx_whisper
+WHISPER_MODEL_SIZE=large-v3
+```
+
+**Configure `.env`**
+
+```
+# All platforms
+WHISPER_MODEL_SIZE=medium # tiny | base | small | medium | large-v3
+
+# Apple Silicon with mlx-whisper (if installed)
+WHISPER_BACKEND=mlx_whisper
+
+# Everyone else (default)
+WHISPER_BACKEND=faster_whisper
+```
+
+Because speaker diarization is very computationally intensive and quite slow, it is off by default.
+
+```
+ENABLE_DIARIZATION=false
+```
+
+Pyannote requires a Hugging Face token and model access. Go to https://huggingface.co/pyannote/speaker-diarization-community-1 and accept the terms, then set `HUGGINGFACE_TOKEN` in your `.env`.
+
+
 ### 4. Bootstrapping
 
 This project uses postgres with pgvector for embeddings and can be bootstrapped by running the following lines the postgres docker image (via podman)
@@ -66,6 +117,7 @@ Run the dev server - default port is on 3001
 ```
 uv run uvicorn src.api.main:app --reload --port 3001
 ```
+
 > API Available at http://localhost:3001
 > API docs at http://localhost:3001/docs
 
@@ -77,6 +129,10 @@ uv run uvicorn src.api.main:app --reload --port 8080
 
 ## Useage
 
+API docs are automatically generated and available at http://localhost:3001/docs
+
+
+
 **Ingesting Feed**
 
 To submit a feed for ingestion, pass the rss_url to the feeds endpoint:
@@ -86,6 +142,14 @@ curl -X POST http://localhost:3001/api/v1/feeds \
   -H "Content-Type: application/json" \
   -d '{"rss_url": "https://orvisffguide.libsyn.com/rss"}'
 ```
+
+**Ingesting an Episode**
+
+Once a feed is added, get the episode ID from the episodes list, then trigger ingestion:
+
+- Optional `speaker_count_hint` tells the diarization model how many speakers to expect. Omit if unknown
+- Monitor progress via SSE stream or poll the status endpoint
+- Pipeline pauses at `PENDING_NAMES` because speaker confirmation required before chunking begins
 
 ## Useful Commands
 
@@ -144,6 +208,6 @@ src/
   query/        # RAG query engine, tool-calling, session management
   storage/      # Vector store abstraction
   llm/          # LLM and embedding client protocols
-  transcription/ # Transcription service protocol and implementations
+  transcription/ # TranscriptionService protocol, local (Whisper + Pyannote) and remote implementations
 ```
 

@@ -2,6 +2,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
 class Settings(BaseSettings):
+    huggingface_token: str | None
+
     # Database
     database_url: str
     cors_origins: str
@@ -16,6 +18,13 @@ class Settings(BaseSettings):
     embedding_api_key: str = "none"
     embedding_model_name: str = "nomic-embed-text"
     embedding_dimensions: int = 768
+
+    # Transcription
+    diarization_model: str | None = None
+    whisper_backend: str = "faster_whisper"
+    whisper_model_size: str = "medium"
+    transcription_backend: str = "local"
+
 
     # App
     log_level: str = "INFO"

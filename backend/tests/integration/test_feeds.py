@@ -1,42 +1,7 @@
-import pytest
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from src.api.main import app
-from src.api.dependencies import get_db
-from src.models.db import Base
-from src.config import get_settings
-
-settings = get_settings()
-TEST_DATABASE_URL = f"{settings.database_url}_test"
+# tests/integration/test_feeds.py
+from httpx import AsyncClient
 
 SAMPLE_FEED_URL = "https://orvisffguide.libsyn.com/rss"
-
-
-@pytest.fixture
-async def client():
-    engine = create_async_engine(TEST_DATABASE_URL)
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-
-    async def override_get_db():
-        async with session_factory() as session:
-            try:
-                yield session
-            except Exception:
-                await session.rollback()
-                raise
-
-    app.dependency_overrides[get_db] = override_get_db
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        yield ac
-
-    app.dependency_overrides.clear()
-    await engine.dispose()
 
 
 async def test_add_feed_creates_episodes(client: AsyncClient):

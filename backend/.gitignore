@@ -11,3 +11,6 @@ htmlcov/
 
 # Alembic (keep versions, ignore cache)
 alembic/__pycache__/
+
+# Application
+data/

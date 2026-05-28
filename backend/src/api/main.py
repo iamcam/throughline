@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Podcast Knowledge Engine",
-    version="0.1.0",
+    version="0.1.2",
     lifespan = lifespan
 )
 

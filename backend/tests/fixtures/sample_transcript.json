@@ -1,0 +1,102 @@
+{
+    "language": "en",
+    "source": "whisper_local",
+    "segments": [
+        {
+            "speaker_id": "SPEAKER_00",
+            "text": "Welcome to the show. I'm Lex Fridman and today I have a very special guest, someone who has shaped the AI industry more than almost anyone.",
+            "start_ms": 0,
+            "end_ms": 7200
+        },
+        {
+            "speaker_id": "SPEAKER_01",
+            "text": "Thanks for having me, Lex. I'm Jensen Huang, CEO of NVIDIA. It's great to be here.",
+            "start_ms": 7400,
+            "end_ms": 12800
+        },
+        {
+            "speaker_id": "SPEAKER_00",
+            "text": "Jensen, let's start at the beginning. You co-founded NVIDIA in 1993. What was the original vision?",
+            "start_ms": 13100,
+            "end_ms": 18500
+        },
+        {
+            "speaker_id": "SPEAKER_01",
+            "text": "We believed that there was a new kind of computing coming, one focused entirely on graphics and visual computing. Nobody else was doing it at that scale.",
+            "start_ms": 18800,
+            "end_ms": 27300
+        },
+        {
+            "speaker_id": "SPEAKER_00",
+            "text": "And at what point did you realize that the GPU could be used for something beyond graphics?",
+            "start_ms": 27600,
+            "end_ms": 33100
+        },
+        {
+            "speaker_id": "SPEAKER_01",
+            "text": "It was around 2006, 2007. We launched CUDA and suddenly researchers started using GPUs to accelerate all kinds of scientific computing.",
+            "start_ms": 33400,
+            "end_ms": 42900
+        },
+        {
+            "speaker_id": "SPEAKER_00",
+            "text": "CUDA changed everything. Do you remember the moment you knew it was going to be big?",
+            "start_ms": 43200,
+            "end_ms": 48600
+        },
+        {
+            "speaker_id": "SPEAKER_01",
+            "text": "Honestly the moment was when we saw the deep learning results coming out of Geoffrey Hinton's lab. The speedups were just staggering. We knew then.",
+            "start_ms": 48900,
+            "end_ms": 58400
+        },
+        {
+            "speaker_id": "SPEAKER_00",
+            "text": "Let's talk about the current moment. We're in what many people are calling an AI supercycle. How do you think about what's happening right now?",
+            "start_ms": 58700,
+            "end_ms": 67200
+        },
+        {
+            "speaker_id": "SPEAKER_01",
+            "text": "I think we're in a genuine platform shift. Not a bubble. The demand for computation is growing faster than our ability to supply it and that gap is widening.",
+            "start_ms": 67500,
+            "end_ms": 78100
+        },
+        {
+            "speaker_id": "SPEAKER_00",
+            "text": "Some people worry about the energy consumption of AI at scale. How do you respond to that?",
+            "start_ms": 78400,
+            "end_ms": 84900
+        },
+        {
+            "speaker_id": "SPEAKER_01",
+            "text": "It's a real concern and we take it seriously. But consider the alternative — the energy cost of not having better AI tools for drug discovery, climate modeling, all of it.",
+            "start_ms": 85200,
+            "end_ms": 96700
+        },
+        {
+            "speaker_id": "SPEAKER_00",
+            "text": "What does AGI mean to you personally? Do you think we'll get there?",
+            "start_ms": 97000,
+            "end_ms": 102400
+        },
+        {
+            "speaker_id": "SPEAKER_01",
+            "text": "I think the question of AGI is less interesting than the question of what we do with the intelligence we're building right now. We have systems today that are extraordinary.",
+            "start_ms": 102700,
+            "end_ms": 113200
+        },
+        {
+            "speaker_id": "SPEAKER_00",
+            "text": "Last question. What advice would you give to a young engineer who wants to work on the most important problems in AI?",
+            "start_ms": 113500,
+            "end_ms": 120100
+        },
+        {
+            "speaker_id": "SPEAKER_01",
+            "text": "Learn the fundamentals deeply. Mathematics, physics, systems. The people who will solve the hardest problems are the ones who understand things from first principles.",
+            "start_ms": 120400,
+            "end_ms": 130800
+        }
+    ]
+}
