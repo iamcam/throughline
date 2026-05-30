@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     whisper_model_size: str = "medium"
     transcription_backend: str = "local"
 
+    speaker_inference_window_ms: int = 900_000
 
     # App
     log_level: str = "INFO"

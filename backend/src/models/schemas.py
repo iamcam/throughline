@@ -1,3 +1,4 @@
+# src/models/schemas.py
 from pydantic import BaseModel, HttpUrl
 from datetime import datetime
 from uuid import UUID
@@ -42,3 +43,22 @@ class PipelineStatusUpdate(BaseModel):
 
 class IngestRequest(BaseModel):
     speaker_count_hint: int | None = None
+
+
+class SpeakerResponse(BaseModel):
+    speaker_id: str
+    display_name: str | None
+    name_inferred: bool
+    name_confirmed: bool
+    confidence: str | None
+
+    model_config = {"from_attributes": True}
+
+class SpeakerPreviewResponse(BaseModel):
+    speaker_id: str
+    sample_quote: str
+    sample_timestamp_ms: int
+
+class UpdateSpeakerRequest(BaseModel):
+    speaker_id: str
+    display_name: str

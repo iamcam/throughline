@@ -1,11 +1,14 @@
 # src/transcription/local.py
 import asyncio
+import logging
 from concurrent.futures import ProcessPoolExecutor
 from typing import Literal
 import os
 from src.transcription.base import TranscriptResult, TranscriptSegment
 
 _executor = ProcessPoolExecutor(max_workers=1)
+
+logger = logging.getLogger(__name__)
 
 def _transcribe_sync(
     audio_path: str,
@@ -25,12 +28,12 @@ def _transcribe_sync(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    print(f"Begin transcriptionL {audio_path}")
+    logger.info(f"Begin transcriptionL {audio_path}")
     # --- Whisper ---
     # MPS not supported by faster-whisper; fall back to CPU on Apple Silicon
     words = []
     if whisper_backend == "mlx_whisper":
-        print(f"Using mlx_whisper with model whisper-{whisper_model_size}-mlx")
+        logger.info(f"Using mlx_whisper with model whisper-{whisper_model_size}-mlx")
         import mlx_whisper
         result = mlx_whisper.transcribe(
             audio_path,
@@ -43,7 +46,7 @@ def _transcribe_sync(
             for w in s.get("words", [])
         ]
     else:
-        print(f"Using faster_whisper with model {whisper_model_size}")
+        logger.info(f"Using faster_whisper with model {whisper_model_size}")
         from faster_whisper import WhisperModel
         compute_type = "int8" if device == "cpu" else "float16"
         whisper = WhisperModel(whisper_model_size, device=device, compute_type=compute_type)
@@ -53,17 +56,17 @@ def _transcribe_sync(
             word_timestamps=True,
         )
         for segment in segments_iter:
-            print(".", end="")
             for word in segment.words:
                 words.append((word.start, word.end, word.word))
-    print(".")
-    print(f"Finished transcribing.")
 
-    # --- Pyannote ---
+    logger.info(f"Finished transcribing.")
+
+    # --- Pyannote (if enabled) ---
+
 
     if not diarization_model:
-        print("Skipping diarization")
-        # No diarization model configured — assign all words to SPEAKER_00
+        logger.info("Skipping diarization")
+        # No diarization model configured — assign all words to UNKNOWN
         segments = []
         current_words = []
         current_start = words[0][0] if words else 0.0
@@ -79,7 +82,7 @@ def _transcribe_sync(
 
                 if len(current_words) >= MIN_SEGMENT_WORDS:
                     segments.append(TranscriptSegment(
-                        speaker_id="SPEAKER_00",
+                        speaker_id="UNKNOWN",
                         text=" ".join(current_words).strip(),
                         start_ms=int(current_start * 1000),
                         end_ms=int(current_end * 1000),
@@ -90,14 +93,14 @@ def _transcribe_sync(
 
         if current_words:
             segments.append(TranscriptSegment(
-                speaker_id="SPEAKER_00",
+                speaker_id="UNKNOWN",
                 text=" ".join(current_words).strip(),
                 start_ms=int(current_start * 1000),
                 end_ms=int(current_end * 1000),
             ))
 
 
-        print(f"Finished assigning transcription to SPEAKER_00")
+        logger.info(f"Finished assigning transcription to 'UNKNOWN' speaker label")
         return TranscriptResult(
         segments=segments,
         language=language,
@@ -106,7 +109,7 @@ def _transcribe_sync(
 
     # --- else performing speaker diarization ---
 
-    print(f"Begin Diarization with {diarization_model}")
+    logger.info(f"Begin Diarization with {diarization_model}")
     # mp3 cannot guarantee exact sample counts for given frame boundaries - frames don't align perfectly with arbitrary time boundaries (but wav does).
     wav_path = _make_wav_for_diarization(audio_path)
     try:
@@ -127,9 +130,6 @@ def _transcribe_sync(
         if os.path.exists(wav_path):
             os.remove(wav_path)
 
-    print(type(diarization))
-    print(dir(diarization))
-
     speaker_turns = [
         (turn.start, turn.end, speaker)
         for turn, speaker in diarization.speaker_diarization
@@ -143,7 +143,7 @@ def _transcribe_sync(
                 return speaker
         return "SPEAKER_00"
 
-    print(f"Finished diarizing")
+    logger.info(f"Finished diarizing")
     segments: list[TranscriptSegment] = []
     current_speaker: str = "SPEAKER_00"
     current_words: list[str] = []
@@ -176,7 +176,7 @@ def _transcribe_sync(
             start_ms=int(current_start * 1000),
             end_ms=int(current_end * 1000),
         ))
-    print(f"Transcription + Diarization complete: {len(segment)} segments")
+    logger.info(f"Transcription + Diarization complete: {len(segment)} segments")
     return TranscriptResult(
         segments=segments,
         language=language,
@@ -222,7 +222,7 @@ class LocalTranscriptionService:
         speaker_count_hint: int | None = None,
         language: str = "en",
     ) -> TranscriptResult:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             _executor,
             _transcribe_sync,

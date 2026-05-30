@@ -30,6 +30,11 @@ target_metadata = Base.metadata
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
 
+def include_object(object, name, type_, reflected, compare_to):
+    if type_ == "index" and name == "chunks_embedding_idx":
+        return False
+    return True
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 
@@ -69,7 +74,8 @@ def run_migrations_online() -> None:
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
-            target_metadata=target_metadata
+            target_metadata=target_metadata,
+            include_object=include_object
         )
         with context.begin_transaction():
             context.run_migrations()

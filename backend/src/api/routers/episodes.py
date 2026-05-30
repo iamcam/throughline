@@ -1,3 +1,4 @@
+# src/api/routers/episodes.py
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
@@ -9,24 +10,28 @@ from src.api.dependencies import get_db, get_ingestion_queue, AsyncSessionLocal
 from src.ingestion.queue import IngestionQueue
 from src.models.schemas import EpisodeResponse, PipelineStatusUpdate, IngestRequest
 from src.ingestion import feed_service
-from src.ingestion.pipeline import PipelineServices, ingest_episode, chunk_episode
+from src.ingestion.pipeline import PipelineServices, ingest_episode
 from src.ingestion.audio_downloader import AudioDownloader
 from src.ingestion.transcript_store import TranscriptStore
 from src.ingestion.speaker_store import SpeakerStore
+from src.ingestion.speaker_resolver import SpeakerResolver
 from src.ingestion.status_service import PipelineStatusService
 from src.transcription.local import LocalTranscriptionService
 from src.transcription.remote import RemoteTranscriptionService
+from src.llm.client import OpenAICompatibleLLMClient
+
+
 from src.config import get_settings
 
 router = APIRouter(prefix="/episodes", tags=["episodes"])
 
-TERMINAL_STATUSES = {"READY", "ERROR", "PENDING_NAMES"}
+TERMINAL_STATUSES = {"READY", "ERROR"}
 
 
 def _build_pipeline_services(settings) -> PipelineServices:
     """
     Build PipelineServices from current settings.
-    Called once per ingest request - all services are stateless and cheap.
+    Called once per ingest request - all services are stateless.
     """
     if settings.transcription_backend == "remote":
         transcription = RemoteTranscriptionService(
@@ -40,12 +45,22 @@ def _build_pipeline_services(settings) -> PipelineServices:
             diarization_model=settings.diarization_model,
         )
 
+    llm_client = OpenAICompatibleLLMClient(
+        base_url=settings.llm_base_url,
+        api_key=settings.llm_api_key,
+        model=settings.llm_model_name
+    )
+
     return PipelineServices(
         status = PipelineStatusService(),
         downloader=AudioDownloader(storage_path=settings.audio_storage_path),
         transcription=transcription,
         transcript_store=TranscriptStore(),
-        speaker_store=SpeakerStore()
+        speaker_store=SpeakerStore(),
+        speaker_resolver=SpeakerResolver(
+            llm_client=llm_client,
+            window_ms=settings.speaker_inference_window_ms
+        )
     )
 
 

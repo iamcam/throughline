@@ -79,6 +79,7 @@ class EpisodeSpeaker(Base):
     display_name: Mapped[str | None] = mapped_column(Text)  # the speaker's name to display
     name_inferred: Mapped[bool] = mapped_column(Boolean, default=False)
     name_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    confidence: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     episode: Mapped["Episode"] = relationship(back_populates="speakers")
 

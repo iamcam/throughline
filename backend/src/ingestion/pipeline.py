@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.ingestion.audio_downloader import AudioDownloader
 from src.ingestion.transcript_store import TranscriptStore
 from src.ingestion.speaker_store import SpeakerStore
+from src.ingestion.speaker_resolver import SpeakerResolver
 from src.ingestion.status_service import PipelineStatusService
 from src.transcription.base import TranscriptionService
 from src.transcription.transcript_fetcher import fetch_transcript
@@ -23,6 +24,7 @@ class PipelineServices:
     transcription: TranscriptionService
     transcript_store: TranscriptStore
     speaker_store: SpeakerStore
+    speaker_resolver: SpeakerResolver
 
 
 async def ingest_episode(
@@ -38,7 +40,6 @@ async def ingest_episode(
         await services.status.set(episode_id, "DOWNLOADING", db=db)
 
         transcript = None
-        audio_path = None
 
         if episode.transcript_url:
 
@@ -81,32 +82,30 @@ async def ingest_episode(
         await services.speaker_store.initialize_from_transcript(episode_id, transcript, db=db)
 
         # ~~~~~~~~ Speaker Inference ~~~~~~~~
-        await services.status.set(episode_id, "PENDING_NAMES", db=db)
+        # Attempt to identify the host from the intro window
+        # Returns None if no name is found. This is not an error - pipeline continues regardless.
+        # UNKNOWN row stays as-is; SPEAKER_00 promoted if name found.
+        await services.status.set(episode_id, "INFERRING_SPEAKERS", db=db)
+        inferred = await services.speaker_resolver.infer(transcript.segments)
+        await services.speaker_store.save_inferred(episode_id, inferred, db=db)
+
+        if inferred:
+            logger.info(
+                f"Episode {episode_id}: inferred speaker '{inferred.name}' "
+                f"with {inferred.confidence} confidence"
+            )
+        else:
+            logger.info(f"Episode {episode_id}: no speaker inferred, continuing with speaker label 'UNKNOWN'")
+
+        # ~~~~~~~~ Chunking + Embedding ~~~~~~~~
+        # Phase 4 implementation coming
+        await services.status.set(episode_id, "CHUNKING", db=db)
+
+        await services.status.set(episode_id, "READY", db=db)
+
 
     except Exception as e:
         logger.exception(f"Ingestion failed for episode {episode_id}")
         await services.status.set(episode_id, "ERROR", error=str(e), db=db)
         raise
 
-async def chunk_episode(
-    episode_id: UUID,
-    services: PipelineServices,
-    db: AsyncSession
-) -> None:
-    """
-    TODO: Resolve in phase 4
-    Runs after speaker confirmation.
-    Chunking and embedding to come in Phase 4.
-    Stub kelpt here so the status transition is reserved and the queue can call this by name moving forward
-    """
-    try:
-        await services.status.set(episode_id, "CHUNKING", db=db)
-
-        # Phase 4 fills in here
-
-        await services.status.set(episode_id, "READY", db=db)
-
-    except Exception as e:
-        logger.exception(f"Chunking failed for episode {episode_id}")
-        await services.status.set(episode_id, "ERROR", error=str(e), db=db)
-        raise

@@ -3,98 +3,98 @@
     "source": "whisper_local",
     "segments": [
         {
-            "speaker_id": "SPEAKER_00",
-            "text": "Welcome to the show. I'm Lex Fridman and today I have a very special guest, someone who has shaped the AI industry more than almost anyone.",
+            "speaker_id": "UNKNOWN",
+            "text": "Welcome to Synthetic Minds. I'm Ada Sinclair and today my guest is someone who has spent thirty years thinking about machine cognition.",
             "start_ms": 0,
             "end_ms": 7200
         },
         {
-            "speaker_id": "SPEAKER_01",
-            "text": "Thanks for having me, Lex. I'm Jensen Huang, CEO of NVIDIA. It's great to be here.",
+            "speaker_id": "UNKNOWN",
+            "text": "Thanks for having me Ada. I'm Dr. Eliot Vasquez, I lead the reasoning systems group at Meridian Labs.",
             "start_ms": 7400,
             "end_ms": 12800
         },
         {
-            "speaker_id": "SPEAKER_00",
-            "text": "Jensen, let's start at the beginning. You co-founded NVIDIA in 1993. What was the original vision?",
+            "speaker_id": "UNKNOWN",
+            "text": "Eliot, you published a paper last year that got a lot of attention. The core claim was that current transformers cannot reason, only interpolate. Can you unpack that?",
             "start_ms": 13100,
             "end_ms": 18500
         },
         {
-            "speaker_id": "SPEAKER_01",
-            "text": "We believed that there was a new kind of computing coming, one focused entirely on graphics and visual computing. Nobody else was doing it at that scale.",
+            "speaker_id": "UNKNOWN",
+            "text": "Sure. Interpolation means retrieving patterns seen during training. Reasoning means composing rules in novel ways. The evidence suggests current models do the former extremely well and the latter only accidentally.",
             "start_ms": 18800,
             "end_ms": 27300
         },
         {
-            "speaker_id": "SPEAKER_00",
-            "text": "And at what point did you realize that the GPU could be used for something beyond graphics?",
+            "speaker_id": "UNKNOWN",
+            "text": "Critics would say the distinction is arbitrary. That human reasoning is also pattern matching at some level.",
             "start_ms": 27600,
             "end_ms": 33100
         },
         {
-            "speaker_id": "SPEAKER_01",
-            "text": "It was around 2006, 2007. We launched CUDA and suddenly researchers started using GPUs to accelerate all kinds of scientific computing.",
+            "speaker_id": "UNKNOWN",
+            "text": "That's a fair pushback and I take it seriously. My response is that the robustness profile is different. Humans generalise to genuinely novel domains. Current models degrade sharply outside the training distribution.",
             "start_ms": 33400,
             "end_ms": 42900
         },
         {
-            "speaker_id": "SPEAKER_00",
-            "text": "CUDA changed everything. Do you remember the moment you knew it was going to be big?",
+            "speaker_id": "UNKNOWN",
+            "text": "Where do you think the breakthrough comes from? Architecture changes, more data, or something else entirely?",
             "start_ms": 43200,
             "end_ms": 48600
         },
         {
-            "speaker_id": "SPEAKER_01",
-            "text": "Honestly the moment was when we saw the deep learning results coming out of Geoffrey Hinton's lab. The speedups were just staggering. We knew then.",
+            "speaker_id": "UNKNOWN",
+            "text": "Honestly I think it comes from feedback loops. Systems that can run experiments, observe outcomes, and update their own representations. That's what we're missing.",
             "start_ms": 48900,
             "end_ms": 58400
         },
         {
-            "speaker_id": "SPEAKER_00",
-            "text": "Let's talk about the current moment. We're in what many people are calling an AI supercycle. How do you think about what's happening right now?",
+            "speaker_id": "UNKNOWN",
+            "text": "Let's talk about safety implications. If you're right that current models can't truly reason, does that make them safer or more dangerous?",
             "start_ms": 58700,
             "end_ms": 67200
         },
         {
-            "speaker_id": "SPEAKER_01",
-            "text": "I think we're in a genuine platform shift. Not a bubble. The demand for computation is growing faster than our ability to supply it and that gap is widening.",
+            "speaker_id": "UNKNOWN",
+            "text": "More dangerous in some ways. Precisely because they appear to reason. A system that confidently produces plausible-sounding nonsense is harder to audit than one that obviously fails.",
             "start_ms": 67500,
             "end_ms": 78100
         },
         {
-            "speaker_id": "SPEAKER_00",
-            "text": "Some people worry about the energy consumption of AI at scale. How do you respond to that?",
+            "speaker_id": "UNKNOWN",
+            "text": "What's the most underrated problem in the field right now?",
             "start_ms": 78400,
             "end_ms": 84900
         },
         {
-            "speaker_id": "SPEAKER_01",
-            "text": "It's a real concern and we take it seriously. But consider the alternative — the energy cost of not having better AI tools for drug discovery, climate modeling, all of it.",
+            "speaker_id": "UNKNOWN",
+            "text": "Evaluation. We don't have good ways to measure what these systems actually know versus what they can retrieve. Until we solve that we're flying blind on progress.",
             "start_ms": 85200,
             "end_ms": 96700
         },
         {
-            "speaker_id": "SPEAKER_00",
-            "text": "What does AGI mean to you personally? Do you think we'll get there?",
+            "speaker_id": "UNKNOWN",
+            "text": "Last question. What would convince you that a system had crossed from interpolation into genuine reasoning?",
             "start_ms": 97000,
             "end_ms": 102400
         },
         {
-            "speaker_id": "SPEAKER_01",
-            "text": "I think the question of AGI is less interesting than the question of what we do with the intelligence we're building right now. We have systems today that are extraordinary.",
+            "speaker_id": "UNKNOWN",
+            "text": "Robust performance on problems that require composing rules in combinations never seen during training. Not benchmarks that can be gamed. Actual novel problem solving under adversarial conditions.",
             "start_ms": 102700,
             "end_ms": 113200
         },
         {
-            "speaker_id": "SPEAKER_00",
-            "text": "Last question. What advice would you give to a young engineer who wants to work on the most important problems in AI?",
+            "speaker_id": "UNKNOWN",
+            "text": "Dr. Vasquez, this has been a fascinating conversation. Thank you for being on Synthetic Minds.",
             "start_ms": 113500,
             "end_ms": 120100
         },
         {
-            "speaker_id": "SPEAKER_01",
-            "text": "Learn the fundamentals deeply. Mathematics, physics, systems. The people who will solve the hardest problems are the ones who understand things from first principles.",
+            "speaker_id": "UNKNOWN",
+            "text": "My pleasure Ada. Always good to think out loud with someone who asks hard questions.",
             "start_ms": 120400,
             "end_ms": 130800
         }

@@ -1,10 +1,11 @@
 # src/ingestion/speaker_store.py
 from uuid import UUID, uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update
 
 from src.models.db import EpisodeSpeaker
 from src.transcription.base import TranscriptResult
+from src.ingestion.speaker_resolver import InferredSpeaker
 
 class SpeakerStore:
     async def initialize_from_transcript(
@@ -42,23 +43,27 @@ class SpeakerStore:
     async def save_inferred(
             self,
             episode_id: UUID,
-            names: dict[str, str | None],
+            result: InferredSpeaker | None,
             db: AsyncSession
     ) -> None:
         """
-        Update display_name and name_inferred for each speaker_id wher ethe LLM returns a name.
-        Speakers with None are left with display_name=NULL
+        Update the SPEAKER_00 row ith the inferred name and confidence.
+        If result is None, inference found nothing - leave row unchanged and let the pipeline continue with display_name = NULL.
         """
-        from sqlalchemy import update
+        if result is None:
+            return
 
-        for speaker_id, name in names.items():
-            if name is not None:
-                await db.execute(
-                    update(EpisodeSpeaker)
-                    .where(EpisodeSpeaker.episode_id == episode_id)
-                    .where(EpisodeSpeaker.speaker_id == speaker_id)
-                    .values(display_name=name, name_inferred=True)
-                )
+        await db.execute(
+            update(EpisodeSpeaker)
+            .where(EpisodeSpeaker.episode_id == episode_id)
+            .where(EpisodeSpeaker.speaker_id == "UNKNOWN")
+            .values(
+                display_name=result.name,
+                name_inferred=True,
+                name_confirmed=False,
+                confidence=result.confidence,
+            )
+        )
         await db.commit()
 
     async def confirm_names(
@@ -68,20 +73,36 @@ class SpeakerStore:
             db: AsyncSession
     ) -> None:
         """
-        Called from PUT at /speakers. Sets display_name and name_confirmed=True
-        name_inferred preserved as-is, reflecting how the name was first obtained.
+        Called from PUT at /speakers. Sets display_name and name_confirmed=True.
+
+        name_inferred reflects how the name was first obtained:
+        - User confirms without editing: name_inferred unchanged, stays true
+        - User edits the name: name_inferred=False (made as manual entry)
         """
         from sqlalchemy import update
 
         for entry in names:
+            speaker = await db.scalar(
+                select(EpisodeSpeaker)
+                .where(EpisodeSpeaker.episode_id == episode_id)
+                .where(EpisodeSpeaker.speaker_id == entry["speaker_id"])
+            )
+            if speaker is None:
+                continue
+
+            name_changed = speaker.display_name != entry["display_name"]
             await db.execute(
                 update(EpisodeSpeaker)
                 .where(EpisodeSpeaker.episode_id == episode_id)
                 .where(EpisodeSpeaker.speaker_id == entry["speaker_id"])
-                .values(display_name=entry["display_name"], name_confirmed=True)
+                .values(
+                    display_name=entry["display_name"],
+                    name_confirmed=True,
+                    name_inferred=False if name_changed else speaker.name_inferred
+                )
             )
-
         await db.commit()
+
 
     async def get_speakers(
             self,

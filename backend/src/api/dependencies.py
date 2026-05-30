@@ -1,8 +1,11 @@
+# src/api/dependencies.py
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from fastapi import Request
 from src.config import get_settings
 
 from src.ingestion.queue import BackgroundTaskQueue, IngestionQueue
+from src.ingestion.speaker_store import SpeakerStore
+
 from fastapi import Request
 
 settings = get_settings()
@@ -23,3 +26,6 @@ async def get_db():
 
 def get_ingestion_queue(request: Request) -> IngestionQueue:
     return request.app.state.ingestion_queue
+
+def get_speaker_store() -> SpeakerStore:
+    return SpeakerStore()
