@@ -1,6 +1,6 @@
 # Podcast Knowledge Engine — Implementation Plan
 
-> Read alongside `ARCHITECTURE.md`. This document tells you **what to build, in what order, and why**.  
+> Read alongside `ARCHITECTURE.md`. This document tells you **what to build, in what order, and why**.
 > Each phase produces something runnable. Never more than one phase "in flight" at a time.
 
 ## Before You Start
@@ -10,9 +10,10 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 **Tech stack:** Python 3.12 + uv, FastAPI, SQLAlchemy (async), PostgreSQL + pgvector, React + Vite + TypeScript, OpenTelemetry + Phoenix. All LLM and embedding calls use an OpenAI-compatible client pointed at a configurable endpoint — local (Ollama, llama.cpp) or cloud.
 
 **Key design constraints to carry through every phase:**
-- `speaker_id` (e.g. `"SPEAKER_00"`) is immutable and set by diarization. Display names live only in `episode_speakers.display_name` and are resolved via join at read time. Never store display names in `transcript_segments` or `chunks`.
+- `speaker_id` is the stable link between segments/chunks and speaker metadata. In v1 (no diarization), all segments are written with `speaker_id = 'UNKNOWN'`. If `SpeakerResolver` infers exactly one speaker, that row is promoted to `speaker_id = 'SPEAKER_00'`. Display names live only in `episode_speakers.display_name` and are resolved via join at read time. Never store display names in `transcript_segments` or `chunks`.
+- Speaker diarization is deferred to Future Scope 1.5. CPU/local Pyannote is impractical on non-CUDA hardware. The `UNKNOWN` sentinel is intentional — it distinguishes un-diarized episodes from single-speaker episodes where `SpeakerResolver` found a name.
 - The DB is the source of truth for pipeline status. SSE streams read from the DB — they are not a direct pipe from the background worker.
-- CPU-bound work (Whisper, Pyannote) must run in a `ProcessPoolExecutor`. Calling them directly blocks the asyncio event loop and freezes the API.
+- CPU-bound work (Whisper) must run in a `ProcessPoolExecutor`. Calling it directly blocks the asyncio event loop and freezes the API.
 - All injectable dependencies (DB session, LLM client, embedding client, IngestionQueue) are wired through `src/api/dependencies.py` and injected via FastAPI's `Depends()`. Do not instantiate them inline in route handlers.
 
 ---
@@ -30,11 +31,11 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 ## Phase Overview
 
 | Phase | What You Build | Runnable At End |
-|-------|---------------|-----------------| 
+|-------|---------------|-----------------|
 | 0 | Project scaffold, tooling, DB | `GET /health` returns 200 |
 | 1 | RSS feed ingestion + IngestionQueue | Feed + episodes in DB; queue abstraction in place |
 | 2 | Audio download + transcription pipeline | Episode transcript in DB via SSE-tracked job |
-| 3 | Speaker inference + naming UI | Named speakers in DB; LLM pre-populates names |
+| 3 | Speaker inference + naming API | LLM infers host name with confidence; pipeline runs straight to chunking |
 | 4 | Chunking + embedding | Chunks with vectors in pgvector; speaker_id linked |
 | 5 | Basic RAG query | Single-turn Q&A over transcript content |
 | 6 | Tool-calling query engine | Multi-turn chat with conditional retrieval |
@@ -406,6 +407,13 @@ async def test_delete_feed_cascades()
 
 **Goal:** Trigger ingestion. Status streams via SSE. Transcript lands in DB.
 
+> **Implementation note:** Diarization is deferred to Future Scope 1.5.
+> CPU/local diarization via Pyannote is impractical on non-CUDA hardware.
+> In v1, all transcript segments are written with `speaker_id = 'UNKNOWN'`.
+> `SpeakerResolver` (Phase 3) may promote this to `SPEAKER_00` if it infers
+> a single host name. The `UNKNOWN` sentinel is intentional — it distinguishes
+> un-diarized episodes from confirmed single-speaker episodes.
+
 ### Tasks
 
 #### 2.1 SSE status stream (`src/api/routers/episodes.py`)
@@ -425,13 +433,11 @@ async def stream_status(episode_id: UUID, db: AsyncSession, queue: IngestionQueu
                 position=await queue.get_position(episode.ingestion_job_id) if episode.ingestion_job_id else None
             )
             yield {"data": update.model_dump_json()}
-            if episode.pipeline_status in ("READY", "ERROR", "PENDING_NAMES"):
+            if episode.pipeline_status in ("READY", "ERROR"):
                 break
             await asyncio.sleep(2)
     return EventSourceResponse(generator())
 ```
-
-Note: stream pauses at `PENDING_NAMES` — user action required. Resumes after speaker confirmation.
 
 #### 2.2 Transcription interface (`src/transcription/base.py`)
 ```python
@@ -464,32 +470,44 @@ class TranscriptionService(Protocol):
 
 #### 2.4 Local transcription service (`src/transcription/local.py`) 🤖
 ```bash
-uv add faster-whisper pyannote.audio torch
+uv add faster-whisper
+# mlx-whisper is optional for Apple Silicon: uv add mlx-whisper
 ```
 
 Steps:
-1. Whisper → word-level timestamps
-2. Pyannote diarization → speaker segments
-3. Align: assign Whisper words to diarization speaker segments
-4. Return merged `TranscriptSegment` list
+1. Whisper → transcript segments
+2. Assign `speaker_id = 'UNKNOWN'` to all segments — diarization is deferred
+3. Return `TranscriptSegment` list
 
-Run both models in `asyncio.get_event_loop().run_in_executor(None, ...)` — CPU-bound, must not block event loop.
-
-Requires `HUGGINGFACE_TOKEN` for Pyannote model download.
+Pyannote diarization is not invoked in v1. Run Whisper in `asyncio.get_running_loop().run_in_executor(None, ...)` — CPU-bound, must not block event loop.
 
 #### 2.5 Remote transcription service (`src/transcription/remote.py`)
-HTTP client POSTing to `TRANSCRIPTION_SERVICE_URL`. Same Protocol, no logic.
+HTTP client POSTing audio to `TRANSCRIPTION_SERVICE_URL`. The remote service
+owns both transcription and diarization — `DIARIZATION_MODEL` is ignored when
+`TRANSCRIPTION_BACKEND=remote`.
+
+**Deferred to align with remote diarization work (see FUTURE_SCOPE.md 1.5).**
+Current implementation is a stub that satisfies the Protocol but is untested
+against a real endpoint. Concrete remote backends to implement:
+
+- Generic sidecar (Docker, same contract as local pipeline)
+- OpenAI Whisper API (optional speaker diarization via response format)
+- Cloud GPU providers (RunPod, Modal) running Whisper + Pyannote
+
+When implementing a specific remote backend, normalise its response format
+into `TranscriptResult` inside `RemoteTranscriptionService` — the pipeline
+and Protocol are unchanged.
 
 #### 2.6 RSS transcript shortcut
 If `episode.transcript_url` is set:
 - Download VTT/SRT file
-- Parse into `TranscriptSegment` list with `speaker_id = "SPEAKER_00"`
-- Skip diarization, proceed directly with single speaker
+- Parse into `TranscriptSegment` list with `speaker_id = 'UNKNOWN'`
+- Proceed without audio download or Whisper
 - User can override via reingest endpoint
 
 #### 2.7 Transcript storage (`src/ingestion/transcript_store.py`)
-Save segments to `transcript_segments` table — `speaker_id` only, no `display_name`.
-Upsert one row per distinct speaker into `episode_speakers` via `SpeakerStore` (`src/ingestion/speaker_store.py`) — `display_name=NULL`, both flags false.
+Save segments to `transcript_segments` table — `speaker_id = 'UNKNOWN'` for all segments (no diarization in v1), no `display_name`.
+Upsert one row into `episode_speakers` via `SpeakerStore` (`src/ingestion/speaker_store.py`) — `speaker_id='UNKNOWN'`, `display_name=NULL`, both flags false.
 Keep these as separate services: `TranscriptStore` owns segment rows, `SpeakerStore` owns `episode_speakers` rows.
 
 #### 2.8 Ingestion orchestrator (`src/ingestion/pipeline.py`)
@@ -511,18 +529,29 @@ async def ingest_episode(
         )
         await services.transcript_store.save(episode_id, transcript)
         await services.speaker_store.initialize_from_transcript(episode_id, transcript)
+        # All segments written with speaker_id = 'UNKNOWN'
 
         await services.status.set(episode_id, "INFERRING_SPEAKERS")
-        names = await services.speaker_resolver.infer(transcript.segments)
-        await services.speaker_store.save_inferred(episode_id, names)
+        result = await services.speaker_resolver.infer(transcript.segments)
+        await services.speaker_store.save_inferred(episode_id, result)
+        # If one name found: UNKNOWN → SPEAKER_00, display_name set, pipeline continues
+        # If none found: UNKNOWN stays, pipeline continues — not an error
 
-        await services.status.set(episode_id, "PENDING_NAMES")
+        await services.status.set(episode_id, "CHUNKING")
+        segments = await services.transcript_store.get_segments(episode_id)
+        chunks = await services.chunker.chunk(segments)
+
+        await services.status.set(episode_id, "EMBEDDING")
+        embedded = await services.embedder.embed(chunks)
+        await services.vector_store.upsert(embedded)
+
+        await services.status.set(episode_id, "READY")
     except Exception as e:
         await services.status.set(episode_id, "ERROR", error=str(e))
         raise
 ```
 
-`PipelineServices` is a dataclass of all injected services — see `ARCHITECTURE.md` section 3.4.
+`PipelineServices` is a dataclass of all injected services — see `ARCHITECTURE.md` section 3.4. Note that chunking and embedding are now part of the same job, not a separate enqueued job.
 
 #### 2.9 Ingest endpoint
 ```
@@ -534,8 +563,8 @@ Body: { "speaker_count_hint": 2 }
 #### 2.10 Tests
 ```python
 # tests/unit/test_pipeline.py  (fixture: sample_transcript.json)
-async def test_ingest_stores_segments_with_speaker_id()
-async def test_ingest_creates_episode_speakers_rows()
+async def test_ingest_stores_segments_with_unknown_speaker_id()
+async def test_ingest_creates_single_unknown_episode_speakers_row()
 async def test_display_name_not_stored_in_segments()
 async def test_status_transitions_correctly()
 async def test_error_stored_on_failure()
@@ -548,21 +577,36 @@ def test_remote_satisfies_protocol()
 **Note on fixture:** `tests/fixtures/sample_transcript.json` was created in Phase 0. Use it here to test the pipeline without running real Whisper or Pyannote.
 
 ### Phase 2 Done When
-- `POST /ingest` → queued, SSE streams stage transitions
-- Transcript segments in DB with `speaker_id` (no display_name)
-- `episode_speakers` rows created with null display_name
+- `POST /ingest` → queued, SSE streams stage transitions through to READY
+- Transcript segments in DB with `speaker_id = 'UNKNOWN'` (no display_name)
+- `episode_speakers` row created with `speaker_id='UNKNOWN'`, null display_name
 - All tests pass using fixture (no real Whisper required)
 - Git tag: `v0.1.2-transcription`
 
 ---
 
-## Phase 3 — Speaker Inference + Naming
+## Phase 3 — Speaker Inference
 
-**Goal:** LLM infers names from intro text. User confirms via API. Names linked, never embedded.
+**Goal:** LLM infers host name from intro text with a confidence score. Result pre-populates `episode_speakers`. Pipeline runs straight to chunking — no pause for user input. Speaker names can be updated anytime via API.
+
+**Context:** Diarization is deferred (Future Scope 1.5). All transcript segments arrive from Phase 2 with `speaker_id = 'UNKNOWN'`. This phase attempts to identify a single host name from the intro window. Multi-speaker episodes remain `UNKNOWN` until diarization is available — this is expected and correct, not an error state.
 
 ### Tasks
 
-#### 3.1 Speaker inference (`src/ingestion/speaker_resolver.py`) 🤖
+#### 3.1 `InferredSpeaker` dataclass (`src/ingestion/speaker_resolver.py`)
+
+Before writing `SpeakerResolver`, define what it returns:
+
+```python
+@dataclass
+class InferredSpeaker:
+    name: str
+    confidence: str   # "high" | "medium" | "low"
+```
+
+This is the return type of `SpeakerResolver.infer()`. Returning a typed dataclass (rather than a raw dict) makes the downstream logic in `SpeakerStore` explicit and testable.
+
+#### 3.2 `SpeakerResolver` (`src/ingestion/speaker_resolver.py`) 🤖
 
 `SpeakerResolver` takes a `LLMClient` — not `AsyncOpenAI` directly.
 
@@ -575,99 +619,159 @@ class SpeakerResolver:
     async def infer(
         self,
         segments: list[TranscriptSegment],
-    ) -> dict[str, str | None]:
+    ) -> InferredSpeaker | None:
         intro = [s for s in segments if s.start_ms < self._window_ms]
-        formatted = "\n".join(f"{s.speaker_id}: \"{s.text}\"" for s in intro)
-        prompt = f"""Given these podcast transcript segments, identify the real name of each speaker.
-Return JSON only. Use null if a name cannot be determined with confidence.
+        if not intro:
+            return None
 
-Segments:
-{formatted}
+        formatted = "\n".join(f'"{s.text}"' for s in intro)
+        prompt = f"""Who is the speaker in this podcast transcript and what is your confidence on this answer from low, medium, or high? Use the structured format: {{"name": "[person name]", "confidence": "[low|medium|high]"}}
 
-Return format: {{"SPEAKER_00": "Name or null", "SPEAKER_01": "Name or null"}}"""
+Transcript:
+{formatted}"""
 
         response = await self._llm.complete(
             messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
+            temperature=0.0,
         )
-        return json.loads(response.content)
+        try:
+            data = json.loads(response.content)
+            if data.get("name") and data.get("confidence") in ("low", "medium", "high"):
+                return InferredSpeaker(name=data["name"], confidence=data["confidence"])
+        except (json.JSONDecodeError, KeyError):
+            pass
+        return None
 ```
 
-Store results via `SpeakerStore.save_inferred()`:
-- Name returned: `display_name=name`, `name_inferred=true`, `name_confirmed=false`
-- Null returned: `display_name=NULL`, both flags false
+A few design points worth understanding:
 
-#### 3.2 Speaker endpoints
+- `temperature=0.0` — this is a factual lookup, not creative generation. We want the most deterministic output the model can give.
+- `response_format={"type": "json_object"}` — forces structured output on models that support it (OpenAI, most local models). Avoids the model wrapping the JSON in prose.
+- Returning `None` on parse failure rather than raising — the pipeline treats `None` as "couldn't determine, skip" and continues. A bad LLM response shouldn't abort ingestion.
+- No diarization means there is only ever one "speaker" to infer. The prompt reflects this — we're asking "who is the speaker" not "who are the speakers".
+
+#### 3.3 Update `SpeakerStore.save_inferred()` (`src/ingestion/speaker_store.py`)
+
+The existing `save_inferred()` was written expecting a `dict[str, str | None]` (one entry per diarized speaker). Update it to accept `InferredSpeaker | None`:
+
+```python
+async def save_inferred(
+    self,
+    episode_id: UUID,
+    result: InferredSpeaker | None,
+    db: AsyncSession,
+) -> None:
+    if result is None:
+        # Nothing to do — UNKNOWN row already exists from initialize_from_transcript
+        return
+
+    # Promote UNKNOWN → SPEAKER_00, set display_name and confidence
+    await db.execute(
+        update(EpisodeSpeaker)
+        .where(
+            EpisodeSpeaker.episode_id == episode_id,
+            EpisodeSpeaker.speaker_id == "UNKNOWN",
+        )
+        .values(
+            speaker_id="SPEAKER_00",
+            display_name=result.name,
+            name_inferred=True,
+            confidence=result.confidence,
+        )
+    )
+    # Also update transcript_segments and chunks to SPEAKER_00
+    await db.execute(
+        update(TranscriptSegment)
+        .where(TranscriptSegment.episode_id == episode_id)
+        .values(speaker_id="SPEAKER_00")
+    )
+    await db.commit()
+```
+
+Why update `transcript_segments` too: the `speaker_id` in segments should match `episode_speakers` so joins work correctly. Since there's only one speaker in v1, this is a bulk update of the entire episode.
+
+Note: chunks don't exist yet at this point in the pipeline — they're created in the next step. The chunker will read the updated `speaker_id` from segments.
+
+#### 3.4 Update `episode_speakers` schema
+
+Add `confidence` column to the Alembic migration:
+
+```python
+# New column in EpisodeSpeaker model (src/models/db.py)
+confidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+```
+
+Generate migration:
+```bash
+uv run alembic revision --autogenerate -m "add confidence to episode_speakers"
+uv run alembic upgrade head
+```
+
+#### 3.5 Speaker endpoints (`src/api/routers/speakers.py`)
 
 ```
-GET /api/v1/episodes/{episode_id}/speakers
+GET  /api/v1/episodes/{episode_id}/speakers
 → [{
     speaker_id: "SPEAKER_00",
     display_name: "Lex Fridman",
     name_inferred: true,
     name_confirmed: false,
-    segment_count: 42,
-    total_ms: 183000
+    confidence: "high"
   }]
 
-GET /api/v1/episodes/{episode_id}/speakers/preview
+GET  /api/v1/episodes/{episode_id}/speakers/preview
 → [{
     speaker_id: "SPEAKER_00",
     sample_quote: "Welcome to the show...",
     sample_timestamp_ms: 0
   }]
-# Returns first segment > 20 words per speaker for identification
+# Returns first segment > 20 words for the speaker
 
-PUT /api/v1/episodes/{episode_id}/speakers
+PUT  /api/v1/episodes/{episode_id}/speakers
 Body: [{ "speaker_id": "SPEAKER_00", "display_name": "Lex Fridman" }]
 → 200 OK
-# Sets name_confirmed=true; triggers auto-chunk if AUTO_CHUNK_AFTER_NAMING=true
 ```
 
-Name changes update `episode_speakers.display_name` only. No transcript or chunk data changes. All reads resolve names via join.
+`PUT /speakers` logic:
+- If `display_name` matches the current `display_name` (user confirmed without editing): set `name_confirmed=true`, leave `name_inferred` unchanged
+- If `display_name` differs: set `name_confirmed=true`, `name_inferred=false`
+- No pipeline trigger needed — chunking is no longer gated on speaker confirmation
 
-#### 3.3 Advance pipeline
-After speaker confirmation, auto-trigger chunking if configured. The trigger lives in the `PUT /speakers` route handler in `src/api/routers/speakers.py` — after persisting confirmed names, check the `AUTO_CHUNK_AFTER_NAMING` flag and if true, call `queue.enqueue(episode_id, {"stage": "chunk"})` to queue the chunking job.
+Remove the `AUTO_CHUNK_AFTER_NAMING` config and the `queue.enqueue()` call that was in the original Phase 3.3. The pipeline now runs straight through.
 
-```python
-# src/api/routers/speakers.py
-@router.put("/{episode_id}/speakers")
-async def confirm_speakers(
-    episode_id: UUID,
-    body: list[SpeakerNameUpdate],
-    db: AsyncSession = Depends(get_db),
-    queue: IngestionQueue = Depends(get_ingestion_queue),
-    settings: Settings = Depends(get_settings),
-):
-    await save_speaker_names(episode_id, body, db)
-    if settings.auto_chunk_after_naming:
-        await queue.enqueue(episode_id, {"stage": "chunk"})
-    return {"status": "ok"}
-```
+#### 3.6 Update pipeline orchestrator (`src/ingestion/pipeline.py`)
 
-Add to `.env`:
-```
-AUTO_CHUNK_AFTER_NAMING=true
-```
+Merge the two-function design (`ingest_episode` + `chunk_episode`) into one continuous function. See the updated pseudocode in ARCHITECTURE.md section 3.4. Key change: no `PENDING_NAMES` status, no pause, no second enqueue.
 
-#### 3.4 Tests
+#### 3.7 Tests
+
 ```python
 # tests/unit/test_speaker_resolver.py
-async def test_infers_names_from_intro()
-async def test_returns_null_for_unknown_speaker()
-async def test_prompt_includes_only_intro_window()
-async def test_json_parsing_handles_malformed_response()
+async def test_infers_name_and_confidence_from_intro()
+async def test_returns_none_when_no_name_found()
+async def test_returns_none_on_malformed_json()
+async def test_filters_to_intro_window_only()
+async def test_temperature_zero_used()
+async def test_empty_segments_returns_none()
 
 # tests/integration/test_speakers.py
-async def test_confirmed_name_does_not_modify_segment_speaker_id()
+async def test_save_inferred_promotes_unknown_to_speaker_00()
+async def test_save_inferred_updates_transcript_segments()
+async def test_save_inferred_none_leaves_unknown_intact()
+async def test_confirmed_name_sets_name_confirmed_true()
+async def test_edited_name_sets_name_inferred_false()
 async def test_speaker_lookup_joins_correctly()
-async def test_name_change_does_not_require_rechunking()
+async def test_confidence_stored_on_episode_speakers()
 ```
 
 ### Phase 3 Done When
-- `GET /speakers` returns inferred names with `name_inferred: true`
-- `PUT /speakers` confirms names; `transcript_segments.speaker_id` unchanged
-- Sample quotes available for speaker identification
+- `SpeakerResolver.infer()` returns `InferredSpeaker | None`
+- `SpeakerStore.save_inferred()` promotes `UNKNOWN` → `SPEAKER_00` when name found
+- `GET /speakers` returns inferred name with confidence level
+- `PUT /speakers` confirms or corrects names; `name_inferred` flag updated correctly
+- Pipeline runs straight to chunking — no `PENDING_NAMES` pause
+- All tests pass using `MockLLMClient` — no real LLM required
 - Git tag: `v0.1.3-speakers`
 
 ---
@@ -1044,7 +1148,7 @@ Typed axios wrapper for every endpoint. Types mirror backend Pydantic schemas.
 ```typescript
 function useEpisodeStatus(episodeId: string) {
   const [status, setStatus] = useState<PipelineStatusUpdate | null>(null)
-  
+
   useEffect(() => {
     const source = new EventSource(`/api/v1/episodes/${episodeId}/status/stream`)
     source.onmessage = (e) => setStatus(JSON.parse(e.data))
@@ -1065,18 +1169,19 @@ function useEpisodeStatus(episodeId: string) {
 - Episode list with status badges
 - In-progress: SSE-driven progress bar + stage label
 - QUEUED: show position ("Position 3 in queue")
-- "Ingest" button with speaker count input (0 = unknown)
-- Click PENDING_NAMES → Speaker Naming page
+- "Ingest" button with speaker count hint input (informational only in v1 — no diarization)
+- READY episodes: show speaker name + confidence badge if inferred, or "Speaker unknown" prompt
 
 #### 7.6 Speaker naming page
-- Episode title header
-- Per speaker: sample quote + name input
-- Inferred names pre-filled, visually marked (italic + "✓ inferred" badge)
-- Unresolved names: empty input with placeholder
-- "Confirm & Continue" → PUT speakers → returns to Episodes
+- Accessible from episode detail — not a pipeline gate
+- Shows inferred name (if any) with confidence badge ("High confidence", "Medium confidence")
+- Name input pre-filled from inference, editable
+- "Save" → PUT speakers → updates display name, no pipeline effect
+- Episodes with `UNKNOWN` speaker show a prompt to add a name optionally
 
 ### Phase 7 Done When
-- Add feed → trigger ingestion → watch SSE progress → assign speaker names — all in browser
+- Add feed → trigger ingestion → watch SSE progress to READY — all in browser
+- Speaker name (if inferred) visible with confidence badge; editable post-ingestion
 - No curl required for happy path
 - Git tag: `v0.1.7-frontend-ingestion`
 
@@ -1254,7 +1359,7 @@ Test that BackgroundTaskQueue satisfies the IngestionQueue Protocol."
 | `v0.1.0-scaffold` | Health endpoint, DB connected |
 | `v0.1.1-feeds` | RSS ingestion, episode listing, queue abstraction |
 | `v0.1.2-transcription` | Transcription pipeline, SSE status streaming |
-| `v0.1.3-speakers` | LLM speaker inference, confirmation, name linking |
+| `v0.1.3-speakers` | LLM speaker inference with confidence; pipeline runs straight to READY |
 | `v0.1.4-chunking` | Chunks + embeddings, speaker_id preserved |
 | `v0.1.5-basic-rag` | Simple Q&A with resolved speaker names in citations |
 | `v0.1.6-chat-engine` | Multi-turn chat, tool-calling, conditional retrieval |
