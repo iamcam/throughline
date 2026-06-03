@@ -41,7 +41,7 @@ class TranscriptStore:
         from sqlalchemy import select
         result = await db.execute(
             select(TranscriptSegmentModel)
-            .where(TranscriptSegmentModel.episode == episode_id)
+            .where(TranscriptSegmentModel.episode_id == episode_id)
             .order_by(TranscriptSegmentModel.sequence_order)
         )
         return list(result.scalars().all())
