@@ -68,6 +68,7 @@ def _transcribe_sync(
         logger.info("Skipping diarization")
         # No diarization model configured — assign all words to UNKNOWN
         segments = []
+
         current_words = []
         current_start = words[0][0] if words else 0.0
         current_end = 0.0
@@ -86,6 +87,7 @@ def _transcribe_sync(
                         text=" ".join(current_words).strip(),
                         start_ms=int(current_start * 1000),
                         end_ms=int(current_end * 1000),
+                        sequence_order=len(segments)
                     ))
                     current_words = []
                     current_start = word_end
@@ -97,6 +99,7 @@ def _transcribe_sync(
                 text=" ".join(current_words).strip(),
                 start_ms=int(current_start * 1000),
                 end_ms=int(current_end * 1000),
+                sequence_order=len(segments)
             ))
 
 
@@ -160,6 +163,7 @@ def _transcribe_sync(
                     text=" ".join(current_words).strip(),
                     start_ms=int(current_start * 1000),
                     end_ms=int(current_end * 1000),
+                    sequence_order=len(segments)
                 ))
             current_speaker = speaker
             current_words = [word_text]
@@ -175,6 +179,7 @@ def _transcribe_sync(
             text=" ".join(current_words).strip(),
             start_ms=int(current_start * 1000),
             end_ms=int(current_end * 1000),
+            sequence_order=len(segments)
         ))
     logger.info(f"Transcription + Diarization complete: {len(segment)} segments")
     return TranscriptResult(

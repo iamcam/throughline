@@ -6,97 +6,113 @@
             "speaker_id": "UNKNOWN",
             "text": "Welcome to Synthetic Minds. I'm Ada Sinclair and today my guest is someone who has spent thirty years thinking about machine cognition.",
             "start_ms": 0,
-            "end_ms": 7200
+            "end_ms": 7200,
+            "sequence_order": 0
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "Thanks for having me Ada. I'm Dr. Eliot Vasquez, I lead the reasoning systems group at Meridian Labs.",
             "start_ms": 7400,
-            "end_ms": 12800
+            "end_ms": 12800,
+            "sequence_order": 1
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "Eliot, you published a paper last year that got a lot of attention. The core claim was that current transformers cannot reason, only interpolate. Can you unpack that?",
             "start_ms": 13100,
-            "end_ms": 18500
+            "end_ms": 18500,
+            "sequence_order": 2
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "Sure. Interpolation means retrieving patterns seen during training. Reasoning means composing rules in novel ways. The evidence suggests current models do the former extremely well and the latter only accidentally.",
             "start_ms": 18800,
-            "end_ms": 27300
+            "end_ms": 27300,
+            "sequence_order": 3
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "Critics would say the distinction is arbitrary. That human reasoning is also pattern matching at some level.",
             "start_ms": 27600,
-            "end_ms": 33100
+            "end_ms": 33100,
+            "sequence_order": 4
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "That's a fair pushback and I take it seriously. My response is that the robustness profile is different. Humans generalise to genuinely novel domains. Current models degrade sharply outside the training distribution.",
             "start_ms": 33400,
-            "end_ms": 42900
+            "end_ms": 42900,
+            "sequence_order": 5
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "Where do you think the breakthrough comes from? Architecture changes, more data, or something else entirely?",
             "start_ms": 43200,
-            "end_ms": 48600
+            "end_ms": 48600,
+            "sequence_order": 6
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "Honestly I think it comes from feedback loops. Systems that can run experiments, observe outcomes, and update their own representations. That's what we're missing.",
             "start_ms": 48900,
-            "end_ms": 58400
+            "end_ms": 58400,
+            "sequence_order": 7
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "Let's talk about safety implications. If you're right that current models can't truly reason, does that make them safer or more dangerous?",
             "start_ms": 58700,
-            "end_ms": 67200
+            "end_ms": 67200,
+            "sequence_order": 8
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "More dangerous in some ways. Precisely because they appear to reason. A system that confidently produces plausible-sounding nonsense is harder to audit than one that obviously fails.",
             "start_ms": 67500,
-            "end_ms": 78100
+            "end_ms": 78100,
+            "sequence_order": 9
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "What's the most underrated problem in the field right now?",
             "start_ms": 78400,
-            "end_ms": 84900
+            "end_ms": 84900,
+            "sequence_order": 10
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "Evaluation. We don't have good ways to measure what these systems actually know versus what they can retrieve. Until we solve that we're flying blind on progress.",
             "start_ms": 85200,
-            "end_ms": 96700
+            "end_ms": 96700,
+            "sequence_order": 11
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "Last question. What would convince you that a system had crossed from interpolation into genuine reasoning?",
             "start_ms": 97000,
-            "end_ms": 102400
+            "end_ms": 102400,
+            "sequence_order": 12
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "Robust performance on problems that require composing rules in combinations never seen during training. Not benchmarks that can be gamed. Actual novel problem solving under adversarial conditions.",
             "start_ms": 102700,
-            "end_ms": 113200
+            "end_ms": 113200,
+            "sequence_order": 13
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "Dr. Vasquez, this has been a fascinating conversation. Thank you for being on Synthetic Minds.",
             "start_ms": 113500,
-            "end_ms": 120100
+            "end_ms": 120100,
+            "sequence_order": 14
         },
         {
             "speaker_id": "UNKNOWN",
             "text": "My pleasure Ada. Always good to think out loud with someone who asks hard questions.",
             "start_ms": 120400,
-            "end_ms": 130800
+            "end_ms": 130800,
+            "sequence_order": 15
         }
     ]
 }

@@ -29,3 +29,26 @@ class OpenAICompatibleLLMClient:
 
         response = await self._client.chat.completions.create(**kwargs)
         return LLMResponse(content=response.choices[0].message.content)
+
+
+
+class OpenAICompatibleEmbeddingClient:
+    """
+    Embedding client for any OpenAI-compatible endpoint.
+    Works with Ollama (nomic-embed-text), OpenAI, and others.
+    Configure with EMBEDDING_BASE_URL, EMBEDDING_API_KEY, EMBEDDING_MODEL_NAME in .env
+    """
+
+    def __init__(self, base_url: str, api_key: str, model: str):
+        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        self._model = model
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        response = await self._client.embeddings.create(
+            model=self._model,
+            input=texts,
+        )
+        # Response items are ordered by index, not by input order
+        # Sort by index to guarantee alignment with input list
+        return [item.embedding for item in sorted(response.data, key=lambda x: x.index)]
+

@@ -5,6 +5,10 @@ from uuid import uuid4
 from unittest.mock import AsyncMock
 from sqlalchemy import select
 
+from src.ingestion.chunker import Chunker
+from src.ingestion.embedder import Embedder
+from src.storage.vector_store import PgvectorStore
+from src.llm.base import EmbeddingClient
 from src.ingestion.pipeline import PipelineServices, ingest_episode
 from src.ingestion.transcript_store import TranscriptStore
 from src.ingestion.speaker_store import SpeakerStore
@@ -30,6 +34,24 @@ class MockLLMClient:
 
     async def complete(self, messages, response_format=None, temperature=0.7):
         return LLMResponse(content=self._content)
+
+
+class MockEmbeddingClient:
+    """
+    Returns deterministic vectors based on input index.
+    Groups of three consecutive texts share a vector.
+    Similarity within a group = 1.0 (no topic cut).
+    Similarity between groups = 0.0 (topic cut at every group boundary).
+    With threshold 0.75 this produces one topic segment per group of three.
+    """
+    _VECTOR_A = [1.0, 0.0] + [0.0] * 766
+    _VECTOR_B = [0.0, 1.0] + [0.0] * 766
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        return [
+            self._VECTOR_A if (i // 3) % 2 == 0 else self._VECTOR_B
+            for i in range(len(texts))
+        ]
 
 
 # --- fixtures ---
@@ -70,8 +92,10 @@ async def episode(db_session):
 def mock_services(sample_transcript) -> PipelineServices:
     """
     PipelineServices with real storage services and mocked I/O.
-    TranscriptionService returns sample_transcript directly — no Whisper.
-    LLM returns a fixed inference result — no network call.
+    TranscriptionService returns sample_transcript directly - no Whisper.
+    LLM returns a fixed inference result - no network call.
+    EmbeddingClient returns zero vectors - no embedding endpoint call.
+    VectorStore uses real PgvectorStore against the test DB.
     """
     mock_transcription = AsyncMock(spec=TranscriptionService)
     mock_transcription.transcribe.return_value = sample_transcript
@@ -86,6 +110,13 @@ def mock_services(sample_transcript) -> PipelineServices:
         transcript_store=TranscriptStore(),
         speaker_store=SpeakerStore(),
         speaker_resolver=SpeakerResolver(llm_client=MockLLMClient()),
+        chunker=Chunker(
+            chunk_size_tokens=256,
+            chunk_overlap_tokens=32,
+            topic_similarity_threshold=0.75,
+        ),
+        embedder=Embedder(embedding_client=MockEmbeddingClient()),
+        vector_store=PgvectorStore(),
     )
 
 
@@ -195,3 +226,159 @@ def test_local_satisfies_protocol():
 def test_remote_satisfies_protocol():
     svc = RemoteTranscriptionService(service_url="http://localhost:8001")
     assert isinstance(svc, TranscriptionService)
+
+
+# ~~~~~~ Chunker ~~~~~~
+
+
+async def test_ingest_produces_chunks(episode, mock_services, db_session):
+    from src.models.db import Chunk
+    await ingest_episode(episode, {}, mock_services, db_session)
+
+    result = await db_session.execute(
+        select(Chunk).where(Chunk.episode_id == episode.id)
+    )
+    chunks = result.scalars().all()
+    assert len(chunks) > 0
+
+
+async def test_ingest_leaf_chunks_have_embeddings(episode, mock_services, db_session):
+    from src.models.db import Chunk
+    await ingest_episode(episode, {}, mock_services, db_session)
+
+    result = await db_session.execute(
+        select(Chunk).where(
+            Chunk.episode_id == episode.id,
+            Chunk.chunk_level == "leaf",
+        )
+    )
+    leaves = result.scalars().all()
+    assert len(leaves) > 0
+    for leaf in leaves:
+        assert leaf.embedding is not None
+
+
+async def test_ingest_parent_chunks_have_no_embeddings(episode, mock_services, db_session):
+    from src.models.db import Chunk
+    await ingest_episode(episode, {}, mock_services, db_session)
+
+    result = await db_session.execute(
+        select(Chunk).where(
+            Chunk.episode_id == episode.id,
+            Chunk.chunk_level == "parent",
+        )
+    )
+    parents = result.scalars().all()
+    assert len(parents) > 0
+    for parent in parents:
+        assert parent.embedding is None
+
+
+async def test_ingest_chunks_carry_speaker_id(episode, mock_services, db_session):
+    from src.models.db import Chunk
+    await ingest_episode(episode, {}, mock_services, db_session)
+
+    result = await db_session.execute(
+        select(Chunk).where(Chunk.episode_id == episode.id)
+    )
+    chunks = result.scalars().all()
+    for chunk in chunks:
+        assert chunk.speaker_id in ("UNKNOWN", "SPEAKER_00")
+        assert not hasattr(chunk, "display_name")
+
+async def test_ingest_produces_correct_parent_count(
+    episode, mock_services, db_session
+):
+    """
+    16 segments with groups-of-3 embedding pattern produce 6 topic segments,
+    therefore 6 parent chunks.
+    """
+    from src.models.db import Chunk
+    await ingest_episode(episode, {}, mock_services, db_session)
+
+    result = await db_session.execute(
+        select(Chunk).where(
+            Chunk.episode_id == episode.id,
+            Chunk.chunk_level == "parent",
+        )
+    )
+    parents = result.scalars().all()
+    assert len(parents) == 6
+
+
+async def test_ingest_parent_timestamps_are_contiguous(
+    episode, mock_services, db_session
+):
+    """
+    Parent chunks should span the full episode without gaps.
+    First parent starts at 0ms, last parent ends at the final segment end_ms.
+    """
+    from src.models.db import Chunk
+    await ingest_episode(episode, {}, mock_services, db_session)
+
+    result = await db_session.execute(
+        select(Chunk)
+        .where(
+            Chunk.episode_id == episode.id,
+            Chunk.chunk_level == "parent",
+        )
+        .order_by(Chunk.start_ms)
+    )
+    parents = result.scalars().all()
+
+    assert parents[0].start_ms == 0
+    assert parents[-1].end_ms == 130800  # last segment end_ms from fixture
+
+
+async def test_ingest_topic_boundaries_at_group_transitions(
+    episode, mock_services, db_session
+):
+    """
+    Topic cuts happen at segments 3, 6, 9, 12, 15.
+    Parent chunks should start at the start_ms of those segments.
+    """
+    from src.models.db import Chunk
+
+    # start_ms values of the first segment in each group
+    expected_starts = [
+        0,       # segment 0  - group 1 start
+        18800,   # segment 3  - group 2 start
+        43200,   # segment 6  - group 3 start
+        67500,   # segment 9  - group 4 start
+        97000,   # segment 12 - group 5 start
+        120400,  # segment 15 - group 6 start
+    ]
+
+    await ingest_episode(episode, {}, mock_services, db_session)
+
+    result = await db_session.execute(
+        select(Chunk)
+        .where(
+            Chunk.episode_id == episode.id,
+            Chunk.chunk_level == "parent",
+        )
+        .order_by(Chunk.start_ms)
+    )
+    parents = result.scalars().all()
+    actual_starts = [p.start_ms for p in parents]
+    assert actual_starts == expected_starts
+
+
+async def test_ingest_leaves_all_reference_a_parent(
+    episode, mock_services, db_session
+):
+    """Every leaf chunk's parent_id points to an existing parent chunk."""
+    from src.models.db import Chunk
+    await ingest_episode(episode, {}, mock_services, db_session)
+
+    result = await db_session.execute(
+        select(Chunk).where(Chunk.episode_id == episode.id)
+    )
+    all_chunks = result.scalars().all()
+
+    parent_ids = {c.id for c in all_chunks if c.chunk_level == "parent"}
+    leaves = [c for c in all_chunks if c.chunk_level == "leaf"]
+
+    assert len(leaves) > 0
+    for leaf in leaves:
+        assert leaf.parent_id in parent_ids

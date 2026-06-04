@@ -9,6 +9,7 @@ class TranscriptSegment:
     text: str
     start_ms: int
     end_ms: int
+    sequence_order: int
 
 
 @dataclass

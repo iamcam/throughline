@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     llm_api_key: str = "none"
     llm_model_name: str
 
+    # Chunking
+    chunk_size_tokens: int = 256
+    chunk_overlap_tokens: int = 32
+    topic_similarity_threshold: float = 0.75
+
+
     # Embeddings
     embedding_base_url: str = ""
     embedding_api_key: str = "none"

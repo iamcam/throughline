@@ -1,4 +1,5 @@
 # src/ingestion/pipeline.py
+
 import logging
 from dataclasses import dataclass
 from uuid import UUID
@@ -6,13 +7,17 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.ingestion.audio_downloader import AudioDownloader
+from src.ingestion.chunker import Chunker
+from src.ingestion.embedder import Embedder
 from src.ingestion.transcript_store import TranscriptStore
 from src.ingestion.speaker_store import SpeakerStore
 from src.ingestion.speaker_resolver import SpeakerResolver
 from src.ingestion.status_service import PipelineStatusService
-from src.transcription.base import TranscriptionService
+from src.storage.vector_store import VectorStore
+from src.transcription.base import TranscriptionService, TranscriptSegment
 from src.transcription.transcript_fetcher import fetch_transcript
 from src.models.db import Episode
+
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +30,9 @@ class PipelineServices:
     transcript_store: TranscriptStore
     speaker_store: SpeakerStore
     speaker_resolver: SpeakerResolver
+    chunker: Chunker
+    embedder: Embedder
+    vector_store: VectorStore
 
 
 async def ingest_episode(
@@ -36,28 +44,26 @@ async def ingest_episode(
     episode_id = episode.id
     try:
 
-        # ~~~~~~~~ Audio ~~~~~~~~
+        # ~~~~~~ Audio ~~~~~~
+
         await services.status.set(episode_id, "DOWNLOADING", db=db)
 
         transcript = None
 
         if episode.transcript_url:
-
-            # rss-provided transcript - fetch and verify prior to audio download
             try:
-                logger.info(f"Episode {episode_id}: using RSS transcript {episode.transcript_url}")
+                logger.info("Episode %s: using RSS transcript %s", episode_id, episode.transcript_url)
                 transcript = await fetch_transcript(episode.transcript_url)
             except Exception as e:
                 logger.warning(
-                    f"Episode {episode_id}: failed to parse rss transcript "
-                    f"({episode.transcript_url}), falling back to audio transcription. "
-                    f"Reason: {e}"
+                    "Episode %s: failed to parse RSS transcript (%s), "
+                    "falling back to audio transcription. Reason: %s",
+                    episode_id, episode.transcript_url, e
                 )
 
-        # if no transcript provided or there was a formatting error
         if transcript is None:
 
-            # ~~~~~~~~ Audio Download ~~~~~~~~
+            # ~~~~~~ Audio Download ~~~~~~
 
             async def on_progress(progress: float) -> None:
                 await services.status.set(
@@ -70,7 +76,7 @@ async def ingest_episode(
                 on_progress=on_progress
             )
 
-            # ~~~~~~~~ Transcription ~~~~~~~~
+            # ~~~~~~ Transcription ~~~~~~
 
             await services.status.set(episode_id, "TRANSCRIBING", db=db)
             transcript = await services.transcription.transcribe(
@@ -81,31 +87,74 @@ async def ingest_episode(
         await services.transcript_store.save(episode_id, transcript, db=db)
         await services.speaker_store.initialize_from_transcript(episode_id, transcript, db=db)
 
-        # ~~~~~~~~ Speaker Inference ~~~~~~~~
-        # Attempt to identify the host from the intro window
-        # Returns None if no name is found. This is not an error - pipeline continues regardless.
-        # UNKNOWN row stays as-is; SPEAKER_00 promoted if name found.
+        # ~~~~~~ Speaker Inference ~~~~~~
+        # Returns None if no name found - not an error, pipeline continues.
+        # UNKNOWN row stays as-is; promoted to SPEAKER_00 if name found.
+
         await services.status.set(episode_id, "INFERRING_SPEAKERS", db=db)
         inferred = await services.speaker_resolver.infer(transcript.segments)
         await services.speaker_store.save_inferred(episode_id, inferred, db=db)
 
         if inferred:
             logger.info(
-                f"Episode {episode_id}: inferred speaker '{inferred.name}' "
-                f"with {inferred.confidence} confidence"
+                "Episode %s: inferred speaker '%s' with %s confidence",
+                episode_id, inferred.name, inferred.confidence
             )
         else:
-            logger.info(f"Episode {episode_id}: no speaker inferred, continuing with speaker label 'UNKNOWN'")
+            logger.info("Episode %s: no speaker inferred, continuing with UNKNOWN", episode_id)
 
-        # ~~~~~~~~ Chunking + Embedding ~~~~~~~~
-        # Phase 4 implementation coming
+        # ~~~~~~ Chunking ~~~~~~
+        # Two embedding calls happen here:
+        # 1. Embed transcript segments - used by chunker for topic boundary detection, not stored
+        # 2. Embed leaf chunk text - stored in chunks.embedding for retrieval
+
         await services.status.set(episode_id, "CHUNKING", db=db)
+
+        segments = await services.transcript_store.get_segments(episode_id, db=db)
+
+        if not segments:
+            logger.warning("Episode %s: no segments found after transcription", episode_id)
+            await services.status.set(episode_id, "READY", db=db)
+            return
+
+        segment_texts = [s.text for s in segments]
+        segment_embeddings = await services.embedder._client.embed(segment_texts)
+
+        chunks = services.chunker.chunk(
+            episode_id=episode_id,
+            segments=[
+                # Convert DB model rows to TranscriptSegment dataclasses
+                # TranscriptStore.get_segments() returns ORM models, chunker expects dataclasses
+                __import__('src.transcription.base', fromlist=['TranscriptSegment'])
+                .TranscriptSegment(
+                    speaker_id=s.speaker_id,
+                    text=s.text,
+                    start_ms=s.start_ms,
+                    end_ms=s.end_ms,
+                    sequence_order=s.sequence_order,
+                )
+                for s in segments
+            ],
+            segment_embeddings=segment_embeddings,
+        )
+
+        num_parents = sum(1 for c in chunks if c.chunk_level == "parent")
+        num_leaves = sum(1 for c in chunks if c.chunk_level == "leaf")
+        logger.info(
+            f"Episode {episode_id}: produced {len(chunks)} chunks ({num_parents} parents, {num_leaves} leaves)"
+        )
+
+
+        # ~~~~~~ Embedding ~~~~~~
+
+        await services.status.set(episode_id, "EMBEDDING", db=db)
+        chunks = await services.embedder.embed(chunks)
+
+        await services.vector_store.upsert(chunks, db=db)
 
         await services.status.set(episode_id, "READY", db=db)
 
-
     except Exception as e:
-        logger.exception(f"Ingestion failed for episode {episode_id}")
+        logger.exception("Ingestion failed for episode %s", episode_id)
         await services.status.set(episode_id, "ERROR", error=str(e), db=db)
         raise
-

@@ -1,5 +1,5 @@
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy import ForeignKey, Text, Integer, Boolean, Float, DateTime, func, UniqueConstraint
+from sqlalchemy import ForeignKey, Text, Integer, Boolean, Float, DateTime, func, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from pgvector.sqlalchemy import Vector
 import datetime
@@ -100,6 +100,10 @@ class TranscriptSegment(Base):
 
 class Chunk(Base):
     __tablename__ = "chunks"
+    __table_args__ = (
+        Index("chunks_episode_id_idx", "episode_id"),
+        Index("chunks_parent_id_idx", "parent_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     episode_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("episodes.id", ondelete="CASCADE"))

@@ -19,7 +19,10 @@ from src.ingestion.status_service import PipelineStatusService
 from src.transcription.local import LocalTranscriptionService
 from src.transcription.remote import RemoteTranscriptionService
 from src.llm.client import OpenAICompatibleLLMClient
-
+from src.ingestion.chunker import Chunker
+from src.ingestion.embedder import Embedder
+from src.llm.client import OpenAICompatibleEmbeddingClient
+from src.storage.vector_store import PgvectorStore
 
 from src.config import get_settings
 
@@ -51,6 +54,13 @@ def _build_pipeline_services(settings) -> PipelineServices:
         model=settings.llm_model_name
     )
 
+    embedding_client = OpenAICompatibleEmbeddingClient(
+        base_url=settings.embedding_base_url or settings.llm_base_url,
+        api_key=settings.embedding_api_key or settings.llm_api_key,
+        model=settings.embedding_model_name
+    )
+
+
     return PipelineServices(
         status = PipelineStatusService(),
         downloader=AudioDownloader(storage_path=settings.audio_storage_path),
@@ -60,7 +70,14 @@ def _build_pipeline_services(settings) -> PipelineServices:
         speaker_resolver=SpeakerResolver(
             llm_client=llm_client,
             window_ms=settings.speaker_inference_window_ms
-        )
+        ),
+        chunker=Chunker(
+            chunk_size_tokens=settings.chunk_size_tokens,
+            chunk_overlap_tokens=settings.chunk_overlap_tokens,
+            topic_similarity_threshold=settings.topic_similarity_threshold,
+        ),
+        embedder=Embedder(embedding_client=embedding_client),
+        vector_store=PgvectorStore()
     )
 
 
