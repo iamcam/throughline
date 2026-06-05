@@ -59,7 +59,8 @@ def _build_pipeline_services(settings) -> PipelineServices:
         chunker=Chunker(
             chunk_size_tokens=settings.chunk_size_tokens,
             chunk_overlap_tokens=settings.chunk_overlap_tokens,
-            topic_similarity_threshold=settings.topic_similarity_threshold,
+            min_tokens=settings.chunk_min_tokens,
+            topic_similarity_threshold=settings.topic_similarity_threshold
         ),
         embedder=Embedder(embedding_client=get_embedding_client()),
         vector_store=PgvectorStore(),

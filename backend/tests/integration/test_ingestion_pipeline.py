@@ -22,6 +22,7 @@ from src.models.db import (
     Feed, Episode,
     TranscriptSegment as TranscriptSegmentModel,
     EpisodeSpeaker,
+    Chunk
 )
 
 
@@ -113,7 +114,8 @@ def mock_services(sample_transcript) -> PipelineServices:
         chunker=Chunker(
             chunk_size_tokens=256,
             chunk_overlap_tokens=32,
-            topic_similarity_threshold=0.75,
+            min_tokens=20,
+            topic_similarity_threshold=0.75
         ),
         embedder=Embedder(embedding_client=MockEmbeddingClient()),
         vector_store=PgvectorStore(),
@@ -291,7 +293,7 @@ async def test_ingest_produces_correct_parent_count(
 ):
     """
     16 segments with groups-of-3 embedding pattern produce 6 topic segments,
-    therefore 6 parent chunks.
+    but the last segment is short and merges into its predecessor, leaving 5 parents.
     """
     from src.models.db import Chunk
     await ingest_episode(episode, {}, mock_services, db_session)
@@ -303,7 +305,7 @@ async def test_ingest_produces_correct_parent_count(
         )
     )
     parents = result.scalars().all()
-    assert len(parents) == 6
+    assert len(parents) == 5
 
 
 async def test_ingest_parent_timestamps_are_contiguous(
@@ -334,19 +336,15 @@ async def test_ingest_topic_boundaries_at_group_transitions(
     episode, mock_services, db_session
 ):
     """
-    Topic cuts happen at segments 3, 6, 9, 12, 15.
-    Parent chunks should start at the start_ms of those segments.
+    Topic cuts happen at segments 3, 6, 9, 12, 15 — but segment 15 is short
+    and merges into group 5, so only 5 parent boundaries appear.
     """
-    from src.models.db import Chunk
-
-    # start_ms values of the first segment in each group
     expected_starts = [
         0,       # segment 0  - group 1 start
         18800,   # segment 3  - group 2 start
         43200,   # segment 6  - group 3 start
         67500,   # segment 9  - group 4 start
-        97000,   # segment 12 - group 5 start
-        120400,  # segment 15 - group 6 start
+        97000,   # segment 12 - group 5 start (absorbs group 6)
     ]
 
     await ingest_episode(episode, {}, mock_services, db_session)

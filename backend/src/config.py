@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # Chunking
     chunk_size_tokens: int = 256
     chunk_overlap_tokens: int = 32
+    chunk_min_tokens: int = 20
     topic_similarity_threshold: float = 0.75
 
 

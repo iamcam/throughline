@@ -36,10 +36,12 @@ def make_chunker(
     chunk_size: int = 50,
     overlap: int = 5,
     threshold: float = 0.75,
+    min_tokens: int = 20
 ) -> Chunker:
     return Chunker(
         chunk_size_tokens=chunk_size,
         chunk_overlap_tokens=overlap,
+        min_tokens=min_tokens,
         topic_similarity_threshold=threshold,
         tokenizer=word_tokenizer,
     )
@@ -191,7 +193,7 @@ def test_topic_segments_preserve_timestamps():
 # ---------------------------------------------------------------------------
 
 def test_each_topic_segment_produces_one_parent():
-    segments = [make_segment(f"word {i}", i * 1000, (i + 1) * 1000) for i in range(4)]
+    segments = [make_segment(" ".join(f"word{j}" for j in range(25)), i * 1000, (i + 1) * 1000) for i in range(4)]
     embeddings = [unit_vector(0), unit_vector(0), unit_vector(1), unit_vector(1)]
     chunker = make_chunker(threshold=0.75)
     chunks = chunker._build_chunks(EPISODE_ID, segments, embeddings)
@@ -272,6 +274,19 @@ def test_chunk_episode_id_set_correctly():
     for chunk in chunks:
         assert chunk.episode_id == EPISODE_ID
 
+def test_short_segments_merged_into_predecessor():
+    long_text = " ".join(f"word{i}" for i in range(25))
+    short_text = "yes"
+    segments = [
+        make_segment(long_text, 0, 5000),
+        make_segment(short_text, 5000, 6000),
+    ]
+    embeddings = [unit_vector(0), unit_vector(1)]
+    chunker = make_chunker(threshold=0.75)
+    chunks = chunker._build_chunks(EPISODE_ID, segments, embeddings)
+    parents = [c for c in chunks if c.chunk_level == "parent"]
+    assert len(parents) == 1
+    assert "yes" in parents[0].text
 
 # ---------------------------------------------------------------------------
 # Edge cases

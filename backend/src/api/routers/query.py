@@ -51,8 +51,9 @@ def _build_context(chunks: list[ChunkResult]) -> str:
     parts = []
     for i, chunk in enumerate(chunks, 1):
         speaker = chunk.display_name or "Unknown Speaker"
+        context_text = chunk.parent_text or chunk.text
         parts.append(
-            f"[{i}] {speaker} at {chunk.timestamp_display}\n{chunk.text}"
+            f"[{i}] {speaker} at {chunk.timestamp_display}\n{context_text}"
         )
     return "\n\n".join(parts)
 

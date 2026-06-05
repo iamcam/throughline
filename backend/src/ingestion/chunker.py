@@ -70,12 +70,14 @@ class Chunker:
         self,
         chunk_size_tokens: int,
         chunk_overlap_tokens: int,
+        min_tokens: int,
         topic_similarity_threshold: float,
         tokenizer: Callable[[str], int] | None = None,
     ):
         self._chunk_size = chunk_size_tokens
         self._overlap = chunk_overlap_tokens
         self._threshold = topic_similarity_threshold
+        self._min_tokens = min_tokens
         self._tokenize = tokenizer or _default_tokenizer
 
 
@@ -215,6 +217,9 @@ class Chunker:
 
         chunks: list[ChunkData] = []
 
+        # Help ensure the segments are sufficient length to be useful
+        topic_segments = self._merge_short_segments(topic_segments)
+
         for topic in topic_segments:
             parent_id = uuid.uuid4()
             parent_text = topic.text
@@ -295,6 +300,42 @@ class Chunker:
         return leaves
 
 
+    def _merge_short_segments(
+        self,
+        segments: list[TopicSegment]
+    ) -> list[TopicSegment]:
+        """
+        Merge any TopicSegment below min_tokens into its predecessor.
+        The first segment is merged forward into the next if it's short
+        and has no predecessor to absorb it.
+        """
+        if not segments:
+            return []
+
+        merged: list[TopicSegment] = []
+        for segment in segments:
+            if merged and self._tokenize(segment.text) < self._min_tokens:
+                prev = merged[-1]
+                merged[-1] = TopicSegment(
+                    speaker_id=prev.speaker_id,
+                    text=prev.text + " " + segment.text,
+                    start_ms=prev.start_ms,
+                    end_ms=segment.end_ms,
+                )
+            else:
+                merged.append(segment)
+
+        # If first segment is short and got no predecessor, merge and forward into the second if one exists
+        if len(merged) >= 2 and self._tokenize(merged[0].text) < self._min_tokens:
+            merged[1] = TopicSegment(
+                speaker_id=merged[1].speaker_id,
+                text=merged[0].text + " " + merged[1].text,
+                start_ms=merged[0].start_ms,
+                end_ms=merged[1].end_ms,
+            )
+            merged = merged[1:]
+
+        return merged
 
 
 # ~~~~~~ Helpers ~~~~~~

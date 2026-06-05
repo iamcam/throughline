@@ -78,6 +78,7 @@ def get_chunker() -> Chunker:
     return Chunker(
         chunk_size_tokens=settings.chunk_size_tokens,
         chunk_overlap_tokens=settings.chunk_overlap_tokens,
+        min_tokens=settings.chunk_min_tokens,
         topic_similarity_threshold=settings.topic_similarity_threshold
     )
 
