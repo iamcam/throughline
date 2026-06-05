@@ -1,3 +1,5 @@
+# src/models/db.py
+
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy import ForeignKey, Text, Integer, Boolean, Float, DateTime, func, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID

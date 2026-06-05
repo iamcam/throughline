@@ -6,7 +6,7 @@ import asyncio
 
 from sse_starlette.sse import EventSourceResponse
 
-from src.api.dependencies import get_db, get_ingestion_queue, AsyncSessionLocal
+from src.api.dependencies import get_db, get_ingestion_queue, AsyncSessionLocal, get_llm_client, get_embedding_client
 from src.ingestion.queue import IngestionQueue
 from src.models.schemas import EpisodeResponse, PipelineStatusUpdate, IngestRequest
 from src.ingestion import feed_service
@@ -18,10 +18,8 @@ from src.ingestion.speaker_resolver import SpeakerResolver
 from src.ingestion.status_service import PipelineStatusService
 from src.transcription.local import LocalTranscriptionService
 from src.transcription.remote import RemoteTranscriptionService
-from src.llm.client import OpenAICompatibleLLMClient
 from src.ingestion.chunker import Chunker
 from src.ingestion.embedder import Embedder
-from src.llm.client import OpenAICompatibleEmbeddingClient
 from src.storage.vector_store import PgvectorStore
 
 from src.config import get_settings
@@ -48,36 +46,23 @@ def _build_pipeline_services(settings) -> PipelineServices:
             diarization_model=settings.diarization_model,
         )
 
-    llm_client = OpenAICompatibleLLMClient(
-        base_url=settings.llm_base_url,
-        api_key=settings.llm_api_key,
-        model=settings.llm_model_name
-    )
-
-    embedding_client = OpenAICompatibleEmbeddingClient(
-        base_url=settings.embedding_base_url or settings.llm_base_url,
-        api_key=settings.embedding_api_key or settings.llm_api_key,
-        model=settings.embedding_model_name
-    )
-
-
     return PipelineServices(
-        status = PipelineStatusService(),
+        status=PipelineStatusService(),
         downloader=AudioDownloader(storage_path=settings.audio_storage_path),
         transcription=transcription,
         transcript_store=TranscriptStore(),
         speaker_store=SpeakerStore(),
         speaker_resolver=SpeakerResolver(
-            llm_client=llm_client,
-            window_ms=settings.speaker_inference_window_ms
+            llm_client=get_llm_client(),
+            window_ms=settings.speaker_inference_window_ms,
         ),
         chunker=Chunker(
             chunk_size_tokens=settings.chunk_size_tokens,
             chunk_overlap_tokens=settings.chunk_overlap_tokens,
             topic_similarity_threshold=settings.topic_similarity_threshold,
         ),
-        embedder=Embedder(embedding_client=embedding_client),
-        vector_store=PgvectorStore()
+        embedder=Embedder(embedding_client=get_embedding_client()),
+        vector_store=PgvectorStore(),
     )
 
 
