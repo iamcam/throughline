@@ -30,19 +30,19 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 
 ## Phase Overview
 
-| Phase | What You Build | Runnable At End |
-|-------|---------------|-----------------|
-| 0 | Project scaffold, tooling, DB | `GET /health` returns 200 |
-| 1 | RSS feed ingestion + IngestionQueue | Feed + episodes in DB; queue abstraction in place |
-| 2 | Audio download + transcription pipeline | Episode transcript in DB via SSE-tracked job |
-| 3 | Speaker inference + naming API | LLM infers host name with confidence; pipeline runs straight to chunking |
-| 4 | Chunking + embedding | Chunks with vectors in pgvector; speaker_id linked |
-| 5 | Basic RAG query | Single-turn Q&A over transcript content |
-| 6 | Tool-calling query engine | Multi-turn chat with conditional retrieval |
-| 7 | Frontend — feeds + episodes + speaker naming | Full ingestion flow in UI with SSE progress |
-| 8 | Frontend — chat interface | Full product usable end-to-end |
-| 9 | Observability | Phoenix traces on all LLM + retrieval + inference calls |
-| 10 | Polish, docs, demo prep | Shippable |
+| Phase | What You Build                               | Runnable At End                                                          |
+| ----- | -------------------------------------------- | ------------------------------------------------------------------------ |
+| 0     | Project scaffold, tooling, DB                | `GET /health` returns 200                                                |
+| 1     | RSS feed ingestion + IngestionQueue          | Feed + episodes in DB; queue abstraction in place                        |
+| 2     | Audio download + transcription pipeline      | Episode transcript in DB via SSE-tracked job                             |
+| 3     | Speaker inference + naming API               | LLM infers host name with confidence; pipeline runs straight to chunking |
+| 4     | Chunking + embedding                         | Chunks with vectors in pgvector; speaker_id linked                       |
+| 5     | Basic RAG query                              | Single-turn Q&A over transcript content                                  |
+| 6     | Tool-calling query engine                    | Multi-turn chat with conditional retrieval                               |
+| 7     | Frontend — feeds + episodes + speaker naming | Full ingestion flow in UI with SSE progress                              |
+| 8     | Frontend — chat interface                    | Full product usable end-to-end                                           |
+| 9     | Observability                                | Phoenix traces on all LLM + retrieval + inference calls                  |
+| 10    | Polish, docs, demo prep                      | Shippable                                                                |
 
 ---
 
@@ -77,8 +77,11 @@ uv add fastapi uvicorn[standard] sqlalchemy[asyncio] asyncpg alembic \
 - `[tool.pytest.ini_options]` with `asyncio_mode = "auto"`
 - Scripts: `dev`, `test`, `migrate`
 
-#### 0.3 LLM and Embedding Protocols (`src/llm/base.py` + `src/llm/openai.py`) 🤖
-Define `LLMClient` and `EmbeddingClient` Protocols before anything else references them. The OpenAI SDK is used only in `openai.py` — all business logic receives the Protocol.
+#### 0.3 LLM and Embedding Protocols (`src/llm/base.py` + `src/llm/client.py`) 🤖
+Define `LLMClient` and `EmbeddingClient` Protocols before anything else references them. The OpenAI SDK is used only in `client.py` — all business logic receives the Protocol.
+
+> **As built:** `src/llm/client.py` contains `OpenAICompatibleLLMClient` and `OpenAICompatibleEmbeddingClient`.
+> `LLMResponse` in `base.py` currently has only `content: str` — `tool_calls` is added in Phase 6.
 
 ```python
 # src/llm/base.py
@@ -963,8 +966,17 @@ async def test_display_name_in_results_not_speaker_id()
 
 ### Phase 5 Done When
 - `POST /api/v1/query/simple` returns answer + citations with resolved speaker names
-- Manually verify 3-4 queries against real ingested episode
+- `similarity_score` exposed on `CitationResponse` for retrieval quality inspection
+- `ChunkResult` defined in `src/query/result_hydrator.py` (not `schemas.py`)
+- `ResultHydrator` is stateless — no constructor args; owned internally by `Retriever`
+- `Retriever` wired via `get_retriever()` in `dependencies.py`
+- Manually verified 3-4 queries against real ingested episode
 - Git tag: `v0.1.5-basic-rag`
+
+> **Observed limitations (addressed in Phase 6):**
+> - Retrieval always fires regardless of question type — stretch citations visible at low similarity scores
+> - No conversation history — follow-up questions lose context
+> - Query rewriting deferred to Future Scope 1.3
 
 ---
 
@@ -1028,19 +1040,30 @@ TOOLS = [
 ]
 ```
 
-#### 6.2 Tool executors
+#### 6.2 ToolDispatcher (`src/query/tool_dispatcher.py`)
+
+Use a class, not a standalone `execute_tool()` function. `Retriever` is injected at construction;
+`db` and `session` are passed per-call — consistent with `ResultHydrator` and `Retriever` patterns.
+
 ```python
-async def execute_tool(name: str, args: dict, session: ChatSession, db: AsyncSession) -> str:
-    if name == "search_knowledge_base":
-        results = await retriever.search(**args, db=db)
-        return json.dumps([r.to_dict() for r in results])
-    elif name == "get_episode_context":
-        ...
-    elif name == "get_speaker_profile":
-        ...
+class ToolDispatcher:
+    def __init__(self, retriever: Retriever): ...
+
+    async def dispatch(
+        self, tool_call: ToolCall, session: ChatSession, db: AsyncSession
+    ) -> str:
+        # Routes to search_knowledge_base, get_episode_context, get_speaker_profile
+        # Returns JSON string for LLM consumption
+        # All results serialize display_name, never speaker_id
 ```
 
-All tool results serialize display names (resolved), never speaker_ids.
+> **Tool result message format — slow down here.** The OpenAI API requires tool results
+> in this exact shape or the LLM will error:
+> ```python
+> {"role": "tool", "tool_call_id": tc.id, "content": result_json_string}
+> ```
+> The `tool_call_id` must match the `id` field from the original tool call in the LLM response.
+> Get this wrong and you'll see cryptic API errors about mismatched tool calls.
 
 #### 6.3 SessionStore (`src/query/session_store.py`)
 Define the Protocol and `InMemorySessionStore` implementation.
@@ -1292,8 +1315,8 @@ Pre-ingest demo episodes. Commit this so anyone can reproduce your demo.
 uv run pytest --cov=src --cov-report=term-missing
 ```
 Target: >70% coverage. Ensure contract tests cover all Protocols:
-- `OpenAILLMClient` satisfies `LLMClient`
-- `OpenAIEmbeddingClient` satisfies `EmbeddingClient`
+- `OpenAICompatibleLLMClient` satisfies `LLMClient`
+- `OpenAICompatibleEmbeddingClient` satisfies `EmbeddingClient`
 - `LocalTranscriptionService` + `RemoteTranscriptionService` satisfy `TranscriptionService`
 - `BackgroundTaskQueue` satisfies `IngestionQueue`
 - `PgvectorStore` satisfies `VectorStore`
@@ -1332,7 +1355,7 @@ Use tests/fixtures/sample_transcript.json fixture."
 ```
 "Implement src/ingestion/speaker_resolver.py per Phase 3.1.
 Takes a LLMClient (Protocol from src/llm/base.py) — do not use AsyncOpenAI directly.
-Return dict[str, str | None] — null for unknown speakers, never guess.
+Return InferredSpeaker | None — never guess, return None on low-quality result.
 Inject MockLLMClient in tests/unit/test_speaker_resolver.py."
 ```
 
@@ -1354,16 +1377,16 @@ Test that BackgroundTaskQueue satisfies the IngestionQueue Protocol."
 
 ## Milestone Summary
 
-| Tag | What Works |
-|-----|-----------|
-| `v0.1.0-scaffold` | Health endpoint, DB connected |
-| `v0.1.1-feeds` | RSS ingestion, episode listing, queue abstraction |
-| `v0.1.2-transcription` | Transcription pipeline, SSE status streaming |
-| `v0.1.3-speakers` | LLM speaker inference with confidence; pipeline runs straight to READY |
-| `v0.1.4-chunking` | Chunks + embeddings, speaker_id preserved |
-| `v0.1.5-basic-rag` | Simple Q&A with resolved speaker names in citations |
-| `v0.1.6-chat-engine` | Multi-turn chat, tool-calling, conditional retrieval |
-| `v0.1.7-frontend-ingestion` | Browser-based ingestion with SSE progress |
-| `v0.1.8-frontend-chat` | Full product in browser |
-| `v0.1.9-observability` | Phoenix traces including speaker inference metrics |
-| `v1.0.0` | Shippable, documented, demo-ready |
+| Tag                         | What Works                                                             |
+| --------------------------- | ---------------------------------------------------------------------- |
+| `v0.1.0-scaffold`           | Health endpoint, DB connected                                          |
+| `v0.1.1-feeds`              | RSS ingestion, episode listing, queue abstraction                      |
+| `v0.1.2-transcription`      | Transcription pipeline, SSE status streaming                           |
+| `v0.1.3-speakers`           | LLM speaker inference with confidence; pipeline runs straight to READY |
+| `v0.1.4-chunking`           | Chunks + embeddings, speaker_id preserved                              |
+| `v0.1.5-basic-rag`          | Simple Q&A with resolved speaker names in citations                    |
+| `v0.1.6-chat-engine`        | Multi-turn chat, tool-calling, conditional retrieval                   |
+| `v0.1.7-frontend-ingestion` | Browser-based ingestion with SSE progress                              |
+| `v0.1.8-frontend-chat`      | Full product in browser                                                |
+| `v0.1.9-observability`      | Phoenix traces including speaker inference metrics                     |
+| `v1.0.0`                    | Shippable, documented, demo-ready                                      |

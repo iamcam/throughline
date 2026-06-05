@@ -172,9 +172,9 @@ All swappable components are defined as Python `Protocol` classes. Concrete impl
 @dataclass
 class LLMResponse:
     content: str | None
-    tool_calls: list[ToolCall]
+    tool_calls: list[ToolCall]   # added in Phase 6
     finish_reason: str
-    usage: TokenUsage
+    usage: TokenUsage            # deferred to Phase 9 observability
 
 class LLMClient(Protocol):
     async def complete(
@@ -186,8 +186,12 @@ class LLMClient(Protocol):
     ) -> LLMResponse: ...
 ```
 
-Implementations: `OpenAILLMClient` (production), `MockLLMClient` (tests).
-The OpenAI SDK is referenced only in `src/llm/openai.py`. All business logic receives `LLMClient`.
+**Current state (post-Phase 5):** `LLMResponse` in `src/llm/base.py` contains only `content: str`.
+`tool_calls` is added in Phase 6 when the query engine requires it. `TokenUsage` is deferred to Phase 9.
+`LLMClient.complete()` does not yet accept a `tools` parameter — that is also added in Phase 6.
+
+Implementations: `OpenAICompatibleLLMClient` (production, in `src/llm/client.py`), `MockLLMClient` (tests).
+The OpenAI SDK is referenced only in `src/llm/client.py`. All business logic receives `LLMClient`.
 
 #### EmbeddingClient (`src/llm/base.py`)
 
@@ -196,7 +200,7 @@ class EmbeddingClient(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 ```
 
-Implementations: `OpenAIEmbeddingClient` (production), `MockEmbeddingClient` (tests).
+Implementations: `OpenAICompatibleEmbeddingClient` (production, in `src/llm/client.py`), `MockEmbeddingClient` (tests).
 
 #### TranscriptionService (`src/transcription/base.py`)
 
@@ -338,16 +342,16 @@ Each service has a single responsibility and is independently testable by inject
 
 #### Discrete pipeline services
 
-| Service | File | Responsibility |
-|---------|------|---------------|
-| `AudioDownloader` | `ingestion/audio_downloader.py` | httpx streaming download, stores to disk |
-| `TranscriptionService` | `transcription/base.py` | Protocol; local or remote impl |
-| `TranscriptStore` | `ingestion/transcript_store.py` | Save/retrieve `transcript_segments` rows |
-| `SpeakerResolver` | `ingestion/speaker_resolver.py` | LLM inference of speaker names from intro |
-| `SpeakerStore` | `ingestion/speaker_store.py` | Read/write `episode_speakers` rows |
-| `Chunker` | `ingestion/chunker.py` | Speaker-boundary + topic segmentation + hierarchy |
-| `Embedder` | `ingestion/embedder.py` | Batch embedding via `EmbeddingClient` |
-| `PipelineStatusService` | `ingestion/status_service.py` | Write status transitions to DB |
+| Service                 | File                            | Responsibility                                    |
+| ----------------------- | ------------------------------- | ------------------------------------------------- |
+| `AudioDownloader`       | `ingestion/audio_downloader.py` | httpx streaming download, stores to disk          |
+| `TranscriptionService`  | `transcription/base.py`         | Protocol; local or remote impl                    |
+| `TranscriptStore`       | `ingestion/transcript_store.py` | Save/retrieve `transcript_segments` rows          |
+| `SpeakerResolver`       | `ingestion/speaker_resolver.py` | LLM inference of speaker names from intro         |
+| `SpeakerStore`          | `ingestion/speaker_store.py`    | Read/write `episode_speakers` rows                |
+| `Chunker`               | `ingestion/chunker.py`          | Speaker-boundary + topic segmentation + hierarchy |
+| `Embedder`              | `ingestion/embedder.py`         | Batch embedding via `EmbeddingClient`             |
+| `PipelineStatusService` | `ingestion/status_service.py`   | Write status transitions to DB                    |
 
 ---
 
@@ -408,14 +412,14 @@ class LocalTranscriptionService:
 
 #### What survives a frontend page refresh
 
-| Thing | Survives refresh? | Reason |
-|-------|------------------|--------|
-| Pipeline job execution | ✅ Yes | Background coroutine in uvicorn process, unaffected by HTTP |
-| Pipeline status | ✅ Yes | Written to DB at every stage transition |
-| SSE stream | ❌ No | HTTP connection dropped on refresh |
-| SSE reconnect | ✅ Yes | Frontend re-opens stream; DB has current status |
-| Queue position | ✅ Yes | Derivable from in-memory registry on reconnect |
-| Jobs in queue | ⚠️ Process restart only | Lost if uvicorn restarts; survives browser refresh |
+| Thing                  | Survives refresh?      | Reason                                                      |
+| ---------------------- | ---------------------- | ----------------------------------------------------------- |
+| Pipeline job execution | ✅ Yes                  | Background coroutine in uvicorn process, unaffected by HTTP |
+| Pipeline status        | ✅ Yes                  | Written to DB at every stage transition                     |
+| SSE stream             | ❌ No                   | HTTP connection dropped on refresh                          |
+| SSE reconnect          | ✅ Yes                  | Frontend re-opens stream; DB has current status             |
+| Queue position         | ✅ Yes                  | Derivable from in-memory registry on reconnect              |
+| Jobs in queue          | ⚠️ Process restart only | Lost if uvicorn restarts; survives browser refresh          |
 
 #### Frontend reconnect pattern
 
@@ -500,10 +504,10 @@ class SpeakerResolver:
 
 **Post-inference logic in `SpeakerStore.save_inferred()`:**
 
-| Inference result | Action |
-|-----------------|--------|
+| Inference result                | Action                                                                                                                                       |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | One name found (any confidence) | Update `speaker_id` from `UNKNOWN` → `SPEAKER_00`; set `display_name=name`, `name_inferred=true`, `confidence=level`, `name_confirmed=false` |
-| None found | Leave `speaker_id = 'UNKNOWN'`, `display_name=NULL`. Pipeline continues to chunking. |
+| None found                      | Leave `speaker_id = 'UNKNOWN'`, `display_name=NULL`. Pipeline continues to chunking.                                                         |
 
 **User confirmation via `PUT /speakers`:**
 - If user saves without editing the name: `name_confirmed=true`, `name_inferred` unchanged
@@ -527,12 +531,12 @@ SPEAKER_INFERENCE_WINDOW_MS=900000
 
 **Speaker states:**
 
-| speaker_id | name_inferred | name_confirmed | confidence | Meaning |
-|------------|---------------|----------------|------------|---------|
-| `UNKNOWN` | false | false | NULL | No diarization; inference found nothing |
-| `SPEAKER_00` | true | false | "high"/"medium"/"low" | LLM inferred one speaker, unconfirmed |
-| `SPEAKER_00` | true | true | "high"/"medium"/"low" | Inferred, user confirmed without editing |
-| `SPEAKER_00` | false | true | NULL | User entered or edited name manually |
+| speaker_id   | name_inferred | name_confirmed | confidence            | Meaning                                  |
+| ------------ | ------------- | -------------- | --------------------- | ---------------------------------------- |
+| `UNKNOWN`    | false         | false          | NULL                  | No diarization; inference found nothing  |
+| `SPEAKER_00` | true          | false          | "high"/"medium"/"low" | LLM inferred one speaker, unconfirmed    |
+| `SPEAKER_00` | true          | true           | "high"/"medium"/"low" | Inferred, user confirmed without editing |
+| `SPEAKER_00` | false         | true           | NULL                  | User entered or edited name manually     |
 
 **Resolution at read time:** All reads join `episode_speakers` on `speaker_id`. `VectorStore.search()` returns `RawChunkResult` with `speaker_id`. `ResultHydrator` resolves to `display_name` (or `NULL` / "Unknown Speaker" fallback) before returning to callers. Speaker filter queries against `UNKNOWN` speaker_id return no results — expected behavior until diarization runs.
 
@@ -574,13 +578,18 @@ Pure logic, no I/O. Fully unit testable.
 **`ToolDispatcher` (`src/query/tool_dispatcher.py`)**
 ```python
 class ToolDispatcher:
-    def __init__(self, vector_store: VectorStore, hydrator: ResultHydrator, db: AsyncSession): ...
+    def __init__(self, retriever: Retriever): ...
 
-    async def dispatch(self, tool_call: ToolCall, session: ChatSession) -> str:
+    async def dispatch(self, tool_call: ToolCall, session: ChatSession, db: AsyncSession) -> str:
         # Routes to correct tool implementation
+        # db passed per-call, consistent with ResultHydrator and Retriever patterns
         # Returns JSON string for LLM consumption
         # All results use display_name, never speaker_id
 ```
+
+> **Note:** The architecture doc originally showed `db: AsyncSession` as a constructor argument.
+> In practice, `db` is passed per-call on `dispatch()` — consistent with how `ResultHydrator.hydrate()`
+> and `Retriever.search()` handle the session. `Retriever` is injected at construction time.
 
 **`ResultHydrator` (`src/query/result_hydrator.py`)**
 ```python
@@ -745,12 +754,12 @@ Phoenix runs as optional Docker Compose profile. `OTEL_EXPORTER_OTLP_ENDPOINT` i
 
 ### 3.13 Frontend — React + Vite
 
-| View | Purpose |
-|------|---------|
-| Feeds | Add RSS URL, list feeds, refresh |
-| Episodes | Pipeline status badges, trigger ingestion, SSE progress |
+| View          | Purpose                                                                                             |
+| ------------- | --------------------------------------------------------------------------------------------------- |
+| Feeds         | Add RSS URL, list feeds, refresh                                                                    |
+| Episodes      | Pipeline status badges, trigger ingestion, SSE progress                                             |
 | Speaker Names | View inferred name + confidence; confirm or correct. Available post-ingestion, not a pipeline gate. |
-| Chat | Freeform conversation, citation cards, feed/episode scope selectors |
+| Chat          | Freeform conversation, citation cards, feed/episode scope selectors                                 |
 
 State management: React Query for server state; Zustand or Context for session/UI state.
 
@@ -907,13 +916,14 @@ podcast-knowledge-engine/
 │   │   │   │   ├── episodes.py
 │   │   │   │   ├── speakers.py
 │   │   │   │   ├── chat.py
+│   │   │   │   ├── query.py          # POST /query/simple (Phase 5); superseded by chat in Phase 6
 │   │   │   │   └── health.py
 │   │   │   ├── middleware/
 │   │   │   │   └── auth.py
 │   │   │   └── dependencies.py      # ALL dependency wiring lives here
 │   │   ├── llm/
 │   │   │   ├── base.py              # LLMClient + EmbeddingClient Protocols, response types
-│   │   │   └── openai.py            # OpenAILLMClient + OpenAIEmbeddingClient
+│   │   │   └── client.py            # OpenAICompatibleLLMClient + OpenAICompatibleEmbeddingClient
 │   │   ├── ingestion/
 │   │   │   ├── pipeline.py          # Thin orchestrator only
 │   │   │   ├── queue.py             # IngestionQueue Protocol + BackgroundTaskQueue
@@ -936,7 +946,8 @@ podcast-knowledge-engine/
 │   │   │   ├── prompt_builder.py    # Pure logic, no I/O
 │   │   │   ├── tool_dispatcher.py   # Routes tool calls to implementations
 │   │   │   ├── tools.py             # Tool definitions (OpenAI function format)
-│   │   │   ├── result_hydrator.py   # Resolves speaker_id → display_name
+│   │   │   ├── retriever.py         # Composes EmbeddingClient + VectorStore + ResultHydrator
+│   │   │   ├── result_hydrator.py   # Resolves speaker_id → display_name; defines ChunkResult
 │   │   │   └── session_store.py     # SessionStore Protocol + InMemorySessionStore
 │   │   ├── models/
 │   │   │   ├── db.py                # SQLAlchemy models
@@ -1079,16 +1090,16 @@ uv run pytest --cov=src --cov-report=term-missing
 
 ## 9. Upgrade Path (Post-v1)
 
-| Feature | What it requires |
-|---------|-----------------|
-| Graph RAG | Post-chunking NER → entity/relationship tables; `search_graph` tool; new `GraphStore` Protocol |
-| Persistent conversations | Implement `DBSessionStore` satisfying `SessionStore` Protocol; swap in `dependencies.py` |
-| Query rewriting | Pre-retrieval step in `engine.py`; `LLMClient.complete()` call; log original vs rewritten in telemetry |
-| ARQ job queue | Implement `IngestionQueue` Protocol for ARQ; add Redis to Docker Compose; swap in `dependencies.py` |
-| Automatic feed polling | APScheduler; calls existing `refresh_feed` + `queue.enqueue()` |
-| Alternative vector DBs | Implement `VectorStore` Protocol for Qdrant/Pinecone; swap in `dependencies.py`; ~1 day |
-| Speaker diarization | See Future Scope 1.5. Reinstates `PENDING_NAMES` pipeline status; `UNKNOWN` speaker_ids get real diarization labels; existing episodes re-ingestable |
-| Non-OpenAI LLM SDK | Implement `LLMClient` Protocol; swap in `dependencies.py`; no business logic changes |
+| Feature                  | What it requires                                                                                                                                     |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Graph RAG                | Post-chunking NER → entity/relationship tables; `search_graph` tool; new `GraphStore` Protocol                                                       |
+| Persistent conversations | Implement `DBSessionStore` satisfying `SessionStore` Protocol; swap in `dependencies.py`                                                             |
+| Query rewriting          | Pre-retrieval step in `engine.py`; `LLMClient.complete()` call; log original vs rewritten in telemetry                                               |
+| ARQ job queue            | Implement `IngestionQueue` Protocol for ARQ; add Redis to Docker Compose; swap in `dependencies.py`                                                  |
+| Automatic feed polling   | APScheduler; calls existing `refresh_feed` + `queue.enqueue()`                                                                                       |
+| Alternative vector DBs   | Implement `VectorStore` Protocol for Qdrant/Pinecone; swap in `dependencies.py`; ~1 day                                                              |
+| Speaker diarization      | See Future Scope 1.5. Reinstates `PENDING_NAMES` pipeline status; `UNKNOWN` speaker_ids get real diarization labels; existing episodes re-ingestable |
+| Non-OpenAI LLM SDK       | Implement `LLMClient` Protocol; swap in `dependencies.py`; no business logic changes                                                                 |
 
 ---
 
