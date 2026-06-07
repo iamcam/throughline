@@ -1,9 +1,6 @@
 # src/query/result_hydrator.py
-
 from __future__ import annotations
-
 from dataclasses import dataclass
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 

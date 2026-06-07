@@ -5,13 +5,13 @@ import pytest
 from src.query.retriever import Retriever
 from src.query.result_hydrator import ResultHydrator, ChunkResult
 from src.storage.vector_store import SearchFilters, RawChunkResult
+from tests.conftest import MockVectorStore, MockHydrator, MockEmbeddingClient, make_chunk_result
 
 
 # ~~~~~~ Helpers ~~~~~~
 
 EPISODE_ID = uuid.uuid4()
 FEED_ID = uuid.uuid4()
-
 
 def make_raw(episode_id=None, speaker_id="SPEAKER_00") -> RawChunkResult:
     return RawChunkResult(
@@ -25,60 +25,8 @@ def make_raw(episode_id=None, speaker_id="SPEAKER_00") -> RawChunkResult:
         similarity_score=0.88,
     )
 
-
-def make_chunk_result(episode_id=None, display_name="Ada Sinclair") -> ChunkResult:
-    eid = episode_id or EPISODE_ID
-    return ChunkResult(
-        chunk_id=str(uuid.uuid4()),
-        text="Interesting content about machine learning.",
-        parent_text="Broader context about ML.",
-        episode_id=str(eid),
-        episode_title="Synthetic Minds Ep. 1",
-        display_name=display_name,
-        timestamp_display="1:00",
-        start_ms=60_000,
-        end_ms=90_000,
-        similarity_score=0.88,
-    )
-
-
-class MockEmbeddingClient:
-    def __init__(self, vector: list[float] | None = None):
-        self.last_texts = None
-        self._vector = vector or [0.1] * 768
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        self.last_texts = texts
-        return [self._vector]
-
-
-class MockVectorStore:
-    def __init__(self, results: list[RawChunkResult] | None = None):
-        self.last_embedding = None
-        self.last_filters = None
-        self.last_top_k = None
-        self._results = results or []
-
-    async def search(self, embedding, filters, top_k=5, db=None):
-        self.last_embedding = embedding
-        self.last_filters = filters
-        self.last_top_k = top_k
-        return self._results
-
-
-class MockHydrator:
-    def __init__(self, results: list[ChunkResult] | None = None):
-        self.last_raw = None
-        self._results = results or []
-
-    async def hydrate(self, raw, db):
-        self.last_raw = raw
-        return self._results
-
-
 class MockDb:
     pass
-
 
 # ~~~~~~ Tests ~~~~~~
 

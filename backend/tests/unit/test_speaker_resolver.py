@@ -4,19 +4,7 @@ import pytest
 from src.ingestion.speaker_resolver import SpeakerResolver, InferredSpeaker
 from src.llm.base import LLMResponse
 from src.transcription.base import TranscriptSegment
-
-
-class MockLLMClient:
-    """Minimal mock — returns a fixed response set at construction time."""
-    def __init__(self, response_content: str):
-        self._content = response_content
-        self.last_messages = None
-        self.last_temperature = None
-
-    async def complete(self, messages, response_format=None, temperature=0.7):
-        self.last_messages = messages
-        self.last_temperature = temperature
-        return LLMResponse(content=self._content)
+from tests.conftest import MockLLMClient
 
 def make_segments(texts_and_times: list[tuple[str, int, int]]) -> list[TranscriptSegment]:
     return [

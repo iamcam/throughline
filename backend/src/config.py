@@ -1,7 +1,10 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+import pytest
 
 class Settings(BaseSettings):
+
+    log_level: str | None = "WARN"
     huggingface_token: str | None
 
     # Database

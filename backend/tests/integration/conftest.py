@@ -7,6 +7,7 @@ from src.api.main import app
 from src.api.dependencies import get_db
 from src.models.db import Base
 from src.config import get_settings
+from src.llm.base import LLMResponse, ToolCall
 
 settings = get_settings()
 TEST_DATABASE_URL = f"{settings.database_url}_test"

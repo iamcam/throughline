@@ -25,16 +25,10 @@ from src.models.db import (
     Chunk
 )
 
+from tests.conftest import MockLLMClient
+
 
 # --- shared mock ---
-
-class MockLLMClient:
-    """Returns a fixed response. No inference, no network."""
-    def __init__(self, response_content: str = '{"name": "Ada Sinclair", "confidence": "high"}'):
-        self._content = response_content
-
-    async def complete(self, messages, response_format=None, temperature=0.7):
-        return LLMResponse(content=self._content)
 
 
 class MockEmbeddingClient:
@@ -110,7 +104,7 @@ def mock_services(sample_transcript) -> PipelineServices:
         transcription=mock_transcription,
         transcript_store=TranscriptStore(),
         speaker_store=SpeakerStore(),
-        speaker_resolver=SpeakerResolver(llm_client=MockLLMClient()),
+        speaker_resolver=SpeakerResolver(llm_client=MockLLMClient(response_content='{"name": "Ada Sinclair", "confidence": "high"}')),
         chunker=Chunker(
             chunk_size_tokens=256,
             chunk_overlap_tokens=32,

@@ -1,6 +1,10 @@
 # src/llm/client.py
 from openai import AsyncOpenAI
-from src.llm.base import LLMResponse
+from src.llm.base import LLMResponse, ToolCall
+import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 class OpenAICompatibleLLMClient:
     """
@@ -16,6 +20,7 @@ class OpenAICompatibleLLMClient:
     async def complete(
         self,
         messages: list[dict],
+        tools: list[dict]| None = None,
         response_format: dict | None = None,
         temperature: float = 0.7
     ) -> LLMResponse:
@@ -26,9 +31,33 @@ class OpenAICompatibleLLMClient:
         )
         if response_format:
             kwargs["response_format"] = response_format
+        if tools:
+            kwargs["tools"] = tools
 
         response = await self._client.chat.completions.create(**kwargs)
-        return LLMResponse(content=response.choices[0].message.content)
+        message = response.choices[0].message
+
+
+        tool_calls = []
+        if message.tool_calls:
+            for tc in message.tool_calls:
+                try:
+                    arguments = json.loads(tc.function.arguments)
+                except (json.JSONDecodeError, TypeError):
+                    logger.info(f"Malformed tool call arguments json string: {tc.function.arguments}")
+                    arguments = {}
+
+                tool_calls.append(ToolCall(
+                    id=tc.id,
+                    name=tc.function.name,
+                    arguments=arguments,
+                ))
+
+        return LLMResponse(
+            content=response.choices[0].message.content,
+            tool_calls=tool_calls,
+            finish_reason=response.choices[0].finish_reason
+            )
 
 
 
