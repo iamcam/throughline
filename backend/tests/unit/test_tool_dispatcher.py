@@ -22,7 +22,7 @@ SESSION_ID = "test-session"
 def make_session(**kwargs) -> ChatSession:
     return ChatSession(
         session_id=SESSION_ID,
-        scope_feed_id=kwargs.get("scope_feed_id"),
+        scope_feed_ids=kwargs.get("scope_feed_ids", []),
         scope_episode_ids=kwargs.get("scope_episode_ids", []),
         messages=[],
     )
@@ -60,6 +60,14 @@ def make_mock_db(scalar_result=None, scalars_result=None):
     execute_result = MagicMock()
     execute_result.scalar_one_or_none.return_value = scalar_result
     execute_result.scalars.return_value.all.return_value = scalars_result or []
+
+    # Speaker resolution now uses .first() — mock a row object with .speaker_id
+    if scalar_result is not None:
+        mock_row = MagicMock()
+        mock_row.speaker_id = scalar_result
+        execute_result.first.return_value = mock_row
+    else:
+        execute_result.first.return_value = None
 
     db = MagicMock()
     db.execute = AsyncMock(return_value=execute_result)
@@ -132,7 +140,7 @@ async def test_unknown_tool_returns_error_json():
 async def test_search_applies_session_feed_scope():
     retriever = make_mock_retriever()
     dispatcher = ToolDispatcher(retriever=retriever)
-    session = make_session(scope_feed_id=FEED_ID)
+    session = make_session(scope_feed_ids=[FEED_ID])
 
     tool_call = ToolCall(
         id="tc4",
@@ -143,7 +151,7 @@ async def test_search_applies_session_feed_scope():
     await dispatcher.dispatch(tool_call, session, make_mock_db())
 
     _, kwargs = retriever.search.call_args
-    assert kwargs["filters"].feed_id == FEED_ID
+    assert kwargs["filters"].feed_ids == [FEED_ID]
 
 
 @pytest.mark.asyncio

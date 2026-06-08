@@ -10,7 +10,7 @@ from uuid import UUID
 @dataclass
 class ChatSession:
     session_id: str
-    scope_feed_id: UUID | None = None
+    scope_feed_ids: list[UUID] = field(default_factory=list)
     scope_episode_ids: list[UUID] = field(default_factory=list)
     messages: list[dict] = field(default_factory=list)
     citations: list[dict] = field(default_factory=list)

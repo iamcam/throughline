@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.models.db import EpisodeSpeaker, TranscriptSegment, Episode
 from src.models.db import EpisodeSpeaker, TranscriptSegment
 from src.query.retriever import Retriever
 from src.query.session_store import ChatSession
@@ -63,19 +64,24 @@ class ToolDispatcher:
         # Resolve speaker display name → speaker_id if provided
         speaker_id: str | None = None
         if speaker_name:
-            row = await db.execute(
-                select(EpisodeSpeaker.speaker_id)
+            speaker_query = (
+                select(EpisodeSpeaker.speaker_id, EpisodeSpeaker.episode_id)
+                .join(Episode, EpisodeSpeaker.episode_id == Episode.id)
                 .where(EpisodeSpeaker.display_name == speaker_name)
-                .limit(1)
             )
-            result = row.scalar_one_or_none()
+            if session.scope_feed_ids:
+                speaker_query = speaker_query.where(
+                    Episode.feed_id.in_(session.scope_feed_ids)
+                )
+            row = await db.execute(speaker_query.limit(1))
+            result = row.first()
             if result:
-                speaker_id = result
+                speaker_id = result.speaker_id
             else:
                 logger.info(f"Speaker name '{speaker_name}' not found in episode_speakers")
 
         filters = SearchFilters(
-            feed_id=session.scope_feed_id,
+            feed_ids=session.scope_feed_ids or None,
             episode_ids=(
                 [UUID(episode_id)] if episode_id
                 else session.scope_episode_ids or None

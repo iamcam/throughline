@@ -59,7 +59,7 @@ async def test_retriever_passes_embedding_to_vector_store():
 @pytest.mark.asyncio
 async def test_retriever_passes_filters_to_vector_store():
     store = MockVectorStore()
-    filters = SearchFilters(feed_id=FEED_ID, episode_ids=[EPISODE_ID])
+    filters = SearchFilters(feed_ids=[FEED_ID], episode_ids=[EPISODE_ID])
     retriever = Retriever(
         embedding_client=MockEmbeddingClient(),
         vector_store=store,

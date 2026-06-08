@@ -91,9 +91,13 @@ class QueryEngine:
         else:
             # Loop exhausted without a clean break
             logger.warning(f"Max tool rounds ({self._max_tool_rounds}) reached for session {session_id}")
-            response = await self._llm.complete(
-                self._prompt_builder.build_messages(session),
-            )
+            # Explicitly instruct the model to synthesize from what it found
+            synthesis_messages = self._prompt_builder.build_messages(session)
+            synthesis_messages.append({
+                "role": "user",
+                "content": "Based on the search results above, please provide your best answer now."
+            })
+            response = await self._llm.complete(synthesis_messages)
 
         final_content = response.content or ""
         session.messages.append({"role": "assistant", "content": final_content})

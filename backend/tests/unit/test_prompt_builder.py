@@ -14,7 +14,7 @@ def test_system_prompt_included_as_first_message():
 def test_session_messages_appended_after_system():
     episode_id = uuid.uuid4()
     session = ChatSession(session_id="def",
-                            scope_feed_id=uuid.uuid4(),
+                            scope_feed_ids=[uuid.uuid4()],
                             scope_episode_ids=[episode_id],
                             messages=[
                                 {"role": "user", "content": "this is user content"}
@@ -30,7 +30,7 @@ def test_session_messages_appended_after_system():
 def test_scope_feed_id_mentioned_in_system_prompt():
     feed_id = uuid.uuid4()
     session = ChatSession(session_id="def",
-                            scope_feed_id=feed_id,
+                            scope_feed_ids=[feed_id],
                             scope_episode_ids=[uuid.uuid4()],
                             messages=[
                                 {"role": "user", "content": "this is user content"}
@@ -38,12 +38,12 @@ def test_scope_feed_id_mentioned_in_system_prompt():
                         )
     builder = PromptBuilder()
     messages = builder.build_messages(session)
-    assert f"feed {feed_id}" in messages[0]["content"]
+    assert f"{feed_id}" in messages[0]["content"]
 
 def test_scope_episode_ids_mentioned_in_system_prompt():
     ep_ids = [uuid.uuid4(), uuid.uuid4()]
     session = ChatSession(session_id="def",
-                            scope_feed_id=uuid.uuid4(),
+                            scope_feed_ids=[uuid.uuid4()],
                             scope_episode_ids=ep_ids,
                             messages=[
                                 {"role": "user", "content": "this is user content"}

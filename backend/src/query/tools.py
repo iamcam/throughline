@@ -10,7 +10,9 @@ TOOLS: list[dict] = [
                 "Use this when the user asks what was said about something, what a speaker "
                 "thinks about a topic, or wants to find a specific moment in an episode. "
                 "Do not use for greetings, clarifications, or questions answerable from "
-                "the conversation history alone."
+                "the conversation history alone. "
+                "If previous search results already contain sufficient information to answer "
+                "the question, do not search again — synthesize from what you have."
             ),
             "parameters": {
                 "type": "object",

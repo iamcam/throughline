@@ -17,10 +17,11 @@ class PromptBuilder:
             "from context already in the conversation), answer directly without searching.",
         ]
 
-        if session.scope_feed_id:
+        if session.scope_feed_ids:
+            ids = ", ".join(str(f) for f in session.scope_feed_ids)
             parts.append(
-                f"\nThis conversation is scoped to feed {session.scope_feed_id}. "
-                "Only discuss content from this feed."
+                f"\nThis conversation is scoped to feeds: {ids}. "
+                "Only discuss content from these feeds."
             )
 
         if session.scope_episode_ids:

@@ -21,7 +21,7 @@ class SearchFilters:
     All fields optional. Unset fields are not applied as WHERE clauses.
     feed_id requires a join to episodes — handled in PgvectorStore.search().
     """
-    feed_id: uuid.UUID | None = None
+    feed_ids: list[uuid.UUID] | None = None
     episode_ids: list[uuid.UUID] | None = None
     speaker_id: str | None = None
 
@@ -104,9 +104,9 @@ class PgvectorStore:
             .limit(top_k)
         )
 
-        if filters.feed_id:
+        if filters.feed_ids:
             stmt = stmt.join(Episode, Chunk.episode_id == Episode.id).where(
-                Episode.feed_id == filters.feed_id
+                Episode.feed_id.in_(filters.feed_ids)
             )
 
         result = await db.execute(stmt)

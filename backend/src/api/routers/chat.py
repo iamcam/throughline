@@ -18,12 +18,12 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 # ~~~~~~ Schemas ~~~~~~
 
 class CreateSessionRequest(BaseModel):
-    scope_feed_id: UUID | None = None
+    scope_feed_ids: list[UUID] = []
     scope_episode_ids: list[UUID] = []
 
 class CreateSessionResponse(BaseModel):
     session_id: str
-    scope_feed_id: UUID | None
+    scope_feed_ids: list[UUID]
     scope_episode_ids: list[UUID]
 
 
@@ -52,7 +52,7 @@ async def create_session(
     session_id = str(uuid.uuid4())
     session = ChatSession(
         session_id=session_id,
-        scope_feed_id=body.scope_feed_id,
+        scope_feed_ids=body.scope_feed_ids,
         scope_episode_ids=body.scope_episode_ids,
     )
     logger.info("INFO: this is level info")
@@ -62,7 +62,7 @@ async def create_session(
     await session_store.save(session)
     return CreateSessionResponse(
         session_id=session_id,
-        scope_feed_id=body.scope_feed_id,
+        scope_feed_ids=body.scope_feed_ids,
         scope_episode_ids=body.scope_episode_ids,
     )
 
