@@ -49,6 +49,14 @@ class Embedder:
             vectors = await self._client.embed(texts)
 
             for (original_index, chunk), vector in zip(batch, vectors):
+                if any(v != v for v in vector):
+                    logger.warning(
+                        "NaN embedding persists for chunk %s even when embedded alone — "
+                        "skipping this chunk (it will not be retrievable). Text: %r",
+                        chunk.chunk_id,
+                        chunk.text[:80],
+                    )
+                    continue
                 result[original_index] = replace(chunk, embedding=vector)
 
         return result

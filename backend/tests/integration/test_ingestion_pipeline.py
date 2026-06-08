@@ -374,3 +374,53 @@ async def test_ingest_leaves_all_reference_a_parent(
     assert len(leaves) > 0
     for leaf in leaves:
         assert leaf.parent_id in parent_ids
+
+
+async def test_reingest_clears_derived_data(client, db_session, mock_services):
+    # --- seed an episode with derived data ---
+    feed = Feed(id=uuid4(), rss_url="https://example.com/feed.rss", title="Test Feed")
+    ep = Episode(
+        id=uuid4(),
+        feed_id=feed.id,
+        guid="reingest-test-001",
+        title="Test Episode",
+        audio_url="https://example.com/episode.mp3",
+        audio_local_path="/tmp/fake_audio.mp3",
+        pipeline_status="READY",
+    )
+    db_session.add(feed)
+    db_session.add(ep)
+    await db_session.commit()
+
+    await ingest_episode(ep, {}, mock_services, db_session)
+
+    # Confirm derived data exists
+    chunks_before = (await db_session.execute(
+        select(Chunk).where(Chunk.episode_id == ep.id)
+    )).scalars().all()
+    assert len(chunks_before) > 0
+
+    # --- call the actual handler ---
+    response = await client.post(f"/api/v1/episodes/{ep.id}/reingest", json={})
+    assert response.status_code == 200
+
+    # --- verify cleanup ran ---
+    chunks_after = (await db_session.execute(
+        select(Chunk).where(Chunk.episode_id == ep.id)
+    )).scalars().all()
+    segments_after = (await db_session.execute(
+        select(TranscriptSegmentModel).where(TranscriptSegmentModel.episode_id == ep.id)
+    )).scalars().all()
+    speakers_after = (await db_session.execute(
+        select(EpisodeSpeaker).where(EpisodeSpeaker.episode_id == ep.id)
+    )).scalars().all()
+
+    assert len(chunks_after) == 0
+    assert len(segments_after) == 0
+    assert len(speakers_after) == 0
+
+    # --- verify episode metadata survived ---
+    await db_session.refresh(ep)
+    assert ep.guid == "reingest-test-001"
+    assert ep.audio_local_path == "/tmp/fake_audio.mp3"
+    assert ep.pipeline_status == "QUEUED"

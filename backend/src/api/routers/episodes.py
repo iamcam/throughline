@@ -3,11 +3,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 import asyncio
+from sqlalchemy import update, delete
 
 from sse_starlette.sse import EventSourceResponse
 
 from src.api.dependencies import get_db, get_ingestion_queue, AsyncSessionLocal, get_llm_client, get_embedding_client
 from src.ingestion.queue import IngestionQueue
+from src.models.db import Episode as EpisodeModel, Chunk, TranscriptSegment, EpisodeSpeaker
 from src.models.schemas import EpisodeResponse, PipelineStatusUpdate, IngestRequest
 from src.ingestion import feed_service
 from src.ingestion.pipeline import PipelineServices, ingest_episode
@@ -170,15 +172,12 @@ async def ingest_episode_handler(
 
     # Write job_id and initial QUEUED status to DB immediately
     # so the SSE endpoint can report queue position before the job starts
-    async with AsyncSessionLocal() as write_db:
-        from sqlalchemy import update
-        from src.models.db import Episode as EpisodeModel
-        await write_db.execute(
-            update(EpisodeModel)
-            .where(EpisodeModel.id == episode_id)
-            .values(pipeline_status="QUEUED", ingestion_job_id=job_id)
-        )
-        await write_db.commit()
+    await db.execute(
+        update(EpisodeModel)
+        .where(EpisodeModel.id == episode_id)
+        .values(pipeline_status="QUEUED", ingestion_job_id=job_id)
+    )
+    await db.commit()
 
     position = await queue.get_position(job_id)
 
@@ -210,15 +209,22 @@ async def reingest_episode_handler(
         worker=lambda episode_id, args: _run_ingest(episode_id, args, services),
     )
 
-    async with AsyncSessionLocal() as write_db:
-        from sqlalchemy import update
-        from src.models.db import Episode as EpisodeModel
-        await write_db.execute(
-            update(EpisodeModel)
-            .where(EpisodeModel.id == episode_id)
-            .values(pipeline_status="QUEUED", ingestion_job_id=job_id)
+    await db.execute(delete(Chunk).where(Chunk.episode_id == episode_id))
+    await db.execute(delete(TranscriptSegment).where(TranscriptSegment.episode_id == episode_id))
+    await db.execute(delete(EpisodeSpeaker).where(EpisodeSpeaker.episode_id == episode_id))
+
+    await db.execute(
+        update(EpisodeModel)
+        .where(EpisodeModel.id == episode_id)
+        .values(
+            pipeline_status="QUEUED",
+            pipeline_stage=None,
+            pipeline_progress=None,
+            pipeline_error=None,
+            ingestion_job_id=job_id
         )
-        await write_db.commit()
+    )
+    await db.commit()
 
     position = await queue.get_position(job_id)
 
