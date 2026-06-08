@@ -1,9 +1,9 @@
 # Podcast Knowledge Engine — Architecture Document
 
-> Version: 0.5-draft
+> Version: 0.6
 > Status: In implementation
 > Author: Cameron Perry
-> Last Updated: 2026-05-28
+> Last Updated: 2026-06-08
 
 ---
 
@@ -120,11 +120,11 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     # Yields an async DB session per request
 
 def get_llm_client() -> LLMClient:
-    # Returns OpenAILLMClient pointed at LLM_BASE_URL
+    # Returns OpenAICompatibleLLMClient pointed at LLM_BASE_URL
     # In tests: inject MockLLMClient
 
 def get_embedding_client() -> EmbeddingClient:
-    # Returns OpenAIEmbeddingClient pointed at EMBEDDING_BASE_URL
+    # Returns OpenAICompatibleEmbeddingClient pointed at EMBEDDING_BASE_URL
     # In tests: inject MockEmbeddingClient
 
 def get_ingestion_queue(request: Request) -> IngestionQueue:
@@ -143,19 +143,20 @@ def get_session_store(request: Request) -> SessionStore:
 
 def get_pipeline_status_service(db: AsyncSession = Depends(get_db)) -> PipelineStatusService:
     # Returns service for writing pipeline status transitions
-```
 
-**Usage in route handlers:**
-```python
-@router.post("/episodes/{episode_id}/ingest")
-async def ingest_episode(
-    episode_id: UUID,
-    body: IngestRequest,
-    db: AsyncSession = Depends(get_db),
-    queue: IngestionQueue = Depends(get_ingestion_queue),
-    transcription_svc: TranscriptionService = Depends(get_transcription_service),
-):
-    ...
+def get_prompt_builder() -> PromptBuilder:
+    # Returns stateless PromptBuilder instance
+
+def get_tool_dispatcher(retriever: Retriever = Depends(get_retriever)) -> ToolDispatcher:
+    # Returns ToolDispatcher with injected Retriever
+
+def get_query_engine(
+    llm: LLMClient = Depends(get_llm_client),
+    session_store: SessionStore = Depends(get_session_store),
+    prompt_builder: PromptBuilder = Depends(get_prompt_builder),
+    tool_dispatcher: ToolDispatcher = Depends(get_tool_dispatcher),
+) -> QueryEngine:
+    # Returns fully wired QueryEngine
 ```
 
 **Swapping an implementation** requires changing one function in `dependencies.py`. No route handlers, pipeline code, or business logic changes.
@@ -170,11 +171,17 @@ All swappable components are defined as Python `Protocol` classes. Concrete impl
 
 ```python
 @dataclass
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict
+
+@dataclass
 class LLMResponse:
-    content: str | None
-    tool_calls: list[ToolCall]   # added in Phase 6
-    finish_reason: str
-    usage: TokenUsage            # deferred to Phase 9 observability
+    content: str | None = None        # None when model is making tool calls
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    finish_reason: str = "stop"
+    # TokenUsage deferred to Phase 9 observability
 
 class LLMClient(Protocol):
     async def complete(
@@ -186,12 +193,15 @@ class LLMClient(Protocol):
     ) -> LLMResponse: ...
 ```
 
-**Current state (post-Phase 5):** `LLMResponse` in `src/llm/base.py` contains only `content: str`.
-`tool_calls` is added in Phase 6 when the query engine requires it. `TokenUsage` is deferred to Phase 9.
-`LLMClient.complete()` does not yet accept a `tools` parameter — that is also added in Phase 6.
+**Current state (post-Phase 6):** `LLMResponse` includes `content: str | None`, `tool_calls: list[ToolCall]`,
+and `finish_reason: str`. `LLMClient.complete()` accepts a `tools` parameter. `TokenUsage` is deferred to Phase 9.
 
-Implementations: `OpenAICompatibleLLMClient` (production, in `src/llm/client.py`), `MockLLMClient` (tests).
-The OpenAI SDK is referenced only in `src/llm/client.py`. All business logic receives `LLMClient`.
+`OpenAICompatibleLLMClient` in `src/llm/client.py` parses tool call arguments from JSON strings defensively —
+malformed arguments produce an empty dict with a logged warning rather than raising. All business logic receives
+`LLMClient`. The OpenAI SDK is referenced only in `src/llm/client.py`.
+
+`MockLLMClient` lives in `tests/conftest.py` and supports a `responses: list[LLMResponse]` sequence parameter
+for multi-round tool-calling tests. It is a plain class, not a pytest fixture — import it directly in test files.
 
 #### EmbeddingClient (`src/llm/base.py`)
 
@@ -228,12 +238,15 @@ class IngestionQueue(Protocol):
 
 Implementations: `BackgroundTaskQueue` (v1, in-process), `ARQQueue` (post-v1, Redis-backed).
 
+**Note:** `cancel()` returns `False` unconditionally in v1. Stuck jobs require a DB status update or uvicorn
+restart to clear. See tech debt note in section 3.5.
+
 #### VectorStore (`src/storage/vector_store.py`)
 
 ```python
 @dataclass
 class SearchFilters:
-    feed_id: UUID | None = None
+    feed_ids: list[UUID] | None = None    # supports multi-feed scope
     episode_ids: list[UUID] | None = None
     speaker_id: str | None = None
 
@@ -241,8 +254,8 @@ class SearchFilters:
 class RawChunkResult:
     chunk_id: UUID
     text: str
-    parent_text: str
-    speaker_id: str          # NOT display_name — hydration resolves this
+    parent_text: str | None   # fetched alongside leaf for LLM context
+    speaker_id: str           # NOT display_name — hydration resolves this
     episode_id: UUID
     start_ms: int
     end_ms: int
@@ -254,16 +267,28 @@ class VectorStore(Protocol):
         embedding: list[float],
         filters: SearchFilters,
         top_k: int = 5,
+        db: AsyncSession = ...,
     ) -> list[RawChunkResult]: ...
 
-    async def upsert(self, chunks: list[ChunkRecord]) -> None: ...
+    async def upsert(self, chunks: list[ChunkRecord], db: AsyncSession) -> None: ...
 ```
+
+`feed_ids` uses `Episode.feed_id.in_(filters.feed_ids)` — supports querying across multiple feeds in one
+session. Unset fields are not applied as WHERE clauses.
 
 Implementations: `PgvectorStore` (v1), `QdrantStore` / `PineconeStore` (post-v1, ~1 day each).
 
 #### SessionStore (`src/query/session_store.py`)
 
 ```python
+@dataclass
+class ChatSession:
+    session_id: str
+    scope_feed_ids: list[UUID] = field(default_factory=list)    # multi-feed support
+    scope_episode_ids: list[UUID] = field(default_factory=list)
+    messages: list[dict] = field(default_factory=list)
+    citations: list[dict] = field(default_factory=list)
+
 class SessionStore(Protocol):
     async def get(self, session_id: str) -> ChatSession | None: ...
     async def save(self, session: ChatSession) -> None: ...
@@ -271,7 +296,7 @@ class SessionStore(Protocol):
     async def list_sessions(self) -> list[str]: ...
 ```
 
-Implementations: `InMemorySessionStore` (v1, ephemeral), `DBSessionStore` (post-v1, persistent conversations).
+Implementations: `InMemorySessionStore` (v1, ephemeral — singleton on `app.state`), `DBSessionStore` (post-v1, persistent conversations).
 
 ---
 
@@ -390,6 +415,10 @@ GET /episodes/{id}/status/stream (SSE — separate connection)
 
 **Key point:** The background coroutine and the SSE stream are fully decoupled. The pipeline writes to the DB via `PipelineStatusService`. SSE reads from the DB. A page refresh drops the SSE connection but has no effect on the running job.
 
+**Queue ordering:** Generally FIFO in practice — `asyncio.create_task()` schedules coroutines in order and the semaphore releases them in arrival order. Not a strict guarantee; two rapidly enqueued jobs could start in either order depending on event loop scheduling. For a single-user application this is acceptable.
+
+**Known tech debt — no job cancellation:** `cancel()` on `BackgroundTaskQueue` returns `False` unconditionally. A running coroutine cannot be interrupted. To clear a stuck job: update `pipeline_status` to `ERROR` in the DB directly, or restart uvicorn. Fix: store `asyncio.Task` handles and expose real cancellation. Post-v1 ARQ upgrade makes this moot.
+
 #### CPU-bound work must use ProcessPoolExecutor
 
 Whisper is CPU-bound and will block the asyncio event loop if called directly. Pyannote (diarization) has the same constraint but is not used in v1 — this pattern is documented here for when diarization is introduced:
@@ -420,6 +449,7 @@ class LocalTranscriptionService:
 | SSE reconnect          | ✅ Yes                  | Frontend re-opens stream; DB has current status             |
 | Queue position         | ✅ Yes                  | Derivable from in-memory registry on reconnect              |
 | Jobs in queue          | ⚠️ Process restart only | Lost if uvicorn restarts; survives browser refresh          |
+| Chat sessions          | ❌ No                   | InMemorySessionStore cleared on process restart             |
 
 #### Frontend reconnect pattern
 
@@ -529,6 +559,8 @@ SPEAKER_INFERENCE_WINDOW_MS=900000
 
 **Why `UNKNOWN` not `SPEAKER_00`:** Using `SPEAKER_00` when diarization has not run would be semantically incorrect — it implies diarization ran and found one speaker. `UNKNOWN` is honest: it signals that speaker identity has not been determined. This distinction matters when diarization arrives, so old un-diarized episodes can be identified and re-ingested.
 
+**`SPEAKER_00` is episode-scoped, not global:** The same `SPEAKER_00` identifier in two different episodes refers to two different people. Speaker name resolution in `ToolDispatcher` is scoped to the session's feed IDs to prevent cross-feed collisions. Chunks ingested before multi-feed support was introduced may have ambiguous `speaker_id` values — re-ingestion resolves this.
+
 **Speaker states:**
 
 | speaker_id   | name_inferred | name_confirmed | confidence            | Meaning                                  |
@@ -573,7 +605,7 @@ class PromptBuilder:
     def build_system_prompt(self, session: ChatSession) -> str: ...
     def build_messages(self, session: ChatSession) -> list[dict]: ...
 ```
-Pure logic, no I/O. Fully unit testable.
+Pure logic, no I/O. Fully unit testable. System prompt is rebuilt on every `build_messages()` call — no stale state. Includes scope instructions when `scope_feed_ids` or `scope_episode_ids` are set; these are belt-and-suspenders — real enforcement is in `ToolDispatcher` filters.
 
 **`ToolDispatcher` (`src/query/tool_dispatcher.py`)**
 ```python
@@ -585,11 +617,15 @@ class ToolDispatcher:
         # db passed per-call, consistent with ResultHydrator and Retriever patterns
         # Returns JSON string for LLM consumption
         # All results use display_name, never speaker_id
+        # Outer try/except returns JSON error string rather than raising
 ```
 
-> **Note:** The architecture doc originally showed `db: AsyncSession` as a constructor argument.
-> In practice, `db` is passed per-call on `dispatch()` — consistent with how `ResultHydrator.hydrate()`
-> and `Retriever.search()` handle the session. `Retriever` is injected at construction time.
+Speaker name → `speaker_id` resolution in `_search_knowledge_base` is scoped to `session.scope_feed_ids`
+to prevent cross-feed `SPEAKER_00` collisions. Uses `.first()` — returns a row with `.speaker_id` attribute.
+If no match: proceeds with `speaker_id=None` (unfiltered) rather than returning an error.
+
+Citations are appended to `session.citations` after every successful `_search_knowledge_base` call and
+accumulate across all tool rounds in the session.
 
 **`ResultHydrator` (`src/query/result_hydrator.py`)**
 ```python
@@ -602,13 +638,18 @@ class ResultHydrator:
         # Resolves speaker_id → display_name via episode_speakers join
         # Fetches episode title
         # Formats timestamp_display
+        # Batched: one query per table, never N+1
 ```
 
-Separates the swappable vector search (`VectorStore`) from the stable hydration logic. Changing vector backend never touches hydration.
+`ChunkResult` carries both `text` (leaf, for citation display) and `parent_text` (full topic segment, for LLM context). Separates swappable vector search from stable hydration logic.
+
+**`_build_context` in `src/api/routers/query.py`**
+
+Uses `chunk.parent_text or chunk.text` for the LLM context block. The leaf `text` is what matched the query; the `parent_text` is the full topic segment the LLM needs to reason about. Both are available on `ChunkResult` for frontend use.
 
 **`SessionStore` (`src/query/session_store.py`)**
 
-See Protocol definition in section 3.3. v1 implementation is `InMemorySessionStore` — dict on `app.state`.
+See Protocol definition in section 3.3. v1 implementation is `InMemorySessionStore` — dict on `app.state`. Sessions are ephemeral — cleared on process restart. `DBSessionStore` (post-v1) satisfies the same Protocol.
 
 #### Engine orchestration (`src/query/engine.py`)
 
@@ -620,38 +661,87 @@ class QueryEngine:
         session_store: SessionStore,
         prompt_builder: PromptBuilder,
         tool_dispatcher: ToolDispatcher,
+        max_tool_rounds: int = 3,
     ): ...
 
-    async def chat(self, session_id: str, user_message: str) -> ChatResponse:
+    async def chat(self, session_id: str, user_message: str, db: AsyncSession) -> ChatResponse:
         session = await self.session_store.get(session_id)
+        if session is None:
+            raise ValueError(f"Session not found: {session_id}")
+
         session.messages.append({"role": "user", "content": user_message})
 
-        for _ in range(3):    # max tool-call rounds
+        for round_num in range(self.max_tool_rounds):
             messages = self.prompt_builder.build_messages(session)
             response = await self.llm_client.complete(messages, tools=TOOLS)
 
             if not response.tool_calls:
-                break
+                break   # LLM has a final answer
+
+            # Assistant tool call message must precede tool result messages
+            session.messages.append({
+                "role": "assistant",
+                "tool_calls": [...]   # serialized with json.dumps, not str()
+            })
 
             for tc in response.tool_calls:
-                result = await self.tool_dispatcher.dispatch(tc, session)
-                session.messages.append(tool_result_message(tc, result))
+                result = await self.tool_dispatcher.dispatch(tc, session, db)
+                session.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,   # must match assistant tool call id
+                    "content": result,
+                })
+        else:
+            # for/else: loop exhausted without break — max rounds hit
+            # Make one final synthesis call with explicit instruction
+            synthesis_messages = self.prompt_builder.build_messages(session)
+            synthesis_messages.append({
+                "role": "user",
+                "content": "Based on the search results above, please provide your best answer now."
+            })
+            response = await self.llm_client.complete(synthesis_messages)
 
-        session.messages.append({"role": "assistant", "content": response.content})
+        final_content = response.content or ""
+        session.messages.append({"role": "assistant", "content": final_content})
         await self.session_store.save(session)
-        return ChatResponse(message=response.content, citations=session.citations)
+        return ChatResponse(message=final_content, session_id=session_id, citations=session.citations)
 ```
 
-**Session model:**
+**Critical message ordering:** The OpenAI API requires that a `tool` message with `tool_call_id: X` is
+always preceded by an `assistant` message that requested `X`. Missing or mismatched IDs produce API errors.
+
+**`arguments` serialization:** Tool call arguments must be serialized with `json.dumps()` when appended to
+the assistant message. Using `str()` on a Python dict produces single-quoted syntax that LLM servers reject
+as invalid JSON.
+
+**`for/else` synthesis:** Python's `for/else` fires the `else` block when the loop completes without a
+`break`. When max rounds are exhausted, a final LLM call without tools forces a text response using whatever
+was retrieved across all rounds.
+
+**Known tech debt — no request timeout:** Long-running chat requests (multiple tool rounds on a slow local
+model) hold the HTTP connection open indefinitely. Fix: wrap `llm.complete()` in `asyncio.wait_for(..., timeout=60.0)`.
+
+**`ChatResponse`:**
 ```python
 @dataclass
-class ChatSession:
+class ChatResponse:
+    message: str
     session_id: str
-    scope_feed_id: UUID | None
-    scope_episode_ids: list[UUID]
-    messages: list[dict]
-    citations: list[ChunkResult]
+    citations: list[dict]
 ```
+
+#### Tool definitions (`src/query/tools.py`)
+
+Three tools in OpenAI function-calling format. The model reads these descriptions to decide when and how to call each tool.
+
+| Tool | When used | Key parameters |
+|------|-----------|----------------|
+| `search_knowledge_base` | Topic queries, opinion questions, factual lookups | `query` (required), `speaker_name`, `episode_id`, `top_k` |
+| `get_episode_context` | Expanding a specific timestamp from a prior citation | `episode_id`, `timestamp_ms`, `padding_ms` |
+| `get_speaker_profile` | Questions about a person rather than a topic | `speaker_name` |
+
+Query strings should be descriptive phrases rather than questions — embedding models match text, not
+question syntax. The tool description instructs the model accordingly.
 
 ---
 
@@ -759,11 +849,11 @@ Phoenix runs as optional Docker Compose profile. `OTEL_EXPORTER_OTLP_ENDPOINT` i
 | Feeds         | Add RSS URL, list feeds, refresh                                                                    |
 | Episodes      | Pipeline status badges, trigger ingestion, SSE progress                                             |
 | Speaker Names | View inferred name + confidence; confirm or correct. Available post-ingestion, not a pipeline gate. |
-| Chat          | Freeform conversation, citation cards, feed/episode scope selectors                                 |
+| Chat          | Freeform conversation, citation cards, multi-feed scope selectors                                   |
 
 State management: React Query for server state; Zustand or Context for session/UI state.
 
-Chat session state lives in component — designed so persisting to localStorage or backend requires only extracting the session object.
+Chat session state lives in component — designed so persisting to localStorage or backend requires only extracting the session object. Session creation sends `scope_feed_ids: list[UUID]` (not a single `scope_feed_id`).
 
 ---
 
@@ -798,7 +888,6 @@ SPEAKER_INFERENCE_WINDOW_MS=900000
 
 # Ingestion
 MAX_CONCURRENT_INGESTIONS=2
-AUTO_CHUNK_AFTER_NAMING=true
 
 # Observability
 PHOENIX_ENABLED=true
@@ -809,6 +898,7 @@ LOG_LEVEL=INFO
 AUDIO_STORAGE_PATH=./data/audio
 CHUNK_SIZE_TOKENS=256
 CHUNK_OVERLAP_TOKENS=32
+CHUNK_MIN_TOKENS=20
 TOPIC_SIMILARITY_THRESHOLD=0.75
 
 # Demo auth
@@ -850,12 +940,17 @@ GET    /api/v1/episodes/{episode_id}/speakers/preview
 PUT    /api/v1/episodes/{episode_id}/speakers       Body: [{speaker_id, display_name}]
 ```
 
-### Query
+### Chat
 ```
-POST   /api/v1/chat/sessions                  Body: { scope_feed_id?, scope_episode_ids? }
+POST   /api/v1/chat/sessions                  Body: { scope_feed_ids?: UUID[], scope_episode_ids?: UUID[] }
 POST   /api/v1/chat/{session_id}/message      Body: { message }
 GET    /api/v1/chat/{session_id}/history
 DELETE /api/v1/chat/{session_id}
+```
+
+### Simple Query (superseded by chat, retained until Phase 10)
+```
+POST   /api/v1/query/simple                   Body: { question, feed_id?, episode_ids?, top_k? }
 ```
 
 ### System
@@ -888,17 +983,20 @@ curl http://localhost:8000/api/v1/episodes/ep-uuid/speakers
 # Confirm names
 curl -X PUT http://localhost:8000/api/v1/episodes/ep-uuid/speakers \
   -H "Content-Type: application/json" \
-  -d '[{"speaker_id": "SPEAKER_00", "display_name": "Lex Fridman"}]'
+  -d '[{"speaker_id": "SPEAKER_00", "display_name": "Marcus Webb"}]'
 
-# Start chat session
+# Start chat session scoped to one or more feeds
 curl -X POST http://localhost:8000/api/v1/chat/sessions \
   -H "Content-Type: application/json" \
-  -d '{"scope_feed_id": "feed-uuid"}'
+  -d '{"scope_feed_ids": ["feed-uuid-1", "feed-uuid-2"]}'
 
 # Query
 curl -X POST http://localhost:8000/api/v1/chat/sess-uuid/message \
   -H "Content-Type: application/json" \
-  -d '{"message": "What does Lex think about AGI timelines?"}'
+  -d '{"message": "What does Marcus think about AGI timelines?"}'
+
+# Get history with citations
+curl http://localhost:8000/api/v1/chat/sess-uuid/history
 ```
 
 ---
@@ -922,7 +1020,7 @@ podcast-knowledge-engine/
 │   │   │   │   └── auth.py
 │   │   │   └── dependencies.py      # ALL dependency wiring lives here
 │   │   ├── llm/
-│   │   │   ├── base.py              # LLMClient + EmbeddingClient Protocols, response types
+│   │   │   ├── base.py              # LLMClient + EmbeddingClient Protocols, ToolCall, LLMResponse
 │   │   │   └── client.py            # OpenAICompatibleLLMClient + OpenAICompatibleEmbeddingClient
 │   │   ├── ingestion/
 │   │   │   ├── pipeline.py          # Thin orchestrator only
@@ -933,22 +1031,22 @@ podcast-knowledge-engine/
 │   │   │   ├── speaker_resolver.py  # LLM inference via LLMClient
 │   │   │   ├── speaker_store.py     # Read/write episode_speakers
 │   │   │   ├── status_service.py    # PipelineStatusService
-│   │   │   ├── chunker.py
+│   │   │   ├── chunker.py           # Speaker-boundary + topic segmentation + min_tokens merge
 │   │   │   └── embedder.py          # Uses EmbeddingClient
 │   │   ├── transcription/
 │   │   │   ├── base.py              # TranscriptionService Protocol + data types
 │   │   │   ├── local.py             # Whisper + Pyannote via ProcessPoolExecutor
 │   │   │   └── remote.py            # HTTP client
 │   │   ├── storage/
-│   │   │   └── vector_store.py      # VectorStore Protocol + PgvectorStore
+│   │   │   └── vector_store.py      # VectorStore Protocol + PgvectorStore; SearchFilters with feed_ids
 │   │   ├── query/
-│   │   │   ├── engine.py            # Thin orchestrator
-│   │   │   ├── prompt_builder.py    # Pure logic, no I/O
-│   │   │   ├── tool_dispatcher.py   # Routes tool calls to implementations
+│   │   │   ├── engine.py            # Thin orchestrator; tool-calling loop; for/else synthesis
+│   │   │   ├── prompt_builder.py    # Pure logic, no I/O; scope-aware system prompt
+│   │   │   ├── tool_dispatcher.py   # Routes tool calls; speaker resolution; citation collection
 │   │   │   ├── tools.py             # Tool definitions (OpenAI function format)
 │   │   │   ├── retriever.py         # Composes EmbeddingClient + VectorStore + ResultHydrator
 │   │   │   ├── result_hydrator.py   # Resolves speaker_id → display_name; defines ChunkResult
-│   │   │   └── session_store.py     # SessionStore Protocol + InMemorySessionStore
+│   │   │   └── session_store.py     # SessionStore Protocol + InMemorySessionStore; ChatSession
 │   │   ├── models/
 │   │   │   ├── db.py                # SQLAlchemy models
 │   │   │   └── schemas.py           # Pydantic request/response schemas
@@ -956,6 +1054,7 @@ podcast-knowledge-engine/
 │   │   │   └── setup.py
 │   │   └── config.py
 │   ├── tests/
+│   │   ├── conftest.py              # MockLLMClient, MockVectorStore, MockHydrator, MockEmbeddingClient
 │   │   ├── unit/
 │   │   │   ├── test_chunker.py
 │   │   │   ├── test_rss_parser.py
@@ -963,8 +1062,11 @@ podcast-knowledge-engine/
 │   │   │   ├── test_prompt_builder.py
 │   │   │   ├── test_result_hydrator.py
 │   │   │   ├── test_retriever.py
-│   │   │   └── test_tools.py
+│   │   │   ├── test_session_store.py
+│   │   │   ├── test_tool_dispatcher.py
+│   │   │   └── test_engine.py
 │   │   ├── integration/
+│   │   │   ├── conftest.py          # DB engine, session, HTTP client fixtures
 │   │   │   ├── test_ingestion_pipeline.py
 │   │   │   └── test_chat_session.py
 │   │   └── fixtures/
@@ -1063,7 +1165,15 @@ volumes:
 - `SpeakerResolver` — prompt construction, JSON parsing, null handling; inject `MockLLMClient`
 - `PromptBuilder` — message construction, scope application; no I/O
 - `ResultHydrator` — display name resolution, timestamp formatting; mock DB
-- `ToolDispatcher` — correct tool routing, filter application; mock `VectorStore`
+- `ToolDispatcher` — correct tool routing, filter application, citation population, speaker resolution
+- `QueryEngine` — tool-calling loop, round limits, message ordering, citation passthrough
+- `SessionStore` — save/retrieve/delete, key correctness
+
+**Mock helpers** (`tests/conftest.py`) — plain classes, direct import in test files:
+- `MockLLMClient` — supports `response_content`, `tool_calls`, and `responses: list[LLMResponse]` sequence
+- `MockVectorStore` — configurable results, records last call args
+- `MockHydrator` — configurable hydrated results
+- `MockEmbeddingClient` — configurable vector output
 
 **Integration tests** — real DB, mock LLM/transcription/embedding:
 - Full ingestion pipeline with `sample_transcript.json` fixture (skips audio/Whisper)
@@ -1077,8 +1187,8 @@ volumes:
 - `BackgroundTaskQueue` satisfies `IngestionQueue`
 - `PgvectorStore` satisfies `VectorStore`
 - `InMemorySessionStore` satisfies `SessionStore`
-- `OpenAILLMClient` satisfies `LLMClient`
-- `OpenAIEmbeddingClient` satisfies `EmbeddingClient`
+- `OpenAICompatibleLLMClient` satisfies `LLMClient`
+- `OpenAICompatibleEmbeddingClient` satisfies `EmbeddingClient`
 
 ```bash
 uv run pytest tests/unit             # fast, no services
@@ -1100,6 +1210,8 @@ uv run pytest --cov=src --cov-report=term-missing
 | Alternative vector DBs   | Implement `VectorStore` Protocol for Qdrant/Pinecone; swap in `dependencies.py`; ~1 day                                                              |
 | Speaker diarization      | See Future Scope 1.5. Reinstates `PENDING_NAMES` pipeline status; `UNKNOWN` speaker_ids get real diarization labels; existing episodes re-ingestable |
 | Non-OpenAI LLM SDK       | Implement `LLMClient` Protocol; swap in `dependencies.py`; no business logic changes                                                                 |
+| Chat response streaming  | `LLMClient.stream()` async generator; chat endpoint returns `EventSourceResponse`; applies to final synthesis only — tool rounds still block         |
+| LLM request timeout      | `asyncio.wait_for(llm.complete(...), timeout=60.0)` in engine loop; graceful timeout response                                                        |
 
 ---
 

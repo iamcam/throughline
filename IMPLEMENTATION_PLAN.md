@@ -38,7 +38,7 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 | 3     | Speaker inference + naming API               | LLM infers host name with confidence; pipeline runs straight to chunking |
 | 4     | Chunking + embedding                         | Chunks with vectors in pgvector; speaker_id linked                       |
 | 5     | Basic RAG query                              | Single-turn Q&A over transcript content                                  |
-| 6     | Tool-calling query engine                    | Multi-turn chat with conditional retrieval                               |
+| 6     | Tool-calling query engine ✅ Complete         | Multi-turn chat with conditional retrieval; multi-feed scope             |
 | 7     | Frontend — feeds + episodes + speaker naming | Full ingestion flow in UI with SSE progress                              |
 | 8     | Frontend — chat interface                    | Full product usable end-to-end                                           |
 | 9     | Observability                                | Phoenix traces on all LLM + retrieval + inference calls                  |
@@ -80,16 +80,10 @@ uv add fastapi uvicorn[standard] sqlalchemy[asyncio] asyncpg alembic \
 #### 0.3 LLM and Embedding Protocols (`src/llm/base.py` + `src/llm/client.py`) 🤖
 Define `LLMClient` and `EmbeddingClient` Protocols before anything else references them. The OpenAI SDK is used only in `client.py` — all business logic receives the Protocol.
 
-> **As built:** `src/llm/client.py` contains `OpenAICompatibleLLMClient` and `OpenAICompatibleEmbeddingClient`.
-> `LLMResponse` in `base.py` currently has only `content: str` — `tool_calls` is added in Phase 6.
+> **As built (post-Phase 6):** `LLMResponse` has `content: str | None = None`, `tool_calls: list[ToolCall] = field(default_factory=list)`, and `finish_reason: str = "stop"`. `LLMClient.complete()` accepts a `tools` parameter. `TokenUsage` deferred to Phase 9. `MockLLMClient` lives in `tests/conftest.py` as a plain class — import directly, not as a pytest fixture.
 
 ```python
 # src/llm/base.py
-@dataclass
-class TokenUsage:
-    prompt_tokens: int
-    completion_tokens: int
-
 @dataclass
 class ToolCall:
     id: str
@@ -98,10 +92,9 @@ class ToolCall:
 
 @dataclass
 class LLMResponse:
-    content: str | None
-    tool_calls: list[ToolCall]
-    finish_reason: str
-    usage: TokenUsage
+    content: str | None = None
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    finish_reason: str = "stop"
 
 class LLMClient(Protocol):
     async def complete(
@@ -116,7 +109,7 @@ class EmbeddingClient(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 ```
 
-`OpenAILLMClient` and `OpenAIEmbeddingClient` in `openai.py` are thin wrappers over `AsyncOpenAI`. `MockLLMClient` and `MockEmbeddingClient` live in `tests/` for use in unit and integration tests.
+`OpenAICompatibleLLMClient` and `OpenAICompatibleEmbeddingClient` in `client.py` are thin wrappers over `AsyncOpenAI`. Tool call arguments are parsed from JSON string defensively — malformed arguments log a warning and produce an empty dict rather than raising.
 
 #### 0.4 Configuration (`src/config.py`) 🤖
 Pydantic-settings `Settings` class covering every `.env` variable from `ARCHITECTURE.md` section 4.
@@ -141,8 +134,8 @@ class Settings(BaseSettings):
     max_concurrent_ingestions: int = 2
     chunk_size_tokens: int = 256
     chunk_overlap_tokens: int = 32
+    chunk_min_tokens: int = 20
     topic_similarity_threshold: float = 0.75
-    auto_chunk_after_naming: bool = True
     demo_auth_enabled: bool = False
     demo_username: str = "demo"
     demo_password: str = "changeme"
@@ -151,7 +144,7 @@ class Settings(BaseSettings):
 ```
 
 #### 0.5 Database models (`src/models/db.py`) 🤖
-SQLAlchemy async models for all tables from `ARCHITECTURE.md` section 3.9.
+SQLAlchemy async models for all tables from `ARCHITECTURE.md` section 3.11.
 
 Key points:
 - UUID primary keys throughout
@@ -175,11 +168,11 @@ This file is the wiring layer for the entire app. Every shared resource is defin
 # Provides an async DB session per request
 async def get_db() -> AsyncGenerator[AsyncSession, None]: ...
 
-# Provides the LLMClient (OpenAILLMClient pointed at LLM_BASE_URL)
+# Provides the LLMClient (OpenAICompatibleLLMClient pointed at LLM_BASE_URL)
 # In tests: inject MockLLMClient — callers never reference the OpenAI SDK directly
 def get_llm_client() -> LLMClient: ...
 
-# Provides the EmbeddingClient (OpenAIEmbeddingClient pointed at EMBEDDING_BASE_URL)
+# Provides the EmbeddingClient (OpenAICompatibleEmbeddingClient pointed at EMBEDDING_BASE_URL)
 def get_embedding_client() -> EmbeddingClient: ...
 
 # Provides the IngestionQueue singleton (created in app lifespan)
@@ -196,6 +189,11 @@ def get_session_store(request: Request) -> SessionStore: ...
 
 # Provides PipelineStatusService (single place for all pipeline status writes)
 def get_pipeline_status_service(db: AsyncSession = Depends(get_db)) -> PipelineStatusService: ...
+
+# Added in Phase 6:
+def get_prompt_builder() -> PromptBuilder: ...
+def get_tool_dispatcher(retriever: Retriever = Depends(get_retriever)) -> ToolDispatcher: ...
+def get_query_engine(...) -> QueryEngine: ...
 ```
 
 Usage in route handlers:
@@ -212,10 +210,11 @@ async def ingest(
 Swapping any implementation requires changing one function in `dependencies.py`. No route handlers or business logic change.
 
 #### 0.8 FastAPI app (`src/api/main.py`)
-- Lifespan: DB engine, telemetry init, `IngestionQueue` singleton stored on `app.state`
+- Lifespan: DB engine, telemetry init, `IngestionQueue` singleton and `InMemorySessionStore` singleton stored on `app.state`
 - CORS middleware (localhost:3000)
 - Mount routers (stubs for now)
 - Register `BasicAuthMiddleware` (bypassed when `DEMO_AUTH_ENABLED=false`)
+- `logging.basicConfig(level=logging.INFO)` at module level — configure before any other imports
 
 #### 0.9 Health endpoints
 ```
@@ -242,9 +241,9 @@ This fixture is used by Phases 2, 3, and 4. Create it in Phase 0 so it's ready w
 ```json
 {
   "segments": [
-    {"speaker_id": "SPEAKER_00", "text": "Welcome to the show. I'm Lex Fridman and today I have a very special guest.", "start_ms": 0, "end_ms": 5200},
-    {"speaker_id": "SPEAKER_01", "text": "Thanks for having me, Lex. I'm Jensen Huang, CEO of NVIDIA.", "start_ms": 5400, "end_ms": 9800},
-    {"speaker_id": "SPEAKER_00", "text": "Jensen, let's talk about the future of AI and what NVIDIA is building.", "start_ms": 10200, "end_ms": 14500}
+    {"speaker_id": "SPEAKER_00", "text": "Welcome to the show. I'm Marcus Webb and today I have a very special guest.", "start_ms": 0, "end_ms": 5200},
+    {"speaker_id": "SPEAKER_01", "text": "Thanks for having me, Marcus. I'm Elena Vasquez.", "start_ms": 5400, "end_ms": 9800},
+    {"speaker_id": "SPEAKER_00", "text": "Elena, let's talk about the future of AI and what you're building.", "start_ms": 10200, "end_ms": 14500}
   ],
   "language": "en",
   "source": "whisper_local"
@@ -362,6 +361,8 @@ class BackgroundTaskQueue:
 ```
 
 Queue singleton created in FastAPI lifespan, injected via dependency.
+
+**Note:** `cancel()` returns `False` unconditionally in v1. Stuck jobs require a DB status update (`UPDATE episodes SET pipeline_status='ERROR' WHERE id=...`) or uvicorn restart to clear.
 
 #### 1.5 Routers
 ```
@@ -717,7 +718,7 @@ uv run alembic upgrade head
 GET  /api/v1/episodes/{episode_id}/speakers
 → [{
     speaker_id: "SPEAKER_00",
-    display_name: "Lex Fridman",
+    display_name: "Marcus Webb",
     name_inferred: true,
     name_confirmed: false,
     confidence: "high"
@@ -732,7 +733,7 @@ GET  /api/v1/episodes/{episode_id}/speakers/preview
 # Returns first segment > 20 words for the speaker
 
 PUT  /api/v1/episodes/{episode_id}/speakers
-Body: [{ "speaker_id": "SPEAKER_00", "display_name": "Lex Fridman" }]
+Body: [{ "speaker_id": "SPEAKER_00", "display_name": "Marcus Webb" }]
 → 200 OK
 ```
 
@@ -804,8 +805,19 @@ async def segment_by_topic(blocks: list[SpeakerBlock], embedder) -> list[TopicSe
         similarity = cosine_similarity(embeddings[i-1], embeddings[i])
         if similarity < settings.topic_similarity_threshold:
             boundaries.append(i)
-    # Group blocks into topic segments; merge segments below min token threshold
+    # Group blocks into topic segments
 ```
+
+**Step B.5 — Merge short segments:**
+After topic segmentation, merge any `TopicSegment` below `min_tokens` into its predecessor. This prevents filler turns ("yes yes yes", short affirmations) from becoming standalone chunks with meaningless embeddings.
+
+```python
+def _merge_short_segments(self, segments: list[TopicSegment]) -> list[TopicSegment]:
+    # Merge segments below self._min_tokens into predecessor
+    # Edge case: first segment is short → merge forward into second
+```
+
+`chunk_min_tokens: int = 20` in `Settings`. Not an environment variable — configure in code if adjustment needed.
 
 **Step C — Hierarchical chunk construction:**
 ```python
@@ -835,6 +847,19 @@ def build_chunks(segments: list[TopicSegment], episode_id: UUID) -> list[Chunk]:
 
 Token counting: `tiktoken` (cl100k_base) for consistency across models.
 
+**Chunker constructor:**
+```python
+class Chunker:
+    def __init__(
+        self,
+        chunk_size_tokens: int,
+        chunk_overlap_tokens: int,
+        min_tokens: int = 20,
+        topic_similarity_threshold: float = 0.75,
+        tokenizer: Callable[[str], int] | None = None,
+    ): ...
+```
+
 #### 4.2 Embedder (`src/ingestion/embedder.py`)
 Uses `EmbeddingClient` Protocol — not `AsyncOpenAI` directly. Embed leaf chunks only. Batch size 100, retry with exponential backoff.
 
@@ -850,15 +875,21 @@ class Embedder:
 Define the `VectorStore` Protocol now — `PgvectorStore` is the v1 implementation.
 
 ```python
+@dataclass
+class SearchFilters:
+    feed_ids: list[UUID] | None = None    # multi-feed scope; uses .in_() query
+    episode_ids: list[UUID] | None = None
+    speaker_id: str | None = None
+
 class PgvectorStore:
     async def search(
-        self, embedding, filters: SearchFilters, top_k: int
+        self, embedding, filters: SearchFilters, top_k: int, db: AsyncSession
     ) -> list[RawChunkResult]: ...
 
-    async def upsert(self, chunks: list[ChunkRecord]) -> None: ...
+    async def upsert(self, chunks: list[ChunkRecord], db: AsyncSession) -> None: ...
 ```
 
-`RawChunkResult` contains `speaker_id`, not `display_name`. Hydration happens in `ResultHydrator` (Phase 5).
+`RawChunkResult` contains `speaker_id`, not `display_name`. Hydration happens in `ResultHydrator` (Phase 5). `parent_text` is fetched alongside each leaf result in a single batched query.
 
 #### 4.4 Chunk storage
 Write to `chunks` table. Note: `speaker_id` stored, `display_name` resolved at read time via join on `episode_speakers`. Update episode `pipeline_status` → `READY`.
@@ -876,12 +907,14 @@ def test_leaf_chunks_reference_parent_id()
 def test_chunks_store_speaker_id_not_display_name()
 def test_timestamps_min_max_preserved()
 def test_short_segments_merged_not_orphaned()
+def test_short_segments_merged_into_predecessor()
 def test_single_speaker_episode_produces_chunks()
 ```
 
 ### Phase 4 Done When
 - Ingesting with fixture transcript produces chunks in pgvector
 - `chunks.speaker_id` contains "SPEAKER_00", never a display name
+- Short segments below `min_tokens` are merged — no standalone filler chunks
 - All chunker tests pass
 - Git tag: `v0.1.4-chunking`
 
@@ -909,8 +942,11 @@ class ResultHydrator:
         # JOIN episode_speakers ON speaker_id → get display_name
         # Fetch episode title
         # Format timestamp_display ("1:03:42")
-        # Return ChunkResult list
+        # Batched: one query per table, never N+1
+        # Return ChunkResult list — includes both text (leaf) and parent_text (topic segment)
 ```
+
+`ChunkResult` carries both `text` (leaf, for citation display) and `parent_text` (full topic segment, for LLM context). Both fields are available for frontend use.
 
 #### 5.2 Retriever (`src/query/retriever.py`)
 
@@ -948,6 +984,8 @@ Always retrieves, always passes context to LLM. Intentionally naive — Phase 6 
 
 System prompt: "Answer based only on provided context. Always cite specific speakers and timestamps."
 
+**`_build_context`:** Uses `chunk.parent_text or chunk.text` for the LLM context block. The leaf `text` found the right moment; the `parent_text` gives the LLM the surrounding topic segment needed to reason about what was actually said. Citations returned to the caller still include `text` for display.
+
 #### 5.4 Tests
 ```python
 # tests/unit/test_result_hydrator.py
@@ -969,6 +1007,7 @@ async def test_display_name_in_results_not_speaker_id()
 - `similarity_score` exposed on `CitationResponse` for retrieval quality inspection
 - `ChunkResult` defined in `src/query/result_hydrator.py` (not `schemas.py`)
 - `ResultHydrator` is stateless — no constructor args; owned internally by `Retriever`
+- `_build_context` uses `parent_text or text` — LLM receives full topic segment, not leaf text
 - `Retriever` wired via `get_retriever()` in `dependencies.py`
 - Manually verified 3-4 queries against real ingested episode
 - Git tag: `v0.1.5-basic-rag`
@@ -976,11 +1015,14 @@ async def test_display_name_in_results_not_speaker_id()
 > **Observed limitations (addressed in Phase 6):**
 > - Retrieval always fires regardless of question type — stretch citations visible at low similarity scores
 > - No conversation history — follow-up questions lose context
-> - Query rewriting deferred to Future Scope 1.3
+> - Vague queries ("what does the host think about technology?") produce multi-round tool calling with
+>   low-similarity results — query rewriting (Future Scope 1.3) is the correct fix
+> - `text == parent_text` on short-turn conversational episodes — symptom of single-sentence topic
+>   segments; `min_tokens` merge helps but doesn't eliminate it on highly fragmented content
 
 ---
 
-## Phase 6 — Tool-Calling Query Engine
+## Phase 6 — Tool-Calling Query Engine ✅ Complete
 
 **Goal:** Multi-turn freeform chat. LLM decides when to retrieve.
 
@@ -989,7 +1031,7 @@ async def test_display_name_in_results_not_speaker_id()
 ### Tasks
 
 #### 6.1 Tool definitions (`src/query/tools.py`) 🤖
-Three tools in OpenAI function-calling format:
+Three tools in OpenAI function-calling format. Tool descriptions are the primary mechanism controlling when the model calls each tool — write them carefully.
 
 ```python
 TOOLS = [
@@ -997,11 +1039,23 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_knowledge_base",
-            "description": "Search podcast transcript content. Use when asked about topics, opinions, or facts discussed in episodes.",
+            "description": (
+                "Search podcast transcript content for specific topics, opinions, or facts. "
+                "Use this when the user asks what was said about something, what a speaker "
+                "thinks about a topic, or wants to find a specific moment in an episode. "
+                "Do not use for greetings, clarifications, or questions answerable from "
+                "the conversation history alone. "
+                "If previous search results already contain sufficient information to answer "
+                "the question, do not search again — synthesize from what you have."
+            ),
             "parameters": {
+                "type": "object",
                 "properties": {
-                    "query": {"type": "string"},
-                    "speaker_name": {"type": "string", "description": "Filter to specific speaker. Optional."},
+                    "query": {
+                        "type": "string",
+                        "description": "Write as a descriptive phrase, not a question — e.g. 'Marcus views on consciousness' not 'What does Marcus think about consciousness?' Embedding models match text, not question syntax.",
+                    },
+                    "speaker_name": {"type": "string", "description": "Filter to specific speaker display name. Optional."},
                     "episode_id": {"type": "string", "description": "Filter to specific episode UUID. Optional."},
                     "top_k": {"type": "integer", "default": 5}
                 },
@@ -1013,8 +1067,9 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_episode_context",
-            "description": "Get full transcript excerpt around a specific timestamp.",
+            "description": "Retrieve the transcript excerpt surrounding a specific timestamp. Use when the user wants to explore a specific moment in more depth, or when a prior search result surfaced a citation the user wants to expand on.",
             "parameters": {
+                "type": "object",
                 "properties": {
                     "episode_id": {"type": "string"},
                     "timestamp_ms": {"type": "integer"},
@@ -1028,8 +1083,9 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_speaker_profile",
-            "description": "Get information about a speaker: episodes, speaking time, topics.",
+            "description": "Get information about a speaker across the knowledge base: which episodes they appear in. Use when the user asks about a specific person rather than a specific topic.",
             "parameters": {
+                "type": "object",
                 "properties": {
                     "speaker_name": {"type": "string"}
                 },
@@ -1053,11 +1109,15 @@ class ToolDispatcher:
         self, tool_call: ToolCall, session: ChatSession, db: AsyncSession
     ) -> str:
         # Routes to search_knowledge_base, get_episode_context, get_speaker_profile
+        # Outer try/except returns JSON error string rather than raising
         # Returns JSON string for LLM consumption
         # All results serialize display_name, never speaker_id
+        # Citations appended to session.citations after successful search
 ```
 
-> **Tool result message format — slow down here.** The OpenAI API requires tool results
+**Speaker name resolution:** `_search_knowledge_base` resolves `speaker_name` → `speaker_id` by querying `episode_speakers` scoped to `session.scope_feed_ids`. This prevents cross-feed `SPEAKER_00` collisions — the same identifier in two episodes refers to two different people.
+
+> **Tool result message format — critical.** The OpenAI API requires tool results
 > in this exact shape or the LLM will error:
 > ```python
 > {"role": "tool", "tool_call_id": tc.id, "content": result_json_string}
@@ -1069,6 +1129,14 @@ class ToolDispatcher:
 Define the Protocol and `InMemorySessionStore` implementation.
 
 ```python
+@dataclass
+class ChatSession:
+    session_id: str
+    scope_feed_ids: list[UUID] = field(default_factory=list)    # multi-feed support
+    scope_episode_ids: list[UUID] = field(default_factory=list)
+    messages: list[dict] = field(default_factory=list)
+    citations: list[dict] = field(default_factory=list)
+
 class InMemorySessionStore:
     def __init__(self):
         self._sessions: dict[str, ChatSession] = {}
@@ -1092,30 +1160,59 @@ class QueryEngine:
         session_store: SessionStore,
         prompt_builder: PromptBuilder,
         tool_dispatcher: ToolDispatcher,
+        max_tool_rounds: int = 3,
     ): ...
 
-    async def chat(self, session_id: str, user_message: str) -> ChatResponse:
+    async def chat(self, session_id: str, user_message: str, db: AsyncSession) -> ChatResponse:
         session = await self.session_store.get(session_id)
+        if session is None:
+            raise ValueError(f"Session not found: {session_id}")
+
         session.messages.append({"role": "user", "content": user_message})
 
-        for _ in range(3):
+        for _ in range(max_tool_rounds):
             messages = self.prompt_builder.build_messages(session)
             response = await self.llm_client.complete(messages, tools=TOOLS)
             if not response.tool_calls:
                 break
-            for tc in response.tool_calls:
-                result = await self.tool_dispatcher.dispatch(tc, session)
-                session.messages.append(tool_result_message(tc, result))
 
-        session.messages.append({"role": "assistant", "content": response.content})
+            # CRITICAL: assistant tool call message must be appended before tool results
+            session.messages.append({
+                "role": "assistant",
+                "tool_calls": [...]   # arguments serialized with json.dumps(), NOT str()
+            })
+
+            for tc in response.tool_calls:
+                result = await self.tool_dispatcher.dispatch(tc, session, db)
+                session.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result,
+                })
+        else:
+            # for/else: loop exhausted without break — make one final synthesis call
+            synthesis_messages = self.prompt_builder.build_messages(session)
+            synthesis_messages.append({
+                "role": "user",
+                "content": "Based on the search results above, please provide your best answer now."
+            })
+            response = await self.llm_client.complete(synthesis_messages)
+
+        final_content = response.content or ""
+        session.messages.append({"role": "assistant", "content": final_content})
         await self.session_store.save(session)
-        return ChatResponse(message=response.content, citations=session.citations)
+        return ChatResponse(message=final_content, session_id=session_id, citations=session.citations)
 ```
+
+**`arguments` serialization:** `json.dumps(tc.arguments)` — never `str(tc.arguments)`. Python dict string representation uses single quotes which LLM servers reject as invalid JSON.
+
+**`for/else`:** Python fires the `else` block when the loop completes without hitting `break`. The explicit synthesis instruction prevents empty responses when all tool rounds are exhausted.
 
 #### 6.5 Chat endpoints
 ```
-POST   /api/v1/chat/sessions
-POST   /api/v1/chat/{session_id}/message
+POST   /api/v1/chat/sessions              Body: { scope_feed_ids?: UUID[], scope_episode_ids?: UUID[] }
+POST   /api/v1/chat/{session_id}/message  Body: { message }
+                                          Response: { message, session_id, citations }
 GET    /api/v1/chat/{session_id}/history
 DELETE /api/v1/chat/{session_id}
 ```
@@ -1123,29 +1220,66 @@ DELETE /api/v1/chat/{session_id}
 #### 6.6 Tests
 ```python
 # tests/unit/test_prompt_builder.py
-def test_builds_correct_system_prompt_with_scope()
-def test_includes_full_message_history()
+def test_system_prompt_included_as_first_message()
+def test_session_messages_appended_after_system()
+def test_scope_feed_ids_mentioned_in_system_prompt()
+def test_scope_episode_ids_mentioned_in_system_prompt()
+def test_no_scope_produces_clean_prompt()
+def test_empty_session_messages_returns_only_system()
 
-# tests/integration/test_chat.py  (inject MockLLMClient, MockVectorStore)
-async def test_no_tool_call_for_summarization_request()
-async def test_tool_called_for_topic_query()
-async def test_multi_turn_history_maintained()
-async def test_session_scope_applied_to_retrieval()
-async def test_citations_accumulated_across_turns()
-async def test_tool_results_contain_display_names_not_speaker_ids()
-async def test_session_store_persists_between_turns()
+# tests/unit/test_session_store.py
+async def test_save_and_retrieve_session()
+async def test_get_returns_none_for_missing_session()
+async def test_delete_removes_session()
+async def test_list_sessions_returns_all_ids()
+async def test_save_uses_session_id_as_key()
 
 # tests/unit/test_tool_dispatcher.py
-async def test_dispatches_search_with_correct_filters()
-async def test_dispatches_context_with_timestamp()
-async def test_dispatches_speaker_profile()
+async def test_dispatches_search_knowledge_base()
+async def test_dispatches_get_speaker_profile()
+async def test_unknown_tool_returns_error_json()
+async def test_search_applies_session_feed_scope()
+async def test_search_resolves_speaker_name_to_id()
+async def test_search_proceeds_unfiltered_when_speaker_not_found()
+async def test_tool_exception_returns_error_json()
+async def test_search_returns_empty_message_when_no_results()
+async def test_search_populates_session_citations()
+async def test_multi_feed_scope_applied_to_search()
+
+# tests/unit/test_engine.py
+async def test_direct_response_requires_no_tool_calls()
+async def test_tool_call_dispatched_and_result_appended()
+async def test_multi_turn_history_maintained()
+async def test_session_not_found_raises_value_error()
+async def test_max_tool_rounds_respected()
+async def test_assistant_tool_call_message_appended_before_result()
+async def test_final_response_saved_to_session()
+async def test_none_content_returns_empty_string()
+async def test_citations_returned_in_response()
 ```
 
 ### Phase 6 Done When
 - Multi-turn chat works via curl
 - Verified: topic query → tool call; "summarize that" → no tool call
-- Citations show resolved speaker display names
-- Git tag: `v0.1.6-chat-engine`
+- Citations show resolved speaker display names and are returned on `ChatMessageResponse`
+- Tool call arguments serialized with `json.dumps()` — no single-quoted Python dict syntax
+- `for/else` synthesis call fires when max rounds exhausted — no empty responses
+- `scope_feed_ids: list[UUID]` on `ChatSession` and `SearchFilters` — multi-feed scope works
+- Speaker name resolution scoped to session feed IDs — cross-feed SPEAKER_00 collisions prevented
+- Git tags: `v0.1.6-tool-calling`
+
+> **Post-phase addition (second commit):** `scope_feed_id: UUID | None` refactored to
+> `scope_feed_ids: list[UUID]` on `ChatSession`; `SearchFilters.feed_id`
+> → `feed_ids: list[UUID] | None` with `.in_()` query; `POST /api/v1/chat/sessions`
+> request/response updated to list; `PromptBuilder` and `ToolDispatcher` updated.
+> Speaker name resolution scoped to session feed IDs to prevent cross-feed
+> `SPEAKER_00` collisions. Completed as second commit in Phase 6 before Phase 7 handoff.
+
+> **Known tech debt from this phase:**
+> - No request timeout on LLM calls — long local model queries hold the connection indefinitely.
+>   Fix: `asyncio.wait_for(llm.complete(...), timeout=60.0)` in engine loop.
+> - No job cancellation in `BackgroundTaskQueue` — see Phase 1 note.
+> - `MockLLMClient` is a plain class in `tests/conftest.py` — import directly, never as pytest fixture.
 
 ---
 
@@ -1166,6 +1300,11 @@ Vite proxy: `/api` → `http://localhost:8000`
 
 #### 7.2 API client (`src/api/client.ts`) 🤖
 Typed axios wrapper for every endpoint. Types mirror backend Pydantic schemas.
+
+Key types to define:
+- `CreateSessionRequest` — `scope_feed_ids: string[]` (not a single `scope_feed_id`)
+- `ChatMessageResponse` — includes `citations: CitationResult[]`
+- `CitationResult` — includes both `text` (leaf) and `parent_text` (topic segment) for flexible display
 
 #### 7.3 SSE hook (`src/hooks/useEpisodeStatus.ts`)
 ```typescript
@@ -1217,24 +1356,25 @@ function useEpisodeStatus(episodeId: string) {
 ### Tasks
 
 #### 8.1 Chat page layout
-- Left: scope selector (feed picker, optional episode multi-select)
+- Left: scope selector (multi-feed picker via `scope_feed_ids`, optional episode multi-select)
 - Main: message thread
 - Bottom: input + send
 
 #### 8.2 Message components
 - User: right-aligned, plain text
 - Assistant: left-aligned, markdown rendered
-- Citation cards: collapsible, speaker + timestamp + excerpt
+- Citation cards: collapsible, speaker + timestamp + excerpt; show `text` as excerpt, `parent_text` available for expanded view
 - Tool call indicator: subtle label ("searched knowledge base")
 
 #### 8.3 Session management
-- New session on page load or scope change
+- New session on page load or scope change — POST `/chat/sessions` with `scope_feed_ids`
 - "New conversation" button
-- History in React state (ephemeral)
+- History in React state (ephemeral — sessions cleared on server restart, handle 404 gracefully)
 
 ### Phase 8 Done When
 - Full product usable end-to-end in browser
 - Citations show resolved speaker names and clickable timestamps
+- Multi-feed scope selector works — session scoped to selected feeds
 - Git tag: `v0.1.8-frontend-chat`
 
 ---
@@ -1303,14 +1443,18 @@ Run a chat turn. Open Phoenix at `:6006`. Confirm:
 #### 10.2 Error handling audit
 - All pipeline errors stored and surfaced via status endpoint and SSE
 - Frontend shows meaningful error states
+- Chat 404 on missing session handled gracefully
 
-#### 10.3 Demo seed script
+#### 10.3 Remove superseded endpoint
+Remove `POST /api/v1/query/simple` — superseded by chat endpoints in Phase 6.
+
+#### 10.4 Demo seed script
 ```bash
 uv run python scripts/seed_demo.py --feed-url https://... --episodes 5
 ```
 Pre-ingest demo episodes. Commit this so anyone can reproduce your demo.
 
-#### 10.4 Final test pass
+#### 10.5 Final test pass
 ```bash
 uv run pytest --cov=src --cov-report=term-missing
 ```
@@ -1377,16 +1521,16 @@ Test that BackgroundTaskQueue satisfies the IngestionQueue Protocol."
 
 ## Milestone Summary
 
-| Tag                         | What Works                                                             |
-| --------------------------- | ---------------------------------------------------------------------- |
-| `v0.1.0-scaffold`           | Health endpoint, DB connected                                          |
-| `v0.1.1-feeds`              | RSS ingestion, episode listing, queue abstraction                      |
-| `v0.1.2-transcription`      | Transcription pipeline, SSE status streaming                           |
-| `v0.1.3-speakers`           | LLM speaker inference with confidence; pipeline runs straight to READY |
-| `v0.1.4-chunking`           | Chunks + embeddings, speaker_id preserved                              |
-| `v0.1.5-basic-rag`          | Simple Q&A with resolved speaker names in citations                    |
-| `v0.1.6-chat-engine`        | Multi-turn chat, tool-calling, conditional retrieval                   |
-| `v0.1.7-frontend-ingestion` | Browser-based ingestion with SSE progress                              |
-| `v0.1.8-frontend-chat`      | Full product in browser                                                |
-| `v0.1.9-observability`      | Phoenix traces including speaker inference metrics                     |
-| `v1.0.0`                    | Shippable, documented, demo-ready                                      |
+| Tag                         | What Works                                                                        |
+| --------------------------- | --------------------------------------------------------------------------------- |
+| `v0.1.0-scaffold`           | Health endpoint, DB connected                                                     |
+| `v0.1.1-feeds`              | RSS ingestion, episode listing, queue abstraction                                 |
+| `v0.1.2-transcription`      | Transcription pipeline, SSE status streaming                                      |
+| `v0.1.3-speakers`           | LLM speaker inference with confidence; pipeline runs straight to READY            |
+| `v0.1.4-chunking`           | Chunks + embeddings, speaker_id preserved, short segment merging                 |
+| `v0.1.5-basic-rag`          | Simple Q&A with resolved speaker names; parent_text used for LLM context         |
+| `v0.1.6-tool-calling`       | Multi-turn chat, tool-calling, conditional retrieval, multi-feed scope            |
+| `v0.1.7-frontend-ingestion` | Browser-based ingestion with SSE progress                                         |
+| `v0.1.8-frontend-chat`      | Full product in browser                                                           |
+| `v0.1.9-observability`      | Phoenix traces including speaker inference metrics                                |
+| `v1.0.0`                    | Shippable, documented, demo-ready                                                 |
