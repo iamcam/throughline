@@ -24,6 +24,7 @@ class EpisodeResponse(BaseModel):
     id: UUID
     feed_id: UUID
     title: str | None
+    description: str | None
     published_at: datetime | None
     duration_seconds: int | None
     pipeline_status: str

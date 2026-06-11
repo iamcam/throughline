@@ -9,7 +9,7 @@ from src.ingestion.speaker_store import SpeakerStore
 from src.models.db import TranscriptSegment
 from src.models.schemas import SpeakerResponse, SpeakerPreviewResponse, UpdateSpeakerRequest
 
-router = APIRouter(prefix="/api/v1/episodes", tags=["speakers"])
+router = APIRouter(prefix="/episodes", tags=["speakers"])
 
 @router.get("/{episode_id}/speakers", response_model=list[SpeakerResponse])
 async def get_speakers(
