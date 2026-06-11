@@ -31,12 +31,23 @@ uv run uvicorn src.api.main:app --reload --port 8000
 
 # Frontend (separate terminal)
 cd frontend
-npm install
-npm run dev   # http://localhost:3000
+yarn                  # install dependencies (yarn, not npm)
+yarn dev              # http://localhost:3000
+
+# Frontend build and lint
+yarn build            # TypeScript check + Vite production build
+yarn lint             # ESLint
 
 # API docs
 open http://localhost:8000/docs
 ```
+
+**Frontend dev notes:**
+- Package manager is Yarn — do not use `npm install` in the frontend directory
+- Tailwind v4 via `@tailwindcss/vite` plugin — no `postcss.config.js` needed
+- The Vite dev server proxies `/api/*` requests to `http://localhost:8000`. In production, Nginx handles the same routing (see `docker-compose.yml` and Nginx config below).
+- Path alias `@/*` → `src/*` — use `@/components/Foo` not `../../components/Foo`
+- shadcn components are in `src/components/ui/`; add new ones with `yarn dlx shadcn add <component>`
 
 ### Local LLM options
 
@@ -527,3 +538,37 @@ CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
 | **Total** | | **~$5–10/mo** |
 
 For interview purposes, you could also run everything locally and share your screen — no hosting required. The hosted demo is a nice-to-have, not a requirement.
+
+---
+
+## Version Control Notes
+
+**`.gitignore` (frontend):** Ensure these are covered at the repo root or in `frontend/.gitignore`:
+```
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+```
+
+The frontend was scaffolded with a `.gitignore` covering `node_modules`, `dist`, and editor files. The `frontend/.git` directory should not exist — the frontend is tracked by the root repo, not as a submodule.
+
+---
+
+## Known TODOs
+
+### Docker Integration Not Yet Validated (Phase 7)
+
+The frontend Docker build (`frontend/Dockerfile` and the `frontend` service in `docker-compose.yml`) has not been verified against the actual frontend stack. The scaffold `Dockerfile` uses a standard Node + nginx pattern, but the following need confirmation before demo deployment:
+
+- Tailwind v4 via `@tailwindcss/vite` plugin builds correctly in Docker (no postcss.config.js)
+- `yarn build` succeeds inside the Docker build context
+- The built `dist/` is served correctly by the nginx config inside the container
+- The Nginx reverse proxy correctly routes `/api/*` to the backend container
+
+**Recommended verification step:**
+```bash
+docker compose up --build frontend
+curl http://localhost:3000
+```
+
+Until this is verified, use local dev (`yarn dev`) for frontend and Docker only for the backend + DB.

@@ -135,6 +135,38 @@ DIARIZATION_MODEL=pyannote/speaker-diarization-3.1   # local backend
 
 ---
 
+### 1.7 Episode Delete
+
+**What it is:** Delete an ingested episode and all associated data — transcript segments, chunks, embeddings, speaker rows — from the DB.
+
+**Why deferred from Phase 7:** Requires both frontend (confirmation UI) and backend (DELETE endpoint with cascade through all tables). The cascade deletes are already defined in the schema so the DB side is straightforward. The frontend needs a confirmation step to avoid accidental deletion of ingested content.
+
+**Implementation path:**
+- Backend: `DELETE /api/v1/episodes/{episode_id}` — cascade handles transcript_segments, chunks, episode_speakers
+- Frontend: confirmation dialog (shadcn AlertDialog) on the episode card and detail page
+- Update `listEpisodes` cache after successful delete
+
+**Effort:** Half a day
+**Note:** Low novelty but a meaningful product gap — users currently cannot clean up episodes they no longer want.
+
+---
+
+### 1.8 Audio Clip Playback for Speaker Verification
+
+**What it is:** When editing a speaker name in `SpeakerRow`, play a short audio clip from the inferred timestamp so the user can verify the name by ear rather than reading the transcript text.
+
+**Why deferred from Phase 7:** Requires a new backend endpoint to serve an audio segment — either a clip extracted from the stored audio file, or a seek-to-timestamp approach using the browser's native audio element with the episode's `audio_url`.
+
+**Implementation path:**
+- Option A (simpler): Use the episode's `audio_url` directly — browser `<audio>` element with `currentTime` set to `start_ms / 1000`. No backend changes.
+- Option B: Backend endpoint `GET /api/v1/episodes/{episode_id}/audio/clip?start_ms=X&end_ms=Y` — returns audio slice. More reliable for remote URLs but requires ffmpeg.
+- Frontend: play button in `SpeakerRow` popover, next to the name input
+
+**Effort:** Half a day (Option A), 1 day (Option B)
+**Note:** Option A is worth trying first — if the episode's `audio_url` is publicly accessible the browser can seek directly without any backend work.
+
+---
+
 ## Tier 2 — Meaningful Additions, Higher Effort
 
 ### 2.1 Automatic Feed Polling

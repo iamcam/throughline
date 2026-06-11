@@ -1,9 +1,9 @@
 # Podcast Knowledge Engine — Architecture Document
 
-> Version: 0.6
+> Version: 0.7
 > Status: In implementation
 > Author: Cameron Perry
-> Last Updated: 2026-06-08
+> Last Updated: 2026-06-11
 
 ---
 
@@ -844,16 +844,61 @@ Phoenix runs as optional Docker Compose profile. `OTEL_EXPORTER_OTLP_ENDPOINT` i
 
 ### 3.13 Frontend — React + Vite
 
-| View          | Purpose                                                                                             |
-| ------------- | --------------------------------------------------------------------------------------------------- |
-| Feeds         | Add RSS URL, list feeds, refresh                                                                    |
-| Episodes      | Pipeline status badges, trigger ingestion, SSE progress                                             |
-| Speaker Names | View inferred name + confidence; confirm or correct. Available post-ingestion, not a pipeline gate. |
-| Chat          | Freeform conversation, citation cards, multi-feed scope selectors                                   |
+**Tech stack (as built, Phase 7):**
+- React 19 + TypeScript, Vite 8, Tailwind v4 via `@tailwindcss/vite` plugin
+- shadcn/ui (Radix style, custom mist theme), remixicon icon library
+- TanStack Query v5 for server state, React Router v7 for routing
+- axios for HTTP, Yarn as package manager
+- Path alias: `@/*` → `src/*` in both tsconfig and vite config
 
-State management: React Query for server state; Zustand or Context for session/UI state.
+**Views:**
 
-Chat session state lives in component — designed so persisting to localStorage or backend requires only extracting the session object. Session creation sends `scope_feed_ids: list[UUID]` (not a single `scope_feed_id`).
+| View | Route | Purpose |
+| ---- | ----- | ------- |
+| Feeds | `/feeds` | Add RSS URL, list feeds, refresh, delete |
+| Episodes | `/feeds/:feedId/episodes` | Episode list with search, filter, pagination, ingest/reingest |
+| Episode Detail | `/episodes/:episodeId` | Full detail, ingest/reingest with live progress, speakers section |
+| Speaker Names | `/episodes/:episodeId/speakers` | Stub — speaker naming is handled in Episode Detail |
+| Chat | `/chat` | Stub — Phase 8 |
+
+**Key components:**
+- `EpisodeRow` — self-contained card; owns its own SSE connection via `useEpisodeStatus`; derives `isActive` from live status not cached `episode.pipeline_status`
+- `SpeakerRow` — speaker display with confidence badge; popover edit with cancel/save
+- `Layout` — nav shell with `NavLink` for Feeds and Chat
+
+**Shared utilities (`src/lib/episode.ts`):**
+- `ACTIVE_STATUSES` — list of non-terminal pipeline statuses
+- `formatDuration(seconds)` — formats seconds to `1h 23m`
+- `formatDate(dateStr)` — formats ISO date to `Jun 11, 2026`
+
+**SSE / TanStack cache pattern — critical design decision:**
+
+SSE delivers real-time pipeline updates; TanStack Query cache is what React renders from. These are decoupled. The `useEpisodeStatus` hook bridges them: when the SSE stream receives a terminal status (`READY` or `ERROR`), it calls `queryClient.invalidateQueries` to sync the cache with the backend. Without this, `episode.pipeline_status` stays stale after ingestion completes and the SSE hook cannot reopen on reingest.
+
+```typescript
+// src/hooks/useEpisodeStatus.ts
+source.onmessage = (e) => {
+  const update = JSON.parse(e.data)
+  setStatus(update)
+  if (TERMINAL_STATUSES.includes(update.status)) {
+    source.close()
+    queryClient.invalidateQueries({ queryKey: ['episodes'] })
+    queryClient.invalidateQueries({ queryKey: ['episode', episodeId] })
+  }
+}
+```
+
+**Optimistic update on reingest:**
+
+`reingestMutation.onMutate` sets `pipeline_status` to `QUEUED` in the cache immediately, before the API responds. This ensures `isActive` becomes true on the next render and the SSE hook opens before the backend has updated the DB.
+
+**Session state:**
+
+Chat session state lives in component. `InMemorySessionStore` on the backend is ephemeral — sessions are lost on server restart. Frontend must handle 404 on stale session and offer to start a new one. Session creation sends `scope_feed_ids: string[]` (list, not single ID).
+
+**Docker note:**
+
+Frontend Docker build (`frontend/Dockerfile` and `frontend` service in `docker-compose.yml`) has not been validated against the Tailwind v4 Vite plugin build. Verify before demo deployment.
 
 ---
 
@@ -1076,13 +1121,32 @@ podcast-knowledge-engine/
 │   └── .env.example
 ├── frontend/
 │   ├── src/
+│   │   ├── api/
+│   │   │   └── client.ts            # Typed axios wrapper; all backend types and endpoint functions
 │   │   ├── components/
-│   │   ├── pages/
+│   │   │   ├── ui/                  # shadcn/ui components (button, badge, card, input, etc.)
+│   │   │   ├── EpisodeRow.tsx       # Episode card; owns SSE connection; derives isActive from live status
+│   │   │   ├── Layout.tsx           # Nav shell with NavLink
+│   │   │   └── SpeakerRow.tsx       # Speaker display + popover edit
 │   │   ├── hooks/
-│   │   │   └── useEpisodeStatus.ts
-│   │   └── api/
+│   │   │   └── useEpisodeStatus.ts  # SSE hook; invalidates TanStack cache on terminal status
+│   │   ├── lib/
+│   │   │   ├── episode.ts           # ACTIVE_STATUSES, formatDuration, formatDate
+│   │   │   └── utils.ts             # shadcn cn() helper
+│   │   ├── pages/
+│   │   │   ├── ChatPage.tsx         # Stub — Phase 8
+│   │   │   ├── EpisodeDetailPage.tsx # Full detail, ingest/reingest, speakers
+│   │   │   ├── EpisodesPage.tsx     # List with search, filter, pagination
+│   │   │   ├── FeedsPage.tsx        # Add/refresh/delete feeds
+│   │   │   └── SpeakerNamingPage.tsx # Stub — speaker naming in EpisodeDetailPage
+│   │   ├── App.tsx                  # Route definitions
+│   │   ├── index.css                # @import "tailwindcss"
+│   │   └── main.tsx                 # QueryClientProvider + App mount
+│   ├── components.json              # shadcn config; aliases use explicit src/ paths
 │   ├── package.json
-│   └── vite.config.ts
+│   ├── tsconfig.app.json            # @/* alias → src/*
+│   ├── vite.config.ts               # Tailwind v4 plugin, proxy, @/* alias
+│   └── yarn.lock
 ├── transcription-service/
 │   ├── main.py
 │   ├── pyproject.toml
@@ -1226,9 +1290,9 @@ cd backend && uv sync
 uv run alembic upgrade head
 uv run uvicorn src.api.main:app --reload --port 8000
 
-cd ../frontend && npm install && npm run dev
+cd ../frontend && yarn && yarn dev
 
-# Or full stack
+# Or full stack (Docker — frontend not yet validated with Tailwind v4 build)
 docker compose up
 docker compose --profile transcription --profile observability up
 ```

@@ -39,7 +39,7 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 | 4     | Chunking + embedding                         | Chunks with vectors in pgvector; speaker_id linked                       |
 | 5     | Basic RAG query                              | Single-turn Q&A over transcript content                                  |
 | 6     | Tool-calling query engine ✅ Complete         | Multi-turn chat with conditional retrieval; multi-feed scope             |
-| 7     | Frontend — feeds + episodes + speaker naming | Full ingestion flow in UI with SSE progress                              |
+| 7     | Frontend — feeds + episodes + speaker naming ✅ Complete | Full ingestion flow in UI with SSE progress                  |
 | 8     | Frontend — chat interface                    | Full product usable end-to-end                                           |
 | 9     | Observability                                | Phoenix traces on all LLM + retrieval + inference calls                  |
 | 10    | Polish, docs, demo prep                      | Shippable                                                                |
@@ -1283,68 +1283,39 @@ async def test_citations_returned_in_response()
 
 ---
 
-## Phase 7 — Frontend: Ingestion Flow
+## Phase 7 — Frontend: Ingestion Flow ✅ Complete
 
 **Goal:** Full ingestion flow in browser. SSE progress. Speaker confirmation UI.
 
-### Tasks
+### As Built
 
-#### 7.1 Scaffold
-```bash
-cd frontend
-npm create vite@latest . -- --template react-ts
-npm install @tanstack/react-query axios react-router-dom
-npm install -D tailwindcss postcss autoprefixer
-```
-Vite proxy: `/api` → `http://localhost:8000`
+**Stack decisions:**
+- Yarn (not npm), Vite 8, React 19, TypeScript, Tailwind v4 via `@tailwindcss/vite` plugin (no postcss.config.js needed)
+- shadcn/ui with Radix style, custom mist theme, remixicon icons
+- TanStack Query v5, React Router v7, axios
+- Path alias `@/*` → `src/*` in both tsconfig (`baseUrl` + `paths`) and vite config (`resolve.alias`). `components.json` uses explicit `src/` paths — shadcn CLI does not resolve `@/` aliases and will create a literal `@/` directory if aliases are used there.
 
-#### 7.2 API client (`src/api/client.ts`) 🤖
-Typed axios wrapper for every endpoint. Types mirror backend Pydantic schemas.
+**Deviations from plan:**
+- `SpeakerNamingPage` is a stub — speaker naming built into `EpisodeDetailPage` instead (better UX, popover edit pattern)
+- Scaffold uses `yarn create vite` not `npm create vite`; Tailwind v4 setup differs from v3 (no `tailwind.config.js`, single `@import "tailwindcss"` in CSS)
+- `EpisodeDetailPage` added at `/episodes/:episodeId` — not in original plan but needed for episode detail + speaker editing
+- `EpisodeResponse` backend schema updated to include `description: str | None`
 
-Key types to define:
-- `CreateSessionRequest` — `scope_feed_ids: string[]` (not a single `scope_feed_id`)
-- `ChatMessageResponse` — includes `citations: CitationResult[]`
-- `CitationResult` — includes both `text` (leaf) and `parent_text` (topic segment) for flexible display
+**Critical implementation detail — SSE + TanStack cache sync:**
 
-#### 7.3 SSE hook (`src/hooks/useEpisodeStatus.ts`)
-```typescript
-function useEpisodeStatus(episodeId: string) {
-  const [status, setStatus] = useState<PipelineStatusUpdate | null>(null)
+The `useEpisodeStatus` hook must invalidate the TanStack cache on terminal status. Without this, `episode.pipeline_status` stays stale after ingestion and the SSE hook cannot reopen on reingest. See ARCHITECTURE.md section 3.13 for the pattern.
 
-  useEffect(() => {
-    const source = new EventSource(`/api/v1/episodes/${episodeId}/status/stream`)
-    source.onmessage = (e) => setStatus(JSON.parse(e.data))
-    source.onerror = () => source.close()
-    return () => source.close()
-  }, [episodeId])
+**Known tech debt from this phase:**
+- Episode delete not implemented — needs frontend + backend work
+- Audio clip playback for speaker verification not implemented — needs backend audio segment endpoint
+- `SpeakerNamingPage` is a stub at `/episodes/:episodeId/speakers` — may be removed or repurposed
+- Frontend Docker build not validated against Tailwind v4 Vite plugin — verify before demo deployment
+- No error boundaries — API failures surface as silent empty states in most cases
 
-  return status
-}
-```
-
-#### 7.4 Feeds page
-- RSS URL input + "Add Feed"
-- Feed cards: title, episode count, last fetched
-- Refresh / Delete actions
-
-#### 7.5 Episodes page
-- Episode list with status badges
-- In-progress: SSE-driven progress bar + stage label
-- QUEUED: show position ("Position 3 in queue")
-- "Ingest" button with speaker count hint input (informational only in v1 — no diarization)
-- READY episodes: show speaker name + confidence badge if inferred, or "Speaker unknown" prompt
-
-#### 7.6 Speaker naming page
-- Accessible from episode detail — not a pipeline gate
-- Shows inferred name (if any) with confidence badge ("High confidence", "Medium confidence")
-- Name input pre-filled from inference, editable
-- "Save" → PUT speakers → updates display name, no pipeline effect
-- Episodes with `UNKNOWN` speaker show a prompt to add a name optionally
-
-### Phase 7 Done When
+### Phase 7 Done When ✅
 - Add feed → trigger ingestion → watch SSE progress to READY — all in browser
-- Speaker name (if inferred) visible with confidence badge; editable post-ingestion
-- No curl required for happy path
+- Speaker name (if inferred) visible with confidence badge; editable post-ingestion via popover
+- Reingest works correctly — SSE hook reopens after cache invalidation
 - Git tag: `v0.1.7-frontend-ingestion`
 
 ---
