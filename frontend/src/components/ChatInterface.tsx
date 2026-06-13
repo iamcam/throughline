@@ -179,7 +179,7 @@ export function ChatInterface({ scopeFeedIds, scopeEpisodeIds }: ChatInterfacePr
             }}
             placeholder="Ask a question… (Enter to send, Shift+Enter for newline)"
             disabled={!sessionId || isSending}
-            className="max-w-150 max-h-32 bg-background"
+            className="max-w-150 min-h-16 max-h-42 bg-background"
           />
           <Button
             onClick={handleSend}

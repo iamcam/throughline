@@ -13,6 +13,7 @@ export interface Feed {
   rss_url: string;
   title: string | null;
   description: string | null;
+  image_url: string | null;
   episode_count: number;
   created_at: string;
 }

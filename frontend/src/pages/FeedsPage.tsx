@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Trash } from 'lucide-react';
+import { LucideArrowUpRight, LucideCloudBackup, Trash } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -44,7 +44,7 @@ export default function FeedsPage() {
     if (isLoading) return <div>Loading feeds...</div>
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 p-6">
             <div className="flex gap-2">
                 <Input
                     value={url}
@@ -71,36 +71,52 @@ export default function FeedsPage() {
 
             <div className="space-y-4">
                 {feeds?.map(feed => (
+
+
                     <Card
                         key={feed.id}
                         onClick={() => navigate(`/feeds/${feed.id}/episodes`)}
                     >
-                        <CardHeader>
-                            <h1 className="text-2xl font-bold">{feed.title ?? feed.rss_url}</h1>
-                        </CardHeader>
-                        <CardContent>
-                            <p>{feed.episode_count} episodes</p>
-                            {feed.description && <p>{feed.description}</p>}
-                        </CardContent>
+                        <div className="flex gap-4 items-start px-(--card-spacing)">
+                          {feed.image_url && (
+                              <img className="aspect-square w-42"
+                                  src={feed.image_url}
+                              />
+                          )}
+                          <div className='w-full'>
+                            <CardHeader>
+                                <h1 className="text-2xl font-bold">{feed.title ?? feed.rss_url}</h1>
+                            </CardHeader>
+                            <CardContent>
+                                <p>{feed.episode_count} episodes</p>
+                                {feed.description && <p>{feed.description}</p>}
+                            </CardContent>
+                          </div>
+                          <LucideArrowUpRight />
 
-                        <CardFooter className="flex gap-2">
+                        </div>
+                        <CardFooter className="flex gap-6 justify-between">
+                          <div className="flex gap-6">
                             <Button
-                                className="grow"
-                                disabled={refreshMutation.isPending}
-                                onClick={(e) => { e.stopPropagation(); refreshMutation.mutate(feed.id) }}
+                              variant="outline"
+                              className=""
+                              disabled={refreshMutation.isPending}
+                              onClick={(e) => { e.stopPropagation(); refreshMutation.mutate(feed.id) }}
                             >
-                                Refresh
+                              <LucideCloudBackup /> Refresh
                             </Button>
-                                <Button
-                                variant="destructive"
-                                size="icon"
-                                disabled={deleteMutation.isPending}
-                                onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(feed.id) }}
-                            >
-                                <Trash />
-                            </Button>
+                          </div>
+                          <Button
+                          variant="destructive"
+                          size="icon"
+                          disabled={deleteMutation.isPending}
+                          onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(feed.id) }}
+                          >
+                            <Trash />
+                          </Button>
                         </CardFooter>
-                    </Card>
+                        </Card>
+
                 ))}
             </div>
         </div>

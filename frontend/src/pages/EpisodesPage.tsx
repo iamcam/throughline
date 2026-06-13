@@ -96,11 +96,12 @@ export default function EpisodesPage() {
         <div className="space-y-6 overflow-y-auto h-full p-6">
 
           {feed && (
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
+            <div className="flex items-start justify-between gap-6">
+              {feed.image_url && <img className="aspect-square w-42" src={feed.image_url} />}
+              <div className="space-y-1 grow">
                 <h1 className="text-2xl font-bold">{feed.title ?? feed.rss_url}</h1>
                 {feed.description && (
-                  <p className="text-sm text-muted-foreground line-clamp-2">
+                  <p className="text-sm ">
                     {feed.description}
                   </p>
                 )}

@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useEpisodeStatus } from '@/hooks/useEpisodeStatus'
 import { ACTIVE_STATUSES, formatDate, formatDuration } from '@/lib/episode'
-import { Copy, LoaderCircle } from 'lucide-react'
+import { Copy, LoaderCircle, LucideArrowUpRight, LucideCloudDownload, LucideRefreshCw, LucideSparkles } from 'lucide-react'
 
 
 interface EpisodeRowProps {
@@ -23,12 +23,21 @@ export function EpisodeRow({ episode, onIngest, onReingest, onNavigate }: Episod
   const stage = liveStatus?.stage ?? episode.pipeline_stage
   const progress = liveStatus?.progress ?? episode.pipeline_progress
   const isActive = ACTIVE_STATUSES.includes(status)
+  const isReady = status === 'READY'
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="line-clamp-2">{episode.title ?? 'Untitled'}</CardTitle>
-        {episode.description && (<CardDescription className="line-clamp-2">{episode.description}</CardDescription>)}
+    <Card className={isReady ? 'border-2 border-accent' : ''}>
+      <CardHeader className='flex flex-row'>
+        <div className='flex-1 w-100'>
+          <CardTitle className="line-clamp-2 flex flex-row gap-2 items-center">
+            {isReady && <LucideSparkles className="text-accent size-4" />}
+            {episode.title ?? 'Untitled'}
+          </CardTitle>
+            {episode.description && (<CardDescription className="line-clamp-2">{episode.description}</CardDescription>)}
+        </div>
+        <Button variant="outline" size="icon" onClick={() => onNavigate(episode.id)}>
+          <LucideArrowUpRight className='shrink-0' />
+        </Button>
       </CardHeader>
       <CardContent >
         <div className="flex justify-between items-center">
@@ -36,7 +45,7 @@ export function EpisodeRow({ episode, onIngest, onReingest, onNavigate }: Episod
 
             <span>{formatDate(episode.published_at)}</span>
             <span>{formatDuration(episode.duration_seconds)}</span>
-            <StatusBadge status={status} />
+            {status !== 'READY' && <StatusBadge status={status} />}
           </div>
             {isActive && stage && (
               <div className="text-sm text-muted-foreground">
@@ -45,24 +54,18 @@ export function EpisodeRow({ episode, onIngest, onReingest, onNavigate }: Episod
             )}
 
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={() => onNavigate(episode.id)}
-            >
-              Details
-            </Button>
-            <Button
+              <Button
               disabled={isActive}
               onClick={() => status === 'READY' ? onReingest(episode.id) : onIngest(episode.id)}
             >
               {isActive ? <LoaderCircle className="animate-spin " /> : null}
-              {isActive ? 'Ingesting...' : status === 'READY' ? 'Reingest' : 'Ingest'}
+              {isActive ? 'Ingesting...' : status === 'READY' ? <><LucideRefreshCw />Reingest</> : <><LucideCloudDownload />Ingest</>}
             </Button>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 ">
           <Button variant="outline"  onClick={() => navigator.clipboard.writeText(episode.id)}>
-            <Copy />{episode.id}
+            <Copy />{episode.id.slice(0,5)} … {episode.id.slice(-5)}
           </Button>
         </div>
       </CardContent>
