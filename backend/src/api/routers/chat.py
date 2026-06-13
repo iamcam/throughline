@@ -55,9 +55,6 @@ async def create_session(
         scope_feed_ids=body.scope_feed_ids,
         scope_episode_ids=body.scope_episode_ids,
     )
-    logger.info("INFO: this is level info")
-    logger.debug("DEBUG: this is level debug")
-    logger.warn("WARN: this is level warn")
 
     await session_store.save(session)
     return CreateSessionResponse(

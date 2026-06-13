@@ -91,9 +91,10 @@ def make_chunk_result(episode_id=None, display_name="Ada Sinclair") -> ChunkResu
         parent_text="Broader context about ML.",
         episode_id=str(eid),
         episode_title="Synthetic Minds Ep. 1",
+        audio_url="https://domain.ext/file.mp3",
         display_name=display_name,
         timestamp_display="1:00",
         start_ms=60_000,
         end_ms=90_000,
-        similarity_score=0.88,
+        similarity_score=0.88
     )

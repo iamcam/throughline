@@ -35,6 +35,7 @@ def make_chunk_result() -> ChunkResult:
         parent_text="Broader discussion about consciousness and AI.",
         episode_id=str(EPISODE_ID),
         episode_title="Synthetic Minds Ep. 1",
+        audio_url="https://domain.ext/file.mp3",
         display_name="Marcus Webb",
         timestamp_display="1:03:42",
         start_ms=3_822_000,

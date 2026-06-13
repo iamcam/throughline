@@ -68,8 +68,8 @@ class MockAsyncSession:
 async def test_hydrator_resolves_speaker_id_to_display_name():
     raw = [make_raw(speaker_id="SPEAKER_00")]
     db = MockAsyncSession([
-        MockResult([MockRow(id=EPISODE_ID, title="Synthetic Minds Ep. 12")]),
-        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="SPEAKER_00", display_name="Ada Sinclair")]),
+        MockResult([MockRow(id=EPISODE_ID, title="Synthetic Minds Ep. 12", audio_url=None)]),
+        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="SPEAKER_00", display_name="Ada Sinclair", audio_url=None)]),
     ])
     results = await ResultHydrator().hydrate(raw, db)
     assert results[0].display_name == "Ada Sinclair"
@@ -79,11 +79,32 @@ async def test_hydrator_resolves_speaker_id_to_display_name():
 async def test_hydrator_resolves_episode_title():
     raw = [make_raw()]
     db = MockAsyncSession([
-        MockResult([MockRow(id=EPISODE_ID, title="Synthetic Minds Ep. 12")]),
-        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="SPEAKER_00", display_name="Ada Sinclair")]),
+        MockResult([MockRow(id=EPISODE_ID, title="Synthetic Minds Ep. 12", audio_url=None)]),
+        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="SPEAKER_00", display_name="Ada Sinclair", audio_url=None)]),
     ])
     results = await ResultHydrator().hydrate(raw, db)
     assert results[0].episode_title == "Synthetic Minds Ep. 12"
+
+@pytest.mark.asyncio
+async def test_hydrator_resolves_audio_url():
+    EPISODE_ID_2 = uuid.uuid4()
+    raw = [
+        make_raw(episode_id=EPISODE_ID),
+        make_raw(episode_id=EPISODE_ID_2),
+    ]
+    db = MockAsyncSession([
+        MockResult([
+            MockRow(id=EPISODE_ID, title="Synthetic Minds Ep. 12", audio_url="https://domain.ext/afile.mp3"),
+            MockRow(id=EPISODE_ID_2, title="Synthetic Minds Ep. 13", audio_url="https://example.com/other-file.mp3"),
+        ]),
+        MockResult([
+            MockRow(episode_id=EPISODE_ID, speaker_id="SPEAKER_00", display_name="Ada Sinclair"),
+            MockRow(episode_id=EPISODE_ID_2, speaker_id="SPEAKER_00", display_name="Ada Sinclair"),
+        ]),
+    ])
+    results = await ResultHydrator().hydrate(raw, db)
+    assert results[0].to_dict()["audio_url"] == "https://domain.ext/afile.mp3"
+    assert results[1].to_dict()["audio_url"] == "https://example.com/other-file.mp3"
 
 
 @pytest.mark.asyncio
@@ -91,8 +112,8 @@ async def test_hydrator_formats_timestamp_correctly():
     """3_822_000ms = 63m 42s = 1:03:42"""
     raw = [make_raw(start_ms=3_822_000)]
     db = MockAsyncSession([
-        MockResult([MockRow(id=EPISODE_ID, title="Ep. 1")]),
-        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="SPEAKER_00", display_name="Ada Sinclair")]),
+        MockResult([MockRow(id=EPISODE_ID, title="Ep. 1", audio_url=None)]),
+        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="SPEAKER_00", display_name="Ada Sinclair", audio_url=None)]),
     ])
     results = await ResultHydrator().hydrate(raw, db)
     assert results[0].timestamp_display == "1:03:42"
@@ -103,8 +124,8 @@ async def test_hydrator_formats_sub_hour_timestamp():
     """125_000ms = 2m 5s = 2:05"""
     raw = [make_raw(start_ms=125_000)]
     db = MockAsyncSession([
-        MockResult([MockRow(id=EPISODE_ID, title="Ep. 1")]),
-        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="SPEAKER_00", display_name="Ada Sinclair")]),
+        MockResult([MockRow(id=EPISODE_ID, title="Ep. 1", audio_url=None)]),
+        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="SPEAKER_00", display_name="Ada Sinclair", audio_url=None)]),
     ])
     results = await ResultHydrator().hydrate(raw, db)
     assert results[0].timestamp_display == "2:05"
@@ -115,8 +136,8 @@ async def test_hydrator_returns_none_display_name_when_missing():
     """UNKNOWN speaker with no display_name in episode_speakers → None, not a string."""
     raw = [make_raw(speaker_id="UNKNOWN")]
     db = MockAsyncSession([
-        MockResult([MockRow(id=EPISODE_ID, title="Ep. 1")]),
-        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="UNKNOWN", display_name=None)]),
+        MockResult([MockRow(id=EPISODE_ID, title="Ep. 1", audio_url=None)]),
+        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="UNKNOWN", display_name=None, audio_url=None)]),
     ])
     results = await ResultHydrator().hydrate(raw, db)
     assert results[0].display_name is None
@@ -144,12 +165,12 @@ async def test_hydrator_batches_lookups_for_multiple_results():
             execute_calls += 1
             if execute_calls == 1:
                 return MockResult([
-                    MockRow(id=ep_a, title="Show A"),
-                    MockRow(id=ep_b, title="Show B"),
+                    MockRow(id=ep_a, title="Show A", audio_url=None),
+                    MockRow(id=ep_b, title="Show B", audio_url=None),
                 ])
             return MockResult([
-                MockRow(episode_id=ep_a, speaker_id="SPEAKER_00", display_name="Ada Sinclair"),
-                MockRow(episode_id=ep_b, speaker_id="SPEAKER_00", display_name="Renn Okafor"),
+                MockRow(episode_id=ep_a, speaker_id="SPEAKER_00", display_name="Ada Sinclair", audio_url=None),
+                MockRow(episode_id=ep_b, speaker_id="SPEAKER_00", display_name="Renn Okafor", audio_url=None),
             ])
 
     results = await ResultHydrator().hydrate(raw, CountingSession())
@@ -167,12 +188,12 @@ async def test_hydrator_returns_correct_display_name_per_episode():
     ]
     db = MockAsyncSession([
         MockResult([
-            MockRow(id=ep_a, title="Show A"),
-            MockRow(id=ep_b, title="Show B"),
+            MockRow(id=ep_a, title="Show A", audio_url=None),
+            MockRow(id=ep_b, title="Show B", audio_url=None),
         ]),
         MockResult([
-            MockRow(episode_id=ep_a, speaker_id="SPEAKER_00", display_name="Ada Sinclair"),
-            MockRow(episode_id=ep_b, speaker_id="SPEAKER_00", display_name="Renn Okafor"),
+            MockRow(episode_id=ep_a, speaker_id="SPEAKER_00", display_name="Ada Sinclair", audio_url=None),
+            MockRow(episode_id=ep_b, speaker_id="SPEAKER_00", display_name="Renn Okafor", audio_url=None),
         ]),
     ])
     results = await ResultHydrator().hydrate(raw, db)
@@ -192,8 +213,8 @@ async def test_chunk_id_and_episode_id_are_strings_in_output():
     """UUIDs from RawChunkResult should be stringified in ChunkResult."""
     raw = [make_raw()]
     db = MockAsyncSession([
-        MockResult([MockRow(id=EPISODE_ID, title="Ep. 1")]),
-        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="SPEAKER_00", display_name="Ada Sinclair")]),
+        MockResult([MockRow(id=EPISODE_ID, title="Ep. 1", audio_url=None)]),
+        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="SPEAKER_00", display_name="Ada Sinclair", audio_url=None)]),
     ])
     results = await ResultHydrator().hydrate(raw, db)
     assert isinstance(results[0].chunk_id, str)
@@ -204,8 +225,9 @@ async def test_chunk_id_and_episode_id_are_strings_in_output():
 async def test_similarity_score_rounded_in_to_dict():
     raw = [make_raw(similarity_score=0.912345678)]
     db = MockAsyncSession([
-        MockResult([MockRow(id=EPISODE_ID, title="Ep. 1")]),
-        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="SPEAKER_00", display_name="Ada Sinclair")]),
+        MockResult([MockRow(id=EPISODE_ID, title="Ep. 1", audio_url=None)]),
+        MockResult([MockRow(episode_id=EPISODE_ID, speaker_id="SPEAKER_00", display_name="Ada Sinclair", audio_url=None)]),
     ])
     results = await ResultHydrator().hydrate(raw, db)
     assert results[0].to_dict()["similarity_score"] == 0.9123
+
