@@ -80,6 +80,10 @@ async def _run_ingest(episode_id: UUID, job_args: dict, services: PipelineServic
 
     async with AsyncSessionLocal() as db:
         await ingest_episode(episode, job_args, services, db)
+        # If needed to blow through a fake pipeline with status updates,
+        # comment out ingest_episode and un-comment the following two lines
+        # from src.ingestion.pipeline import fake_ingest_episode
+        # await fake_ingest_episode(episode, job_args, services, db)
 
 
 

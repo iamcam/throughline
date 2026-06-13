@@ -64,6 +64,7 @@ export interface CitationResult {
   start_ms: number;
   end_ms: number;
   similarity_score: number;
+  audio_url: string | null;
 }
 
 export interface ChatSession {

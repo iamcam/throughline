@@ -29,6 +29,7 @@ class CitationResponse(BaseModel):
     chunk_id: str
     episode_id: str
     episode_title: str | None
+    audio_url: str | None
     display_name: str | None
     timestamp_display: str
     text: str
@@ -106,6 +107,7 @@ async def simple_query(
             chunk_id=chunk.chunk_id,
             episode_id=chunk.episode_id,
             episode_title=chunk.episode_title,
+            audio_url=chunk.audio_url,
             display_name=chunk.display_name,
             timestamp_display=chunk.timestamp_display,
             text=chunk.text,

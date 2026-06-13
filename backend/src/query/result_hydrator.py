@@ -1,12 +1,12 @@
 # src/query/result_hydrator.py
 from __future__ import annotations
 from dataclasses import dataclass
+import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.db import Episode, EpisodeSpeaker
 from src.storage.vector_store import RawChunkResult
-
 
 @dataclass
 class ChunkResult:
@@ -15,6 +15,7 @@ class ChunkResult:
     parent_text: str | None
     episode_id: str
     episode_title: str | None
+    audio_url: str | None
     display_name: str | None #from episode_speakers; None == unknown
     timestamp_display: str # human-readable
     start_ms: int
@@ -28,6 +29,7 @@ class ChunkResult:
             "parent_text": self.parent_text,
             "episode_id": self.episode_id,
             "episode_title": self.episode_title,
+            "audio_url": self.audio_url,
             "display_name": self.display_name,
             "timestamp_display": self.timestamp_display,
             "start_ms": self.start_ms,
@@ -72,9 +74,13 @@ class ResultHydrator:
 
         # Single query for all episode titles
         episode_rows = await db.execute(
-            select(Episode.id, Episode.title).where(Episode.id.in_(episode_ids))
+            select(Episode.id, Episode.title, Episode.audio_url).where(Episode.id.in_(episode_ids))
         )
-        episode_titles: dict = {row.id: row.title for row in episode_rows}
+
+        episode_data: dict = {
+            row.id: {"title": row.title, "audio_url": row.audio_url}
+            for row in episode_rows
+        }
 
         # Single query for all speaker display names
         ep_ids_for_speakers = [ep_id for ep_id, _ in speaker_keys]
@@ -91,14 +97,14 @@ class ResultHydrator:
             (row.episode_id, row.speaker_id): row.display_name
             for row in speaker_rows
         }
-
         return [
             ChunkResult(
                 chunk_id=str(r.chunk_id),
                 text=r.text,
                 parent_text=r.parent_text,
                 episode_id=str(r.episode_id),
-                episode_title=episode_titles.get(r.episode_id),
+                episode_title=episode_data.get(r.episode_id, {}).get("title"),
+                audio_url=episode_data.get(r.episode_id, {}).get("audio_url"),
                 display_name=speaker_names.get((r.episode_id, r.speaker_id)),
                 timestamp_display=_format_timestamp(r.start_ms),
                 start_ms=r.start_ms,

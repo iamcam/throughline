@@ -35,6 +35,30 @@ class PipelineServices:
     vector_store: VectorStore
 
 
+# async def fake_ingest_episode(
+#         episode: Episode,
+#         job_args: dict,
+#         services: PipelineServices,
+#         db: AsyncSession
+# ) -> None:
+#     """
+#     Only used for quickly moving through the pipeline witout producing any work.
+#     """
+#     import asyncio
+#     episode_id = episode.id
+#     stages = [
+#         # "DOWNLOADING",
+#         "TRANSCRIBING",
+#         "INFERRING_SPEAKERS",
+#         "CHUNKING",
+#         "EMBEDDING",
+#         "READY",
+#     ]
+#     for stage in stages:
+#         await services.status.set(episode_id, stage, db=db)
+#         await asyncio.sleep(1.5)
+
+
 async def ingest_episode(
         episode: Episode,
         job_args: dict,
