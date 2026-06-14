@@ -40,7 +40,7 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 | 5     | Basic RAG query                              | Single-turn Q&A over transcript content                                  |
 | 6     | Tool-calling query engine ✅ Complete         | Multi-turn chat with conditional retrieval; multi-feed scope             |
 | 7     | Frontend — feeds + episodes + speaker naming ✅ Complete | Full ingestion flow in UI with SSE progress                  |
-| 8     | Frontend — chat interface                    | Full product usable end-to-end                                           |
+| 8     | Frontend — chat interface ✅ Complete         | Full product usable end-to-end; chat in three contexts                   |
 | 9     | Observability                                | Phoenix traces on all LLM + retrieval + inference calls                  |
 | 10    | Polish, docs, demo prep                      | Shippable                                                                |
 
@@ -1281,6 +1281,70 @@ async def test_citations_returned_in_response()
 > - No job cancellation in `BackgroundTaskQueue` — see Phase 1 note.
 > - `MockLLMClient` is a plain class in `tests/conftest.py` — import directly, never as pytest fixture.
 
+#### 6.6 Tests
+```python
+# tests/unit/test_prompt_builder.py
+def test_system_prompt_included_as_first_message()
+def test_session_messages_appended_after_system()
+def test_scope_feed_ids_mentioned_in_system_prompt()
+def test_scope_episode_ids_mentioned_in_system_prompt()
+def test_no_scope_produces_clean_prompt()
+def test_empty_session_messages_returns_only_system()
+
+# tests/unit/test_session_store.py
+async def test_save_and_retrieve_session()
+async def test_get_returns_none_for_missing_session()
+async def test_delete_removes_session()
+async def test_list_sessions_returns_all_ids()
+async def test_save_uses_session_id_as_key()
+
+# tests/unit/test_tool_dispatcher.py
+async def test_dispatches_search_knowledge_base()
+async def test_dispatches_get_speaker_profile()
+async def test_unknown_tool_returns_error_json()
+async def test_search_applies_session_feed_scope()
+async def test_search_resolves_speaker_name_to_id()
+async def test_search_proceeds_unfiltered_when_speaker_not_found()
+async def test_tool_exception_returns_error_json()
+async def test_search_returns_empty_message_when_no_results()
+async def test_search_populates_session_citations()
+async def test_multi_feed_scope_applied_to_search()
+
+# tests/unit/test_engine.py
+async def test_direct_response_requires_no_tool_calls()
+async def test_tool_call_dispatched_and_result_appended()
+async def test_multi_turn_history_maintained()
+async def test_session_not_found_raises_value_error()
+async def test_max_tool_rounds_respected()
+async def test_assistant_tool_call_message_appended_before_result()
+async def test_final_response_saved_to_session()
+async def test_none_content_returns_empty_string()
+async def test_citations_returned_in_response()
+```
+
+### Phase 6 Done When
+- Multi-turn chat works via curl
+- Verified: topic query → tool call; "summarize that" → no tool call
+- Citations show resolved speaker display names and are returned on `ChatMessageResponse`
+- Tool call arguments serialized with `json.dumps()` — no single-quoted Python dict syntax
+- `for/else` synthesis call fires when max rounds exhausted — no empty responses
+- `scope_feed_ids: list[UUID]` on `ChatSession` and `SearchFilters` — multi-feed scope works
+- Speaker name resolution scoped to session feed IDs — cross-feed SPEAKER_00 collisions prevented
+- Git tags: `v0.1.6-tool-calling`
+
+> **Post-phase addition (second commit):** `scope_feed_id: UUID | None` refactored to
+> `scope_feed_ids: list[UUID]` on `ChatSession`; `SearchFilters.feed_id`
+> → `feed_ids: list[UUID] | None` with `.in_()` query; `POST /api/v1/chat/sessions`
+> request/response updated to list; `PromptBuilder` and `ToolDispatcher` updated.
+> Speaker name resolution scoped to session feed IDs to prevent cross-feed
+> `SPEAKER_00` collisions. Completed as second commit in Phase 6 before Phase 7 handoff.
+
+> **Known tech debt from this phase:**
+> - No request timeout on LLM calls — long local model queries hold the connection indefinitely.
+>   Fix: `asyncio.wait_for(llm.complete(...), timeout=60.0)` in engine loop.
+> - No job cancellation in `BackgroundTaskQueue` — see Phase 1 note.
+> - `MockLLMClient` is a plain class in `tests/conftest.py` — import directly, never as pytest fixture.
+
 ---
 
 ## Phase 7 — Frontend: Ingestion Flow ✅ Complete
@@ -1291,7 +1355,7 @@ async def test_citations_returned_in_response()
 
 **Stack decisions:**
 - Yarn (not npm), Vite 8, React 19, TypeScript, Tailwind v4 via `@tailwindcss/vite` plugin (no postcss.config.js needed)
-- shadcn/ui with Radix style, custom mist theme, remixicon icons
+- shadcn/ui with Radix style, custom mist theme, lucide-react icons
 - TanStack Query v5, React Router v7, axios
 - Path alias `@/*` → `src/*` in both tsconfig (`baseUrl` + `paths`) and vite config (`resolve.alias`). `components.json` uses explicit `src/` paths — shadcn CLI does not resolve `@/` aliases and will create a literal `@/` directory if aliases are used there.
 
@@ -1307,7 +1371,7 @@ The `useEpisodeStatus` hook must invalidate the TanStack cache on terminal statu
 
 **Known tech debt from this phase:**
 - Episode delete not implemented — needs frontend + backend work
-- Audio clip playback for speaker verification not implemented — needs backend audio segment endpoint
+- Audio clip playback for speaker verification not implemented — uses `#t=` fragment approach proven in Phase 8 citations; see Future Scope 1.8
 - `SpeakerNamingPage` is a stub at `/episodes/:episodeId/speakers` — may be removed or repurposed
 - Frontend Docker build not validated against Tailwind v4 Vite plugin — verify before demo deployment
 - No error boundaries — API failures surface as silent empty states in most cases
@@ -1320,32 +1384,68 @@ The `useEpisodeStatus` hook must invalidate the TanStack cache on terminal statu
 
 ---
 
-## Phase 8 — Frontend: Chat Interface
+## Phase 8 — Frontend: Chat Interface ✅ Complete
 
-**Goal:** Freeform conversational query UI.
+**Goal:** Freeform conversational query UI. Chat available in three contexts: all feeds, single feed, single episode.
 
-### Tasks
+### As Built
 
-#### 8.1 Chat page layout
-- Left: scope selector (multi-feed picker via `scope_feed_ids`, optional episode multi-select)
-- Main: message thread
-- Bottom: input + send
+**New files:**
+- `src/hooks/useChatSession.ts` — TanStack `useQuery`-based session hook; StrictMode-safe via query deduplication; `staleTime: Infinity` + focus/reconnect refetch disabled
+- `src/components/ChatInterface.tsx` — reusable chat component; `scopeFeedIds?` and `scopeEpisodeIds?` props; `flex flex-col h-full` layout; toolbar + knowledge base sheet shown only when no scope set
+- `src/components/CitationList.tsx` — collapsible citations; top 7 by similarity score; audio playback via `#t=` URI fragment
+- `src/components/SearchFilterList.tsx` — Sheet knowledge base browser (`side="left"`); self-contained data fetch; read-only V1
 
-#### 8.2 Message components
-- User: right-aligned, plain text
-- Assistant: left-aligned, markdown rendered
-- Citation cards: collapsible, speaker + timestamp + excerpt; show `text` as excerpt, `parent_text` available for expanded view
-- Tool call indicator: subtle label ("searched knowledge base")
+**Modified files:**
+- `src/pages/ChatPage.tsx` — thin wrapper around `<ChatInterface />`; lazy-loaded via `React.lazy()`
+- `src/pages/EpisodesPage.tsx` — `ResizablePanelGroup` wrapping existing content + `<ChatInterface scopeFeedIds={[feedId]} />`; Ask AI button in feed header
+- `src/pages/EpisodeDetailPage.tsx` — same resizable pattern; Ask AI disabled when `status !== 'READY'`; chat scoped to episode
+- `src/components/Layout.tsx` — updated to `h-screen flex flex-col`; `<main>` is `flex-1 overflow-auto p-6`
+- `backend/src/query/result_hydrator.py` — added `audio_url` to `ChunkResult`; episode query fetches title + audio_url in single batched dict
+- `backend/src/api/routers/query.py` — added `audio_url` to `CitationResponse`
 
-#### 8.3 Session management
-- New session on page load or scope change — POST `/chat/sessions` with `scope_feed_ids`
-- "New conversation" button
-- History in React state (ephemeral — sessions cleared on server restart, handle 404 gracefully)
+**Key decisions and gotchas:**
 
-### Phase 8 Done When
+`useChatSession` uses `useQuery` not `useEffect`. React 19 StrictMode double-mounts components — raw `useEffect` triggered two `POST /chat/sessions` calls. TanStack Query's internal deduplication prevents duplicate requests. Confirmed: one network call on mount.
+
+`react-resizable-panels` API as of current version:
+- `orientation` not `direction` on `ResizablePanelGroup`
+- `panelRef` prop + `usePanelRef()` hook (not `ref` + `ImperativePanel` type — no longer exported)
+- `onCollapse`/`onExpand` removed; use `onResize={(size) => setChatOpen(size.asPercentage > 0)}`
+- `minSize={320}` in pixels prevents overflow at narrow widths; percentage minSize is too small on mobile
+
+Resizable chat panel layout — critical combination:
+```tsx
+<ResizablePanel className="flex flex-col h-full">
+  <div className="shrink-0 ...">header</div>
+  <div className="flex-1 min-h-0 overflow-hidden">
+    <ChatInterface ... />
+  </div>
+</ResizablePanel>
+```
+`min-h-0` allows flex child to shrink below content size so internal scroll works. `overflow-hidden` clips during collapse animation preventing horizontal scrollbar at zero width. Without both, the chat panel breaks.
+
+`audio_url` in `ResultHydrator` — fetch episode data as a plain dict per row, not as a stored Row object. SQLAlchemy Row objects are only valid during iteration:
+```python
+episode_data = {
+    row.id: {"title": row.title, "audio_url": row.audio_url}
+    for row in episode_rows
+}
+```
+
+Audio playback uses `#t=` URI fragment (Media Fragments spec) — browser seeks natively without JS event listeners. Seek to `start_ms - 3000ms` for context. Confirmed working on major podcast CDNs.
+
+**Known tech debt:**
+- V2 scope filtering deferred — scope set once at session creation, no mid-conversation update. Backend needs `GET /chat/{session_id}` and `PATCH /chat/{session_id}`. See Future Scope 1.9.
+- `SpeakerNamingPage` still a stub
+- Frontend Docker build not validated against Tailwind v4
+- No error boundaries
+
+### Phase 8 Done When ✅
 - Full product usable end-to-end in browser
-- Citations show resolved speaker names and clickable timestamps
-- Multi-feed scope selector works — session scoped to selected feeds
+- Chat works at `/chat` (all feeds), on EpisodesPage (feed scope), on EpisodeDetailPage (episode scope)
+- Citations show resolved speaker names, timestamps, audio playback
+- Resizable chat panel opens/closes correctly, preserves state while collapsed
 - Git tag: `v0.1.8-frontend-chat`
 
 ---
@@ -1502,6 +1602,6 @@ Test that BackgroundTaskQueue satisfies the IngestionQueue Protocol."
 | `v0.1.5-basic-rag`          | Simple Q&A with resolved speaker names; parent_text used for LLM context         |
 | `v0.1.6-tool-calling`       | Multi-turn chat, tool-calling, conditional retrieval, multi-feed scope            |
 | `v0.1.7-frontend-ingestion` | Browser-based ingestion with SSE progress                                         |
-| `v0.1.8-frontend-chat`      | Full product in browser                                                           |
+| `v0.1.8-frontend-chat`      | Full product in browser; chat in three contexts; resizable panels; citations with audio |
 | `v0.1.9-observability`      | Phoenix traces including speaker inference metrics                                |
 | `v1.0.0`                    | Shippable, documented, demo-ready                                                 |

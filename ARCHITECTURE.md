@@ -1,9 +1,9 @@
 # Podcast Knowledge Engine — Architecture Document
 
-> Version: 0.7
+> Version: 0.8
 > Status: In implementation
 > Author: Cameron Perry
-> Last Updated: 2026-06-11
+> Last Updated: 2026-06-13
 
 ---
 
@@ -30,6 +30,7 @@ The primary interface is a freeform chat that uses tool-calling to decide when r
 - Automated feed polling (manual ingestion trigger)
 - Persistent job queue (semaphore-backed in-memory queue sufficient for v1)
 - Speaker diarization (deferred — CPU/local diarization via Pyannote is impractical on non-CUDA hardware; see Future Scope section 1.5)
+- Mid-conversation scope changes (scope set once at session creation; V2 work — see Future Scope)
 
 ---
 
@@ -636,12 +637,15 @@ class ResultHydrator:
         db: AsyncSession
     ) -> list[ChunkResult]:
         # Resolves speaker_id → display_name via episode_speakers join
-        # Fetches episode title
+        # Fetches episode title and audio_url
         # Formats timestamp_display
         # Batched: one query per table, never N+1
 ```
 
-`ChunkResult` carries both `text` (leaf, for citation display) and `parent_text` (full topic segment, for LLM context). Separates swappable vector search from stable hydration logic.
+`ChunkResult` carries `text` (leaf, for citation display), `parent_text` (full topic segment, for LLM context),
+and `audio_url` (for frontend audio playback). Episode data fetched in a single batched query as a dict:
+`{"title": row.title, "audio_url": row.audio_url}` — do not store whole SQLAlchemy Row objects, as they
+are only valid during iteration.
 
 **`_build_context` in `src/api/routers/query.py`**
 
@@ -844,57 +848,93 @@ Phoenix runs as optional Docker Compose profile. `OTEL_EXPORTER_OTLP_ENDPOINT` i
 
 ### 3.13 Frontend — React + Vite
 
-**Tech stack (as built, Phase 7):**
+**Tech stack (as built, Phase 8):**
 - React 19 + TypeScript, Vite 8, Tailwind v4 via `@tailwindcss/vite` plugin
-- shadcn/ui (Radix style, custom mist theme), remixicon icon library
+- shadcn/ui (Radix style, custom mist theme), remixicon + lucide-react icon libraries
 - TanStack Query v5 for server state, React Router v7 for routing
 - axios for HTTP, Yarn as package manager
+- `react-markdown` for LLM response rendering in chat
+- `react-resizable-panels` via shadcn `Resizable` for split-panel chat layout
 - Path alias: `@/*` → `src/*` in both tsconfig and vite config
 
-**Views:**
+**App shell layout:**
+- `Layout.tsx` uses `h-screen flex flex-col` — nav takes natural height, `<main>` is `flex-1 overflow-auto p-6`
+- Pages using resizable panels (`EpisodesPage`, `EpisodeDetailPage`) get `h-full` from the flex shell and manage their own scroll/padding
+- `ChatPage` is lazy-loaded via `React.lazy()` + `Suspense` to keep initial bundle under Vite's 500kb warning threshold
 
-| View | Route | Purpose |
-| ---- | ----- | ------- |
-| Feeds | `/feeds` | Add RSS URL, list feeds, refresh, delete |
-| Episodes | `/feeds/:feedId/episodes` | Episode list with search, filter, pagination, ingest/reingest |
-| Episode Detail | `/episodes/:episodeId` | Full detail, ingest/reingest with live progress, speakers section |
-| Speaker Names | `/episodes/:episodeId/speakers` | Stub — speaker naming is handled in Episode Detail |
-| Chat | `/chat` | Stub — Phase 8 |
+**Chat contexts — three entry points:**
+
+| Context | Route | Scope |
+| ------- | ----- | ----- |
+| All feeds | `/chat` | No scope — all ingested episodes |
+| Single feed | `/feeds/:feedId/episodes` | `scopeFeedIds={[feedId]}` |
+| Single episode | `/episodes/:episodeId` | `scopeEpisodeIds={[episodeId]}` |
 
 **Key components:**
-- `EpisodeRow` — self-contained card; owns its own SSE connection via `useEpisodeStatus`; derives `isActive` from live status not cached `episode.pipeline_status`
+
+- `ChatInterface` — reusable chat UI; accepts optional `scopeFeedIds` and `scopeEpisodeIds` props; owns session via `useChatSession`; `flex flex-col h-full` layout; toolbar shown only when no scope set; `SearchFilterList` sheet rendered only when no scope set
+- `CitationList` — collapsible citation block per assistant message; top 7 by similarity score; audio playback via `#t=` URI fragment (Media Fragments spec — browser seeks natively, no JS event listener needed); chunk ID copy button; similarity score badge
+- `SearchFilterList` — Sheet-based knowledge base browser (`side="left"`); self-contained, fetches its own feeds data; accordion per feed (`type="multiple"`); lazy episode fetch per feed from TanStack cache; read-only in V1; navigate buttons close sheet and route to feeds/episodes pages
+- `EpisodeRow` — episode card; owns its own SSE connection via `useEpisodeStatus`; derives `isActive` from live status not cached status
 - `SpeakerRow` — speaker display with confidence badge; popover edit with cancel/save
-- `Layout` — nav shell with `NavLink` for Feeds and Chat
+- `Layout` — nav shell with `NavLink`
 
-**Shared utilities (`src/lib/episode.ts`):**
-- `ACTIVE_STATUSES` — list of non-terminal pipeline statuses
-- `formatDuration(seconds)` — formats seconds to `1h 23m`
-- `formatDate(dateStr)` — formats ISO date to `Jun 11, 2026`
+**Resizable panel pattern (`EpisodesPage`, `EpisodeDetailPage`):**
 
-**SSE / TanStack cache pattern — critical design decision:**
-
-SSE delivers real-time pipeline updates; TanStack Query cache is what React renders from. These are decoupled. The `useEpisodeStatus` hook bridges them: when the SSE stream receives a terminal status (`READY` or `ERROR`), it calls `queryClient.invalidateQueries` to sync the cache with the backend. Without this, `episode.pipeline_status` stays stale after ingestion completes and the SSE hook cannot reopen on reingest.
-
-```typescript
-// src/hooks/useEpisodeStatus.ts
-source.onmessage = (e) => {
-  const update = JSON.parse(e.data)
-  setStatus(update)
-  if (TERMINAL_STATUSES.includes(update.status)) {
-    source.close()
-    queryClient.invalidateQueries({ queryKey: ['episodes'] })
-    queryClient.invalidateQueries({ queryKey: ['episode', episodeId] })
-  }
-}
+```tsx
+<ResizablePanelGroup orientation="horizontal" className="h-full">
+  <ResizablePanel defaultSize="100%" minSize="50%">
+    {/* page content — overflow-y-auto h-full p-6 on inner div */}
+  </ResizablePanel>
+  <ResizableHandle withHandle />
+  <ResizablePanel
+    panelRef={chatPanelRef}   // usePanelRef() from react-resizable-panels
+    defaultSize={0}
+    minSize={320}             // pixels, not percentage — prevents overflow at narrow widths
+    maxSize="50%"
+    collapsible
+    onResize={(size) => setChatOpen(size.asPercentage > 0)}
+    className="flex flex-col h-full"
+  >
+    <div className="shrink-0 flex items-center p-2 border-b">
+      {/* panel header with close button */}
+    </div>
+    <div className="flex-1 min-h-0 overflow-hidden">
+      <ChatInterface scopeFeedIds/scopeEpisodeIds />
+    </div>
+  </ResizablePanel>
+</ResizablePanelGroup>
 ```
 
-**Optimistic update on reingest:**
+**Critical layout notes:**
+- `min-h-0` on the `ChatInterface` wrapper div is required — without it a flex child won't shrink below its content size and internal scroll breaks
+- `overflow-hidden` on the same wrapper clips content during collapse animation, preventing horizontal scrollbar at zero panel width
+- `onCollapse`/`onExpand` callbacks were removed in current `react-resizable-panels`; use `onResize={(size) => setChatOpen(size.asPercentage > 0)}` instead
+- `panelRef` prop + `usePanelRef()` hook are the current imperative API; `ref` prop and `ImperativePanel` type are no longer exported
 
-`reingestMutation.onMutate` sets `pipeline_status` to `QUEUED` in the cache immediately, before the API responds. This ensures `isActive` becomes true on the next render and the SSE hook opens before the backend has updated the DB.
+**`useChatSession` hook:**
+
+Uses `useQuery` (not `useEffect`) for session creation. React 19 StrictMode double-mounts components in development — a raw `useEffect` triggered two `POST /chat/sessions` calls. TanStack Query's internal deduplication prevents duplicate in-flight requests for the same query key.
+
+```typescript
+useQuery({
+  queryKey: ['chat-session', scopeFeedIds ?? [], scopeEpisodeIds ?? []],
+  queryFn: () => createChatSession(scopeFeedIds ?? [], scopeEpisodeIds ?? []),
+  staleTime: Infinity,
+  refetchOnWindowFocus: false,
+  refetchOnReconnect: false,
+})
+```
+
+`staleTime: Infinity` prevents refetch on window focus or reconnect from creating a new session and orphaning the conversation. `resetSession` invalidates the cache entry and refetches, used for 404 recovery.
+
+**SSE / TanStack cache pattern:**
+
+SSE delivers real-time pipeline updates; TanStack Query cache is what React renders from. The `useEpisodeStatus` hook bridges them: on terminal status (`READY` or `ERROR`), it invalidates `['episodes']` and `['episode', episodeId]` cache keys. Without this, `episode.pipeline_status` stays stale after ingestion and the SSE hook cannot reopen on reingest.
 
 **Session state:**
 
-Chat session state lives in component. `InMemorySessionStore` on the backend is ephemeral — sessions are lost on server restart. Frontend must handle 404 on stale session and offer to start a new one. Session creation sends `scope_feed_ids: string[]` (list, not single ID).
+Chat session state lives in `ChatInterface` component. `InMemorySessionStore` on the backend is ephemeral — sessions are lost on server restart. Frontend handles 404 on stale session: shows error message, calls `resetSession()` to create a fresh session automatically.
 
 **Docker note:**
 
@@ -1090,7 +1130,7 @@ podcast-knowledge-engine/
 │   │   │   ├── tool_dispatcher.py   # Routes tool calls; speaker resolution; citation collection
 │   │   │   ├── tools.py             # Tool definitions (OpenAI function format)
 │   │   │   ├── retriever.py         # Composes EmbeddingClient + VectorStore + ResultHydrator
-│   │   │   ├── result_hydrator.py   # Resolves speaker_id → display_name; defines ChunkResult
+│   │   │   ├── result_hydrator.py   # Resolves speaker_id → display_name + audio_url; defines ChunkResult
 │   │   │   └── session_store.py     # SessionStore Protocol + InMemorySessionStore; ChatSession
 │   │   ├── models/
 │   │   │   ├── db.py                # SQLAlchemy models
@@ -1124,24 +1164,29 @@ podcast-knowledge-engine/
 │   │   ├── api/
 │   │   │   └── client.ts            # Typed axios wrapper; all backend types and endpoint functions
 │   │   ├── components/
-│   │   │   ├── ui/                  # shadcn/ui components (button, badge, card, input, etc.)
+│   │   │   ├── ui/                  # shadcn/ui components (button, badge, card, input, sheet,
+│   │   │   │                        #   accordion, collapsible, resizable, separator, popover, etc.)
+│   │   │   ├── ChatInterface.tsx    # Reusable chat UI; scopeFeedIds/scopeEpisodeIds props
+│   │   │   ├── CitationList.tsx     # Collapsible citations; audio playback via #t= fragment
 │   │   │   ├── EpisodeRow.tsx       # Episode card; owns SSE connection; derives isActive from live status
-│   │   │   ├── Layout.tsx           # Nav shell with NavLink
+│   │   │   ├── Layout.tsx           # Nav shell; h-screen flex flex-col; main is flex-1 overflow-auto
+│   │   │   ├── SearchFilterList.tsx # Sheet-based knowledge base browser; self-contained data fetch
 │   │   │   └── SpeakerRow.tsx       # Speaker display + popover edit
 │   │   ├── hooks/
+│   │   │   ├── useChatSession.ts    # TanStack useQuery session creation; StrictMode-safe
 │   │   │   └── useEpisodeStatus.ts  # SSE hook; invalidates TanStack cache on terminal status
 │   │   ├── lib/
 │   │   │   ├── episode.ts           # ACTIVE_STATUSES, formatDuration, formatDate
 │   │   │   └── utils.ts             # shadcn cn() helper
 │   │   ├── pages/
-│   │   │   ├── ChatPage.tsx         # Stub — Phase 8
-│   │   │   ├── EpisodeDetailPage.tsx # Full detail, ingest/reingest, speakers
-│   │   │   ├── EpisodesPage.tsx     # List with search, filter, pagination
+│   │   │   ├── ChatPage.tsx         # Thin wrapper around ChatInterface; lazy-loaded
+│   │   │   ├── EpisodeDetailPage.tsx # Full detail, ingest/reingest, speakers; resizable chat panel
+│   │   │   ├── EpisodesPage.tsx     # List with search, filter, pagination; resizable chat panel
 │   │   │   ├── FeedsPage.tsx        # Add/refresh/delete feeds
 │   │   │   └── SpeakerNamingPage.tsx # Stub — speaker naming in EpisodeDetailPage
-│   │   ├── App.tsx                  # Route definitions
+│   │   ├── App.tsx                  # Route definitions; ChatPage lazy-loaded via React.lazy()
 │   │   ├── index.css                # @import "tailwindcss"
-│   │   └── main.tsx                 # QueryClientProvider + App mount
+│   │   └── main.tsx                 # QueryClientProvider + StrictMode + App mount
 │   ├── components.json              # shadcn config; aliases use explicit src/ paths
 │   ├── package.json
 │   ├── tsconfig.app.json            # @/* alias → src/*
@@ -1228,7 +1273,7 @@ volumes:
 - `RSSParser` — fixture XML, duration formats, transcript tag detection
 - `SpeakerResolver` — prompt construction, JSON parsing, null handling; inject `MockLLMClient`
 - `PromptBuilder` — message construction, scope application; no I/O
-- `ResultHydrator` — display name resolution, timestamp formatting; mock DB
+- `ResultHydrator` — display name resolution, timestamp formatting, audio_url batching; mock DB
 - `ToolDispatcher` — correct tool routing, filter application, citation population, speaker resolution
 - `QueryEngine` — tool-calling loop, round limits, message ordering, citation passthrough
 - `SessionStore` — save/retrieve/delete, key correctness
@@ -1276,6 +1321,7 @@ uv run pytest --cov=src --cov-report=term-missing
 | Non-OpenAI LLM SDK       | Implement `LLMClient` Protocol; swap in `dependencies.py`; no business logic changes                                                                 |
 | Chat response streaming  | `LLMClient.stream()` async generator; chat endpoint returns `EventSourceResponse`; applies to final synthesis only — tool rounds still block         |
 | LLM request timeout      | `asyncio.wait_for(llm.complete(...), timeout=60.0)` in engine loop; graceful timeout response                                                        |
+| V2 chat scope filtering  | `GET /chat/{session_id}` returns full session object; `PATCH /chat/{session_id}` updates scope mid-conversation; frontend scope selector calls resetSession on change |
 
 ---
 

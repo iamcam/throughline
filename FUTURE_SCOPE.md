@@ -155,36 +155,135 @@ DIARIZATION_MODEL=pyannote/speaker-diarization-3.1   # local backend
 
 **What it is:** When editing a speaker name in `SpeakerRow`, play a short audio clip from the inferred timestamp so the user can verify the name by ear rather than reading the transcript text.
 
-**Why deferred from Phase 7:** Requires a new backend endpoint to serve an audio segment — either a clip extracted from the stored audio file, or a seek-to-timestamp approach using the browser's native audio element with the episode's `audio_url`.
+**Status:** Partially implemented. Citation cards in `CitationList` already support audio playback via the `#t=` URI fragment approach — the browser seeks to `start_ms - 3000ms` natively using the episode's `audio_url`. The same pattern can be applied to the `SpeakerRow` popover using the `sample_timestamp_ms` from `GET /episodes/{id}/speakers/preview`.
+
+**Implementation path (Option A — already proven):**
+- Use `speaker.sample_timestamp_ms` from the preview endpoint
+- `<audio src={episode.audio_url + '#t=' + seekTime} controls />` in the `SpeakerRow` popover
+- `episode.audio_url` needs to be available in the speaker context — either pass it as a prop or fetch the episode
+
+**Effort:** Half a day
+
+---
+
+### 1.9 V2 Chat Scope Filtering
+
+**What it is:** Allow users to change the scope of a chat session mid-conversation, and read back the current scope at any time. In v1, scope is set once at session creation and cannot be changed. The frontend has no way to read back what scope is active.
+
+**Why deferred:** Requires backend changes to expose and mutate session scope, plus significant frontend work for a scope selector that updates reactively.
+
+**Backend changes needed:**
+- `GET /api/v1/chat/{session_id}` — return full `ChatSession` object including `scope_feed_ids` and `scope_episode_ids`
+- `PATCH /api/v1/chat/{session_id}` — update scope; backend must update `SearchFilters` on subsequent tool dispatches for the same session
+
+**Frontend changes needed:**
+- Scope selector in `ChatInterface` toolbar (currently hidden when scope props are set)
+- On scope change: call `PATCH`, or call `resetSession()` to start fresh with new scope
+- Display current active scope in toolbar — requires reading back from backend or tracking in component state
+
+**Feeds/episode filter UI design (deferred from V1):**
+- Feed list with checkboxes; accordion drill-down to ingested episodes per feed
+- Search field filtering feed titles, descriptions, and episode titles/descriptions
+- Two groups: feeds with ingested episodes (selectable) and feeds without (show "Add episodes" button)
+- Progressive disclosure: show ingested episodes only on expand; full episode management stays on `/feeds/:id/episodes`
+
+**Effort:** 1-2 weekends (backend + frontend)
+
+---
+
+### 1.10 Individual Episode Artwork
+
+**What it is:** Display per-episode artwork (`<itunes:image>` at the item level) in episode lists and detail pages. Feed-level artwork (`feeds.image_url`) is already implemented.
+
+**Why deferred:** Per-episode artwork is less common in RSS feeds and was deprioritized for Phase 8 polish work. Feed-level artwork covers the majority of use cases.
 
 **Implementation path:**
-- Option A (simpler): Use the episode's `audio_url` directly — browser `<audio>` element with `currentTime` set to `start_ms / 1000`. No backend changes.
-- Option B: Backend endpoint `GET /api/v1/episodes/{episode_id}/audio/clip?start_ms=X&end_ms=Y` — returns audio slice. More reliable for remote URLs but requires ffmpeg.
-- Frontend: play button in `SpeakerRow` popover, next to the name input
+- Backend: add `image_url TEXT` to `episodes` table (Alembic migration); parse `<itunes:image>` at item level in `rss_parser.py`
+- Frontend: add `image_url: string | null` to `Episode` type in `client.ts`; display in `EpisodeRow` and `EpisodeDetailPage` with fallback to feed `image_url`
 
-**Effort:** Half a day (Option A), 1 day (Option B)
-**Note:** Option A is worth trying first — if the episode's `audio_url` is publicly accessible the browser can seek directly without any backend work.
+**Effort:** Half a day
 
 ---
 
 ## Tier 2 — Meaningful Additions, Higher Effort
 
-### 2.1 Automatic Feed Polling
+### 2.1 Decoupled Worker Queue (ARQ + Redis)
 
-**What it is:** Background scheduler checks subscribed feeds on a configurable interval and automatically ingests new episodes.
+**What it is:** Replace the in-process `BackgroundTaskQueue` with ARQ — an async-native Python job queue backed by Redis. The ingestion worker runs as a separate process or container, fully decoupled from the API.
 
-**Implementation path:**
-- Add APScheduler or Celery Beat
-- Configurable poll interval per feed
-- Notification in frontend when new episode ready
-- Requires thinking about queue management for concurrent ingestion
+**Why it matters:** Running transcription in-process with the API means ingestion and query handling compete for CPU on the same machine. On local hardware with CPU-based transcription, this makes the system sluggish or unusable during ingestion. A decoupled worker solves several problems at once:
+
+- **API responsiveness** — the API process handles chat queries unaffected by ingestion load
+- **Batch processing** — queue up 10 episodes and let the worker chew through them overnight; stop the worker when you need the machine
+- **Job durability** — jobs survive API restarts; Redis persists the queue between sessions
+- **Retry logic** — failed jobs re-queue automatically without manual intervention
+- **Scheduling control** — start the worker when resources are available, stop it when you need them back
+
+**Why ARQ over alternatives:**
+
+ARQ is async-native Python — it fits the existing async pipeline without friction. Celery is more powerful but was designed for synchronous Python; async support is bolted on and you fight the framework. RabbitMQ is a message broker, not a job queue — job status tracking, retry logic, and result storage all need to be built on top of it; ARQ provides these out of the box. Redis is the right backing store: small Docker image, free hosted tier (Redis Cloud), operationally simple.
+
+**What the architecture looks like:**
+
+```
+API process  →  Redis (job queue)  →  Worker process
+     │                                      │
+     └──────────────▶  Postgres  ◀──────────┘
+                    (source of truth)
+```
+
+The worker writes pipeline status to Postgres at every stage transition — the same `PipelineStatusService` calls that exist today. The API reads Postgres for SSE status streaming. Redis is purely the handoff mechanism between API and worker; it is not in the SSE data path. A page refresh or API restart has no effect on jobs in flight in the worker.
+
+**What changes in the codebase:**
+
+Almost nothing in the pipeline. The `IngestionQueue` Protocol is already designed for this swap. Implement `ARQQueue` satisfying the Protocol, add Redis and a worker service to Docker Compose, and change one line in `dependencies.py`. Route handlers, pipeline stages, `PipelineStatusService`, and SSE streaming are all unchanged.
+
+**Docker Compose addition:**
+```yaml
+redis:
+  image: redis:7-alpine
+  restart: unless-stopped
+
+worker:
+  build: ./backend
+  command: uv run arq src.worker.WorkerSettings
+  env_file: .env
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  restart: unless-stopped
+```
+
+Same codebase, different entry point. The worker imports the same pipeline code, same services, same DB models. No separate codebase to maintain.
+
+**Deployment story:** The same Docker Compose stack runs locally and on a VPS without code changes. A future desktop app wrapper (Electron, Tauri) would launch the Compose stack — frontend, API, worker, Redis, Postgres — as a unified local service. The architecture is already the right shape for this.
 
 **Effort:** 1 weekend
-**Note:** Mostly infrastructure work, low AI novelty. Good for product completeness, not for interview stories.
+**Prerequisites:** v1 complete and working with `BackgroundTaskQueue`
+**Interview story:** "I designed the queue as a Protocol from day one so the in-process implementation could be swapped without touching the pipeline. Here's the ARQ implementation and here's the before/after on API responsiveness during ingestion."
 
 ---
 
-### 2.2 Episode Summarization and Show Notes
+### 2.2 Automatic Feed Polling
+
+**What it is:** Background scheduler checks subscribed feeds on a configurable interval and automatically ingests new episodes.
+
+**Note:** Works naturally alongside the decoupled worker (2.1) — the scheduler enqueues jobs into Redis, the worker processes them. APScheduler can run in the API process or as a separate container.
+
+**Implementation path:**
+- Add APScheduler or use ARQ's built-in cron support (if 2.1 is already implemented)
+- Configurable poll interval per feed
+- Notification in frontend when new episode is ready
+- Requires thinking about concurrency limits during batch polling
+
+**Effort:** 1 weekend
+**Note:** Mostly infrastructure work, low AI novelty. Good for product completeness. Pairs well with 2.1 — don't build this before the worker queue.
+
+---
+
+### 2.3 Episode Summarization and Show Notes
 
 **What it is:** Auto-generate structured show notes per episode post-ingestion: key topics, key quotes, timestamps, people mentioned.
 
@@ -199,7 +298,7 @@ DIARIZATION_MODEL=pyannote/speaker-diarization-3.1   # local backend
 
 ---
 
-### 2.3 Semantic Search UI
+### 2.4 Semantic Search UI
 
 **What it is:** Search mode separate from chat. Type a query, get ranked episode moments with timestamps — more like a search engine than a conversation.
 
@@ -214,9 +313,9 @@ DIARIZATION_MODEL=pyannote/speaker-diarization-3.1   # local backend
 
 ---
 
-### 2.4 Alternative Vector Backends
+### 2.5 Alternative Vector Backends
 
-**What it is:** Implement the `VectorStore` protocol for Qdrant or Pinecone alongside pgvector.
+**What it is:** Implement the `VectorStore` Protocol for Qdrant or Pinecone alongside pgvector.
 
 **Why it matters:** Shows architectural thinking — you designed for this from day one. In interviews, "here's the interface, here's how I swapped implementations" is a clean story.
 
@@ -225,7 +324,7 @@ DIARIZATION_MODEL=pyannote/speaker-diarization-3.1   # local backend
 
 ---
 
-### 2.5 LLM Request Timeout
+### 2.6 LLM Request Timeout
 
 **What it is:** Wrap `llm.complete()` calls in `asyncio.wait_for()` with a configurable timeout. Return a graceful "request timed out" response rather than hanging indefinitely.
 
@@ -240,7 +339,7 @@ response = await asyncio.wait_for(
 ```
 
 **Effort:** 1 hour
-**Note:** Low effort, high value for local model usage. Good quick win.
+**Note:** Low effort, high value for local model usage. Good quick win — do this before anything else.
 
 ---
 
@@ -284,16 +383,38 @@ response = await asyncio.wait_for(
 
 ---
 
+### 3.4 Inline Citation Markers
+
+**What it is:** Inline `[1]`, `[2]` markers mid-response linked to citations, rather than a collapsed citation block below the message.
+
+**Why deferred:** Requires the LLM to emit citation markers reliably in its response text, then post-processing to insert React elements mid-string. LLMs don't emit markers consistently without careful prompting and few-shot examples. The collapsed citation block below each message (current approach) is more reliable.
+
+**Implementation path when ready:**
+- System prompt instructs LLM to emit `[1]`, `[2]` markers when referencing retrieved content
+- Few-shot examples in prompt showing correct marker placement
+- Post-process `response.message` to replace `[N]` with React `<CitationMarker>` components
+- `CitationMarker` renders as a superscript badge that expands the citation inline on click
+
+**Effort:** 1 weekend (prompt engineering + React post-processing)
+
+---
+
 ## What to Build Next (Recommended Order)
 
 If you finish v1 and want to keep going, this is the highest-value sequence:
 
-1. **LLM request timeout** — 1 hour, immediately improves local model UX
-2. **Query rewriting** — 1 day, directly improves quality on vague queries, measurable in Phoenix
-3. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models
-4. **Episode summarization** — shows a two-level LLM pipeline, good interview story
-5. **Temporal reasoning** — unique angle, memorable demo
-6. **Graph RAG** — the "big" upgrade, strongest architectural story
-7. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
+1. **LLM request timeout** — 1 hour, immediately improves local model UX; do this first, it's trivial
+2. **Decoupled worker queue (ARQ)** — 1 weekend, eliminates ingestion/query resource contention; enables overnight batch processing; unlocks everything that depends on reliable background work
+3. **Query rewriting** — 1 day, directly improves retrieval quality on vague and follow-up queries; measurable before/after in Phoenix
+4. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models; pairs well with the decoupled worker since the API is now free to stream
+5. **Episode summarization** — 1 weekend, shows a two-level LLM pipeline; good interview story; useful day-to-day
+6. **Persistent conversations** — 1 weekend, turns the tool into a research companion; Protocol means it's a one-file swap
+7. **Automatic feed polling** — 1 weekend, natural complement to the worker queue; don't build before 2
+8. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
+9. **Temporal reasoning** — unique angle, memorable demo
+10. **Graph RAG** — the "big" upgrade, strongest architectural story
+11. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
 
-Graph RAG is deliberately not first — you'll understand your retrieval failure modes better after a few weeks of real use, which makes the graph design decisions more grounded.
+**On sequencing:** The decoupled worker (ARQ) is deliberately second rather than later — it's infrastructure that makes everything else better. Batch ingestion becomes viable, the API becomes responsive during heavy work, and automatic polling (item 7) requires it anyway. Getting it in early pays dividends across all subsequent work.
+
+Graph RAG is deliberately near the end — you'll understand your retrieval failure modes better after real use, which makes the graph design decisions more grounded rather than speculative.

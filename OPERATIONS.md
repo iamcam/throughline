@@ -556,7 +556,7 @@ The frontend was scaffolded with a `.gitignore` covering `node_modules`, `dist`,
 
 ## Known TODOs
 
-### Docker Integration Not Yet Validated (Phase 7)
+### Docker Integration Not Yet Validated (Phase 7 + 8)
 
 The frontend Docker build (`frontend/Dockerfile` and the `frontend` service in `docker-compose.yml`) has not been verified against the actual frontend stack. The scaffold `Dockerfile` uses a standard Node + nginx pattern, but the following need confirmation before demo deployment:
 
@@ -572,3 +572,25 @@ curl http://localhost:3000
 ```
 
 Until this is verified, use local dev (`yarn dev`) for frontend and Docker only for the backend + DB.
+
+### Frontend Bundle Size
+
+`react-markdown` and its remark/rehype dependencies add significant weight to the frontend bundle. `ChatPage` is lazy-loaded via `React.lazy()` + `Suspense` in `App.tsx` to keep the initial bundle under Vite's 500kb warning threshold. If bundle size becomes a concern at build time:
+
+```bash
+yarn build --report   # check chunk sizes
+```
+
+The lazy load is already in place — no further action needed unless other large dependencies are added.
+
+### Frontend Dependencies Added (Phase 8)
+
+New packages added beyond the Phase 7 baseline:
+- `react-markdown` — LLM response rendering in `ChatInterface`
+- `react-resizable-panels` — resizable split-panel layout (via shadcn `Resizable` component)
+
+New shadcn components added:
+- `sheet` — knowledge base browser panel (`SearchFilterList`)
+- `accordion` — feed list in knowledge base browser
+- `collapsible` — citation expansion in `CitationList`
+- `resizable` — split-panel chat layout in `EpisodesPage` and `EpisodeDetailPage`

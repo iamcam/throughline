@@ -9,7 +9,7 @@ settings = get_settings()
 
 @router.get("/health")
 async def health_check():
-    return {"status": "ok", "version": "0.1.2"} #todo - version sprinkled about should replace with single source of truth
+    return {"status": "ok", "version": "0.1.8"} #todo - version sprinkled about should replace with single source of truth
 
 @router.get("/health/deep")
 async def health_deep(db: AsyncSession = Depends(get_db)):
