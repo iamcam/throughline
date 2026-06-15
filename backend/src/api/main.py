@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.config import get_settings
 from src.api.routers import health, feeds, episodes, speakers, query, chat
 from src.query.session_store import InMemorySessionStore
+from src.telemetry.setup import setup_telemetry
 
 from src.ingestion.queue import BackgroundTaskQueue
 from src.config import get_settings
@@ -22,8 +23,10 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    setup_telemetry(settings)
+
     app.state.ingestion_queue = BackgroundTaskQueue(
-        max_concurrent=getattr(settings, "max_concurrent_ingestions", 2)
+        max_concurrent=settings.max_concurrent_ingestions
     )
     app.state.session_store = InMemorySessionStore()
 

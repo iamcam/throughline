@@ -2,10 +2,12 @@
 import asyncio
 import logging
 from concurrent.futures import ProcessPoolExecutor
+from opentelemetry import trace
+
 from typing import Literal
 import os
 from src.transcription.base import TranscriptResult, TranscriptSegment
-
+from src.telemetry.tracer import tracer
 _executor = ProcessPoolExecutor(max_workers=1)
 
 logger = logging.getLogger(__name__)
@@ -181,7 +183,9 @@ def _transcribe_sync(
             end_ms=int(current_end * 1000),
             sequence_order=len(segments)
         ))
-    logger.info(f"Transcription + Diarization complete: {len(segment)} segments")
+
+    logger.info(f"Transcription + Diarization complete: {len(segments)} segments")
+
     return TranscriptResult(
         segments=segments,
         language=language,
@@ -227,15 +231,34 @@ class LocalTranscriptionService:
         speaker_count_hint: int | None = None,
         language: str = "en",
     ) -> TranscriptResult:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(
-            _executor,
-            _transcribe_sync,
-            audio_path,
-            speaker_count_hint,
-            language,
-            self._hf_token,
-            self._whisper_backend,
-            self._model_size,
-            self._diarization_model
-        )
+        with tracer.start_as_current_span("transcription") as span:
+            span.set_attribute("transcription.backend", self._whisper_backend)
+            span.set_attribute("transcription.model", self._model_size)
+            span.set_attribute("transcription.language", language)
+            span.set_attribute("transcription.diarization_enabled", bool(self._diarization_model))
+            if self._diarization_model:
+                span.set_attribute("transcription.diarization_model", self._diarization_model)
+
+            try:
+
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(
+                    _executor,
+                    _transcribe_sync,
+                    audio_path,
+                    speaker_count_hint,
+                    language,
+                    self._hf_token,
+                    self._whisper_backend,
+                    self._model_size,
+                    self._diarization_model
+                )
+
+                span.set_attribute("transcription.segment_count", len(result.segments))
+
+                return result
+
+            except Exception as e:
+                span.record_exception(e)
+                span.set_status(trace.StatusCode.ERROR, str(e))
+                raise

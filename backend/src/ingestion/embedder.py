@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import replace
+
+from opentelemetry import trace
 
 from src.ingestion.chunker import ChunkData
 from src.llm.base import EmbeddingClient
+from src.telemetry.tracer import tracer
 
 logger = logging.getLogger(__name__)
 
@@ -33,33 +37,45 @@ class Embedder:
         """
         leaves = [(i, chunk) for i, chunk in enumerate(chunks) if chunk.chunk_level == "leaf"]
 
-        if not leaves:
-            logger.debug("No leaf chunks to embed")
-            return chunks
+        with tracer.start_as_current_span("embedding") as span:
+            span.set_attribute("embedding.leaf_count", len(leaves))
+            span.set_attribute("embedding.batch_size", self._batch_size)
+            span.set_attribute(
+                "embedding.batch_count",
+                math.ceil(len(leaves) / self._batch_size) if leaves else 0  # ceiling division
+            )
 
-        # ~~~~~~ Batch embedding ~~~~~~
+            if not leaves:
+                logger.debug("No leaf chunks to embed")
+                return chunks
 
-        result = list(chunks)  # shallow copy -- we replace individual items
+            try:
+                result = list(chunks)
 
-        for batch_start in range(0, len(leaves), self._batch_size):
-            batch = leaves[batch_start : batch_start + self._batch_size]
-            texts = [chunk.text for _, chunk in batch]
+                for batch_start in range(0, len(leaves), self._batch_size):
+                    batch = leaves[batch_start: batch_start + self._batch_size]
+                    texts = [chunk.text for _, chunk in batch]
 
-            logger.debug("Embedding batch of %d leaf chunks", len(texts))
-            vectors = await self._client.embed(texts)
+                    logger.debug("Embedding batch of %d leaf chunks", len(texts))
+                    vectors = await self._client.embed(texts)
 
-            for (original_index, chunk), vector in zip(batch, vectors):
-                if any(v != v for v in vector):
-                    logger.warning(
-                        "NaN embedding persists for chunk %s even when embedded alone — "
-                        "skipping this chunk (it will not be retrievable). Text: %r",
-                        chunk.chunk_id,
-                        chunk.text[:80],
-                    )
-                    continue
-                result[original_index] = replace(chunk, embedding=vector)
+                    for (original_index, chunk), vector in zip(batch, vectors):
+                        if any(v != v for v in vector):
+                            logger.warning(
+                                "NaN embedding persists for chunk %s even when embedded alone — "
+                                "skipping this chunk (it will not be retrievable). Text: %r",
+                                chunk.chunk_id,
+                                chunk.text[:80],
+                            )
+                            continue
+                        result[original_index] = replace(chunk, embedding=vector)
 
-        return result
+                return result
+
+            except Exception as e:
+                span.record_exception(e)
+                span.set_status(trace.StatusCode.ERROR, str(e))
+                raise
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """Embeds arbitrary texts. Used by the pipeline for segment embeddings."""

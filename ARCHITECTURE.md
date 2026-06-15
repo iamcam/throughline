@@ -1,9 +1,10 @@
 # Podcast Knowledge Engine — Architecture Document
 
-> Version: 0.8
+> Version: 0.9
 > Status: In implementation
 > Author: Cameron Perry
-> Last Updated: 2026-06-13
+> Last Updated: 2026-06-14
+
 
 ---
 
@@ -824,25 +825,121 @@ CREATE INDEX ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists =
 
 ### 3.12 Observability — OpenTelemetry + Phoenix
 
-**What gets traced:**
-- Every `LLMClient.complete()` call — auto-instrumented via `OpenAIInstrumentor`
-- Every `VectorStore.search()` call — custom span with query + filter + score distribution
-- `SpeakerResolver.infer()` — span attributes: `speaker.name_found` (bool), `speaker.confidence` (str)
-- Pipeline stage transitions — spans with `episode_id`, duration, errors
-- API request spans — endpoint, status, duration
+**Transport:** OTLP/HTTP via `opentelemetry-exporter-otlp-proto-http`.
+TLS is implicit from the endpoint URL scheme — `http://` is plaintext,
+`https://` is TLS. No `insecure` flag exists on the HTTP exporter; this is
+an HTTP convention, unlike gRPC which defaults to TLS and requires an explicit
+opt-out.
 
+**Processor:** `SimpleSpanProcessor` — exports synchronously on every span.
+Appropriate for a single-user application. `BatchSpanProcessor` is designed
+for high-throughput multi-user scenarios where buffering reduces collector load.
+
+**Auto-instrumentation:** `OpenAIInstrumentor().instrument()` patches the
+OpenAI SDK globally at startup. Every `LLMClient.complete()` call emits a
+span automatically — prompt content, response, token counts, model name,
+finish reason. No changes to `LLMClient` or `client.py` required.
+
+**Project routing:** Phoenix routes spans to projects via the
+`openinference.project.name` resource attribute set on `TracerProvider`.
+Configured via `OTEL_PROJECT_NAME` — defaults to `"podcast-engine"`.
+
+**Setup (`src/telemetry/setup.py`):**
 ```python
-def setup_telemetry(settings: Settings):
-    if not settings.phoenix_enabled:
-        return
-    provider = TracerProvider()
-    exporter = OTLPSpanExporter(endpoint=settings.otel_exporter_otlp_endpoint)
-    provider.add_span_processor(BatchSpanProcessor(exporter))
+def setup_telemetry(settings: Settings) -> None:
+    if not settings.tracing_enabled:
+        return  # no-op — app runs normally without a collector configured
+
+    # OTel imports deferred — missing packages don't error when tracing disabled
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from openinference.instrumentation.openai import OpenAIInstrumentor
+
+    resource = Resource(attributes={
+        "openinference.project.name": settings.otel_project_name,
+    })
+
+    headers = {}
+    if settings.otel_api_key:
+        headers["Authorization"] = f"Bearer {settings.otel_api_key}"
+
+    exporter = OTLPSpanExporter(
+        endpoint=settings.otel_endpoint,
+        headers=headers,
+    )
+
+    provider = TracerProvider(resource=resource)
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
     OpenAIInstrumentor().instrument()
+
+    logger.info(f"Tracing enabled — exporting to {settings.otel_endpoint}")
 ```
 
-Phoenix runs as optional Docker Compose profile. `OTEL_EXPORTER_OTLP_ENDPOINT` is the only change needed for hosted telemetry (Arize, Langfuse, etc.).
+**Shared tracer (`src/telemetry/tracer.py`):**
+```python
+from opentelemetry import trace
+tracer = trace.get_tracer("podcast-engine")
+```
+Safe to import before `setup_telemetry()` runs — returns a no-op tracer until
+a provider is registered. Import in any file that needs custom spans:
+```python
+from src.telemetry.tracer import tracer
+```
+
+**Custom spans:**
+
+| File                      | Span name                     | Key attributes                                                                                                                                             |
+| ------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pipeline.py`             | `ingest_episode`              | `episode.id`, `episode.title`, `episode.has_transcript_url`, chunk counts, `episode.inferred_speaker`                                                      |
+| `audio_downloader.py`     | `audio_download`              | `audio.url`, `audio.size_bytes`, `audio.bytes_received`                                                                                                    |
+| `transcription/local.py`  | `transcription`               | `transcription.backend`, `transcription.model`, `transcription.language`, `transcription.diarization_enabled`, `transcription.segment_count`               |
+| `transcription/remote.py` | `transcription`               | `transcription.backend`, `transcription.service_url`, `transcription.language`, `transcription.segment_count`                                              |
+| `speaker_resolver.py`     | `speaker_inference`           | `speaker.intro_segment_count`, `speaker.name_found`, `speaker.confidence`                                                                                  |
+| `embedder.py`             | `embedding`                   | `embedding.leaf_count`, `embedding.batch_size`, `embedding.batch_count`                                                                                    |
+| `retriever.py`            | `retrieval`                   | `retrieval.query`, `retrieval.top_k`, `retrieval.feed_ids`, `retrieval.result_count`, `retrieval.score_max`, `retrieval.score_min`, `retrieval.score_mean` |
+| LLM calls                 | auto via `OpenAIInstrumentor` | tokens, model, prompt/response                                                                                                                             |
+
+**Error recording pattern:**
+```python
+except Exception as e:
+    span.record_exception(e)           # full stack trace as span event
+    span.set_status(trace.StatusCode.ERROR, str(e))
+    raise
+```
+Use for unrecoverable failures only. Handled exceptions (e.g. RSS transcript
+fallback that recovers to audio download) should log only — do not mark the
+span ERROR if the pipeline continues successfully.
+
+**Why transcription spans wrap the executor await:**
+OTel context does not cross `ProcessPoolExecutor` subprocess boundaries. Spans
+started inside `_transcribe_sync` would appear as orphaned traces with no
+parent. The `transcription` span wraps `run_in_executor()` in the async layer
+instead — wall-clock duration covers the full subprocess call including model
+loading, inference, and diarization. Sub-span timing for Whisper vs Pyannote
+separately requires splitting `_transcribe_sync` into two executor calls —
+see Future Scope 1.6.
+
+**Backend switching:** Local Phoenix, hosted Arize, Langfuse, or any
+OTLP/HTTP collector — change `OTEL_ENDPOINT` in `.env`. No code changes
+required.
+
+```bash
+# Local Phoenix in Docker
+OTEL_ENDPOINT=http://localhost:6006/v1/traces
+
+# Arize hosted
+OTEL_ENDPOINT=https://app.phoenix.arize.com/s/{username}/v1/traces
+OTEL_API_KEY=your-key-here
+```
+
+Phoenix runs as optional Docker Compose profile:
+```bash
+docker compose --profile observability up
+```
 
 ---
 
@@ -959,14 +1056,13 @@ EMBEDDING_API_KEY=ollama
 EMBEDDING_MODEL_NAME=nomic-embed-text
 EMBEDDING_DIMENSIONS=768
 
-# Transcription backend
-TRANSCRIPTION_BACKEND=local # local | remote
+# Transcription
+TRANSCRIPTION_BACKEND=local             # local | remote
 TRANSCRIPTION_SERVICE_URL=http://localhost:8001
-
-# Diarization — local backend only, leave empty to skip
-# Ignored when TRANSCRIPTION_BACKEND=remote (remote service owns diarization)
-# Recommended on CUDA hardware; CPU is very slow for long episodes
-DIARIZATION_MODEL=
+WHISPER_BACKEND=faster_whisper          # faster_whisper | mlx_whisper
+WHISPER_MODEL_SIZE=medium               # tiny | base | small | medium | large-v3
+                                        # TODO: rename to WHISPER_MODEL (Future Scope 1.6)
+DIARIZATION_MODEL=                      # leave empty to skip; very slow on CPU and non-CUDA GPUs; Ignored when TRANSCRIPTION_BACKEND=remote (remote service owns diarization)
 
 # Speaker inference
 SPEAKER_INFERENCE_WINDOW_MS=900000
@@ -975,8 +1071,11 @@ SPEAKER_INFERENCE_WINDOW_MS=900000
 MAX_CONCURRENT_INGESTIONS=2
 
 # Observability
-PHOENIX_ENABLED=true
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+TRACING_ENABLED=false
+OTEL_ENDPOINT=http://localhost:6006/v1/traces
+OTEL_API_KEY=                        # required for hosted Phoenix/Arize
+OTEL_PROJECT_NAME=podcast-engine
+
 
 # App
 LOG_LEVEL=INFO
@@ -985,6 +1084,9 @@ CHUNK_SIZE_TOKENS=256
 CHUNK_OVERLAP_TOKENS=32
 CHUNK_MIN_TOKENS=20
 TOPIC_SIMILARITY_THRESHOLD=0.75
+
+HUGGINGFACE_TOKEN=
+
 
 # Demo auth
 DEMO_AUTH_ENABLED=false
@@ -1049,39 +1151,39 @@ GET    /api/v1/config/models
 
 ```bash
 # Add feed
-curl -X POST http://localhost:8000/api/v1/feeds \
+curl -X POST http://localhost:3001/api/v1/feeds \
   -H "Content-Type: application/json" \
   -d '{"rss_url": "https://feeds.example.com/podcast.rss"}'
 
 # Ingest episode
-curl -X POST http://localhost:8000/api/v1/episodes/ep-uuid/ingest \
+curl -X POST http://localhost:3001/api/v1/episodes/ep-uuid/ingest \
   -H "Content-Type: application/json" \
   -d '{"speaker_count_hint": 2}'
 # → { "status": "accepted", "job_id": "job-uuid", "queue_position": 1 }
 
 # Stream status
-curl -N http://localhost:8000/api/v1/episodes/ep-uuid/status/stream
+curl -N http://localhost:3001/api/v1/episodes/ep-uuid/status/stream
 
 # Check inferred speakers
-curl http://localhost:8000/api/v1/episodes/ep-uuid/speakers
+curl http://localhost:3001/api/v1/episodes/ep-uuid/speakers
 
 # Confirm names
-curl -X PUT http://localhost:8000/api/v1/episodes/ep-uuid/speakers \
+curl -X PUT http://localhost:3001/api/v1/episodes/ep-uuid/speakers \
   -H "Content-Type: application/json" \
   -d '[{"speaker_id": "SPEAKER_00", "display_name": "Marcus Webb"}]'
 
 # Start chat session scoped to one or more feeds
-curl -X POST http://localhost:8000/api/v1/chat/sessions \
+curl -X POST http://localhost:3001/api/v1/chat/sessions \
   -H "Content-Type: application/json" \
   -d '{"scope_feed_ids": ["feed-uuid-1", "feed-uuid-2"]}'
 
 # Query
-curl -X POST http://localhost:8000/api/v1/chat/sess-uuid/message \
+curl -X POST http://localhost:3001/api/v1/chat/sess-uuid/message \
   -H "Content-Type: application/json" \
   -d '{"message": "What does Marcus think about AGI timelines?"}'
 
 # Get history with citations
-curl http://localhost:8000/api/v1/chat/sess-uuid/history
+curl http://localhost:3001/api/v1/chat/sess-uuid/history
 ```
 
 ---
@@ -1136,7 +1238,8 @@ podcast-knowledge-engine/
 │   │   │   ├── db.py                # SQLAlchemy models
 │   │   │   └── schemas.py           # Pydantic request/response schemas
 │   │   ├── telemetry/
-│   │   │   └── setup.py
+│   │   │   ├── setup.py              # OTel provider, exporter, OpenAIInstrumentor
+│   │   │   └── tracer.py             # shared tracer singleton
 │   │   └── config.py
 │   ├── tests/
 │   │   ├── conftest.py              # MockLLMClient, MockVectorStore, MockHydrator, MockEmbeddingClient
@@ -1343,7 +1446,7 @@ docker compose up
 docker compose --profile transcription --profile observability up
 ```
 
-API docs: http://localhost:8000/docs
+API docs: http://localhost:3001/docs
 Frontend: http://localhost:3000
 Phoenix: http://localhost:6006 (observability profile)
 

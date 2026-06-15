@@ -8,206 +8,219 @@ This is the backend for the Pod Knowledge Engine project.
 - uv
 - [Podman](https://podman-desktop.io) or Docker w/ compose
 
-Examples use podman for container management, but docker will also work - just swap `docker` for `podman`.
+Examples use podman for container management, but docker will also work - just swap `podman` for `docker`.
 
 ## Setup
 
 ### 1. Environment
 
-copy the `.env.example` to `.env` and fill in the relevant settings.
+Copy `.env.example` to `.env` and fill in the relevant settings.
 
-### 2. Virtual Env
+### 2. Virtual Environment
 
-We use uv + venv for environment management. [Install uv](https://docs.astral.sh/uv/) if you haven't already
+We use uv + venv for environment management. [Install uv](https://docs.astral.sh/uv/) if you haven't already.
 
-```
+```bash
 uv venv
 source .venv/bin/activate
 ```
 
 ### 3. Install Dependencies
 
-All devices are supported, falling back to cpu if CUDA is not availabe. If you are running CUDA, it's one extra uv command.
-
 **All architectures**
-```
+```bash
 uv sync
 ```
 
-**Install Pytorch**
+**PyTorch (CUDA)**
 
-By default `torch` and `torchaudio` are both installed on `uv sync`, but if you have a CUDA-capable GPU, you can install the appropriate versions:
+By default `torch` and `torchaudio` are installed on `uv sync`, falling back to CPU if CUDA is not available. For NVIDIA GPU:
 
-```
-# Linux / Windows — NVIDIA GPU
+```bash
 uv add torch torchaudio --index https://download.pytorch.org/whl/cu121
 ```
 
 **Whisper**
 
-The `faster-whisper` package is automatically installed, but Mac / Apple Silicon users might want a faster option via `mlx-whisper`:
+`faster-whisper` is installed automatically. Apple Silicon users may prefer `mlx-whisper`:
 
-```
+```bash
 # mlx-whisper — Apple Silicon only, faster than faster-whisper on Metal
 uv add mlx-whisper
-```
-Then update the .env to reflect your `mlx_whisper` choice
-
-```
-# Set in .env:
-WHISPER_BACKEND=mlx_whisper
-WHISPER_MODEL_SIZE=large-v3
 ```
 
 **Configure `.env`**
 
-```
+```bash
 # All platforms
-WHISPER_MODEL_SIZE=medium # tiny | base | small | medium | large-v3
-
-# Apple Silicon with mlx-whisper (if installed)
-WHISPER_BACKEND=mlx_whisper
-
-# Everyone else (default)
-WHISPER_BACKEND=faster_whisper
+WHISPER_BACKEND=faster_whisper   # faster_whisper | mlx_whisper
+WHISPER_MODEL_SIZE=medium        # tiny | base | small | medium | large-v3
 ```
 
-Because speaker diarization is very computationally intensive and quite slow, it is off by default.
+**Speaker Diarization (optional)**
 
+Diarization is off by default — it is computationally intensive and requires a GPU for practical use. To enable it, set `DIARIZATION_MODEL` in `.env`:
+
+```bash
+DIARIZATION_MODEL=pyannote/speaker-diarization-3.1
+HUGGINGFACE_TOKEN=hf_...
 ```
-ENABLE_DIARIZATION=false
-```
 
-Pyannote requires a Hugging Face token and model access. Go to https://huggingface.co/pyannote/speaker-diarization-community-1 and accept the terms, then set `HUGGINGFACE_TOKEN` in your `.env`.
-
+Pyannote requires a Hugging Face token and model access. Accept the terms at https://huggingface.co/pyannote/speaker-diarization-3.1 before setting the token.
 
 ### 4. Bootstrapping
 
-This project uses postgres with pgvector for embeddings and can be bootstrapped by running the following lines the postgres docker image (via podman)
+This project uses Postgres with pgvector for embeddings.
 
-**Start the container**
+**Start the database container**
 
-```
+```bash
 podman compose -f docker-compose.dev.yml up -d
 ```
 
-Note the container name. It may be `backend-db-1`
+Note the container name — it may be `backend-db-1`.
 
-**Enable PGVector**
+**Enable pgvector**
 
-```
+```bash
 podman exec -it <container-name> psql -U <username> -d podcast_engine -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-**Run Migrations and create the test db**
+**Run migrations and create the test database**
 
-```
+```bash
 uv run alembic upgrade head
 PYTHONPATH=. uv run python scripts/create_test_db.py
-podman exec -it <container-name> psql -U <username> -d podcast_engine_test -c "CREATE EXTENSION IF NOT EXISTS vector;
+podman exec -it <container-name> psql -U <username> -d podcast_engine_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
-this will create a test database at `<database_name>_test` used by the testing suite. You only need to run it once
+The test database only needs to be created once.
 
+### 5. Run the Dev Server
 
-### 5. Run the dev server
-
-Run the dev server - default port is on 3001
-
-```
+```bash
 uv run uvicorn src.api.main:app --reload --port 3001
 ```
 
-> API Available at http://localhost:3001
+> API available at http://localhost:3001
 > API docs at http://localhost:3001/docs
 
-Alternatively you can run uvicorn directly on your chosen port (default is 8000)
+## Observability
 
+Tracing is powered by OpenTelemetry and compatible with any OTLP/HTTP collector —
+local Phoenix in Docker or hosted services like [Arize Phoenix](https://app.phoenix.arize.com).
+
+**Local Phoenix (Docker)**
+
+```bash
+docker run -p 6006:6006 arizephoenix/phoenix:latest
 ```
-uv run uvicorn src.api.main:app --reload --port 8080
+
+```bash
+# .env
+TRACING_ENABLED=true
+OTEL_ENDPOINT=http://localhost:6006/v1/traces
+OTEl_PROJECT_NAME=podcast-engine
+# OTEL_API_KEY not required for local Phoenix unless configured
 ```
 
-## Useage
+**Arize hosted**
 
-API docs are automatically generated and available at http://localhost:3001/docs
+Sign up at https://app.phoenix.arize.com and grab your API key.
 
-
-
-**Ingesting Feed**
-
-To submit a feed for ingestion, pass the rss_url to the feeds endpoint:
-
+```bash
+# .env
+TRACING_ENABLED=true
+OTEL_ENDPOINT=https://app.phoenix.arize.com/s/{username}/v1/traces
+OTEL_API_KEY=your-key-here
+OTEL_PROJECT_NAME=podcast-engine
 ```
+
+Tracing is disabled by default (`TRACING_ENABLED=false`). The app runs normally without a collector configured.
+
+**What gets traced**
+
+- All LLM calls — prompt, response, token counts (auto-instrumented via OpenAIInstrumentor)
+- Retrieval — query, result count, similarity score distribution
+- Ingestion pipeline — episode, chunk counts, inferred speaker
+- Audio download — file size, bytes received
+- Transcription — backend, model, segment count, wall-clock duration
+- Speaker inference — name found, confidence level
+
+## Usage
+
+API docs are available at http://localhost:3001/docs
+
+**Add a feed**
+
+```bash
 curl -X POST http://localhost:3001/api/v1/feeds \
   -H "Content-Type: application/json" \
-  -d '{"rss_url": "https://orvisffguide.libsyn.com/rss"}'
+  -d '{"rss_url": "https://feeds.example.com/podcast.rss"}'
 ```
 
-**Ingesting an Episode**
+**Ingest an episode**
 
-Once a feed is added, get the episode ID from the episodes list, then trigger ingestion:
+Once a feed is added, get the episode ID from the episodes list then trigger ingestion:
 
-- Optional `speaker_count_hint` tells the diarization model how many speakers to expect. Omit if unknown
-- Monitor progress via SSE stream or poll the status endpoint
-- Pipeline pauses at `PENDING_NAMES` because speaker confirmation required before chunking begins
+```bash
+curl -X POST http://localhost:3001/api/v1/episodes/{episode_id}/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"speaker_count_hint": 2}'
+```
+
+Monitor progress via SSE stream or poll the status endpoint:
+
+```bash
+# SSE stream
+curl -N http://localhost:3001/api/v1/episodes/{episode_id}/status/stream
+
+# Poll
+curl http://localhost:3001/api/v1/episodes/{episode_id}/status
+```
 
 ## Useful Commands
 
 ### Migrations
 
-**Generate a new migration after model changes**
-
-```
+```bash
+# Generate a new migration after model changes
 uv run alembic revision --autogenerate -m "description"
-```
 
-**Rollback one migration**
-
-```
+# Rollback one migration
 uv run alembic downgrade -1
 ```
 
 ### Database
 
-**Connect directly to the DB**
-
-```
+```bash
+# Connect directly to the DB
 podman compose -f docker-compose.dev.yml exec db psql -U username -d podcast_engine
-```
 
-(replace `username` and `podcast_engine` with any values you may be using - local or hosted)
-
-**Wipe the database volume and start fresh**
-
-```
+# Wipe the database volume and start fresh
 podman compose -f docker-compose.dev.yml down -v
 ```
 
 ### Testing
 
-For general test runs:
-```
+```bash
+# Run all tests
 uv run pytest
-```
 
-...or for coverage information:
-
-```
+# With coverage
 uv run pytest --cov=src --cov-report=term-missing
 ```
 
 ## Project Structure
 
-The backend project structure will contain the following components, to be completed in successive iterations.
-
 ```
 src/
-  api/          # FastAPI app, routers, middleware, dependencies
-  models/       # SQLAlchemy models and Pydantic schemas
-  ingestion/    # RSS parsing, audio download, transcription pipeline
-  query/        # RAG query engine, tool-calling, session management
-  storage/      # Vector store abstraction
-  llm/          # LLM and embedding client protocols
+  api/           # FastAPI app, routers, middleware, dependencies
+  models/        # SQLAlchemy models and Pydantic schemas
+  ingestion/     # RSS parsing, audio download, transcription pipeline
+  query/         # RAG query engine, tool-calling, session management
+  storage/       # Vector store abstraction
+  llm/           # LLM and embedding client protocols
+  telemetry/     # OpenTelemetry setup and tracer
   transcription/ # TranscriptionService protocol, local (Whisper + Pyannote) and remote implementations
 ```
-

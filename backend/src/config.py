@@ -1,11 +1,15 @@
+# src/config.py
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
-import pytest
+
 
 class Settings(BaseSettings):
+    # App
+    log_level: str = "WARN"
+    audio_storage_path: str = "./data/audio"
+    max_concurrent_ingestions: int = 2
 
-    log_level: str | None = "WARN"
-    huggingface_token: str | None
+    huggingface_token: str | None = None
 
     # Database
     database_url: str
@@ -30,17 +34,18 @@ class Settings(BaseSettings):
     embedding_dimensions: int = 768
 
     # Transcription
-    diarization_model: str | None = None
+    transcription_backend: str = "local" # TODO can probably remove with transcription_service_url
+    transcription_service_url: str = "" # TODO
     whisper_backend: str = "faster_whisper"
-    whisper_model_size: str = "medium"
-    transcription_backend: str = "local"
-
+    whisper_model_size: str = "medium" # TODO: was whisper_model_size — update WhisperModel() call in local.py
+    diarization_model: str | None = None
     speaker_inference_window_ms: int = 900_000
 
-    # App
-    log_level: str = "INFO"
-    audio_storage_path: str = "./data/audio"
-    max_concurrent_ingestions: int = 2
+    # Observability
+    tracing_enabled: bool = False
+    otel_endpoint: str = "http://localhost:4317"
+    otel_api_key: str | None = None
+    otel_project_name: str = "podcast-engine"
 
     model_config = SettingsConfigDict(
         env_file=".env",

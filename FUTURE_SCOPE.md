@@ -118,7 +118,39 @@ DIARIZATION_MODEL=pyannote/speaker-diarization-3.1   # local backend
 
 ---
 
-### 1.6 Chat Response Streaming
+### 1.6 Transcription Service Refactor
+
+**What it is:** Split `_transcribe_sync` into discrete functions to enable
+per-stage OTel timing, fix config naming, and prepare the codebase for
+diarization work.
+
+**Why it matters for observability:** OTel context does not cross
+`ProcessPoolExecutor` subprocess boundaries. Currently the `transcription`
+span only captures wall-clock duration of the full executor call. Sub-span
+timing for Whisper vs Pyannote requires the split to happen in the async
+layer — each `run_in_executor` call can then be wrapped in its own child span.
+This makes model comparison in Phoenix meaningful: same episode, different
+models, timing visible side by side.
+
+**Tasks:**
+- Split `_transcribe_sync` into `_run_whisper(audio_path, backend, model, language) -> list[tuple]`
+  and `_run_diarization(audio_path, model, hf_token, speaker_count_hint) -> list[tuple]`
+- Each becomes a separate `run_in_executor` call in `transcribe()`, wrapped in
+  a child span: `transcription.whisper` and `transcription.diarization`
+- Add `whisper_seconds: float | None` and `diarization_seconds: float | None`
+  to `TranscriptResult` dataclass; populate with `time.perf_counter()` inside
+  each sync function; read back in `transcribe()` and set as span attributes
+- Rename `WHISPER_MODEL_SIZE` → `WHISPER_MODEL` in `local.py` constructor,
+  `_transcribe_sync` / split function signatures, and `dependencies.py` call
+  site (`config.py` already updated in Phase 9)
+- Pairs naturally with remote transcription implementation (Future Scope 1.5)
+
+**Effort:** Half a day for the refactor alone; more if implementing a new
+remote backend simultaneously.
+
+---
+
+### 1.7 Chat Response Streaming
 
 **What it is:** Stream LLM token generation via SSE rather than waiting for the full response before returning.
 
@@ -135,7 +167,7 @@ DIARIZATION_MODEL=pyannote/speaker-diarization-3.1   # local backend
 
 ---
 
-### 1.7 Episode Delete
+### 1.8 Episode Delete
 
 **What it is:** Delete an ingested episode and all associated data — transcript segments, chunks, embeddings, speaker rows — from the DB.
 
@@ -151,7 +183,7 @@ DIARIZATION_MODEL=pyannote/speaker-diarization-3.1   # local backend
 
 ---
 
-### 1.8 Audio Clip Playback for Speaker Verification
+### 1.9 Audio Clip Playback for Speaker Verification
 
 **What it is:** When editing a speaker name in `SpeakerRow`, play a short audio clip from the inferred timestamp so the user can verify the name by ear rather than reading the transcript text.
 
@@ -166,7 +198,7 @@ DIARIZATION_MODEL=pyannote/speaker-diarization-3.1   # local backend
 
 ---
 
-### 1.9 V2 Chat Scope Filtering
+### 1.10 V2 Chat Scope Filtering
 
 **What it is:** Allow users to change the scope of a chat session mid-conversation, and read back the current scope at any time. In v1, scope is set once at session creation and cannot be changed. The frontend has no way to read back what scope is active.
 
@@ -191,7 +223,7 @@ DIARIZATION_MODEL=pyannote/speaker-diarization-3.1   # local backend
 
 ---
 
-### 1.10 Individual Episode Artwork
+### 1.11 Individual Episode Artwork
 
 **What it is:** Display per-episode artwork (`<itunes:image>` at the item level) in episode lists and detail pages. Feed-level artwork (`feeds.image_url`) is already implemented.
 

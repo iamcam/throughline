@@ -41,7 +41,7 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 | 6     | Tool-calling query engine ✅ Complete         | Multi-turn chat with conditional retrieval; multi-feed scope             |
 | 7     | Frontend — feeds + episodes + speaker naming ✅ Complete | Full ingestion flow in UI with SSE progress                  |
 | 8     | Frontend — chat interface ✅ Complete         | Full product usable end-to-end; chat in three contexts                   |
-| 9     | Observability                                | Phoenix traces on all LLM + retrieval + inference calls                  |
+| 9     | Observability ✅ Complete                     | OTel traces on all LLM, retrieval, and pipeline calls via Phoenix        |
 | 10    | Polish, docs, demo prep                      | Shippable                                                                |
 
 ---
@@ -1450,52 +1450,84 @@ Audio playback uses `#t=` URI fragment (Media Fragments spec) — browser seeks 
 
 ---
 
-## Phase 9 — Observability
+## Phase 9 — Observability ✅ Complete
 
-**Goal:** LLM, inference, and retrieval traces in Phoenix.
+**Goal:** LLM, retrieval, and pipeline traces in Phoenix via OpenTelemetry.
 
-### Tasks
+### As Built
 
-#### 9.1 OTel setup (`src/telemetry/setup.py`) 🤖
+**Packages:** `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`,
+`openinference-instrumentation-openai`. gRPC exporter removed in favour of HTTP —
+TLS is implicit from URL scheme, no `insecure` flag needed.
+
+**`src/telemetry/setup.py`:**
+- OTLP/HTTP exporter — `http://` = plaintext, `https://` = TLS, no flag needed
+- `SimpleSpanProcessor` — appropriate for single-user app; synchronous export
+  surfaces errors immediately; `BatchSpanProcessor` is for high-throughput
+  multi-user scenarios
+- `OpenAIInstrumentor().instrument()` — auto-instruments all OpenAI SDK calls
+- Project name sent as `openinference.project.name` resource attribute on
+  `TracerProvider` — Phoenix uses this to route spans to the correct project;
+  defaults to `"podcast-engine"` so it never falls through to Phoenix's `"default"`
+- Auth via `Authorization: Bearer {key}` header when `OTEL_API_KEY` is set
+- No-op when `TRACING_ENABLED=false` — OTel imports deferred inside the `if`
+  block so missing packages don't error when tracing is disabled
+
+**`src/telemetry/tracer.py`:**
 ```python
-def setup_telemetry(settings: Settings):
-    if not settings.phoenix_enabled:
-        return
-    provider = TracerProvider()
-    provider.add_span_processor(
-        BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otel_exporter_otlp_endpoint))
-    )
-    trace.set_tracer_provider(provider)
-    OpenAIInstrumentor().instrument()    # auto-traces all LLM calls
-```
-
-#### 9.2 Custom spans
-Add spans to: audio download, transcription, speaker inference (log names found vs null), diarization, chunking, embedding, retrieval. Each span carries `episode_id` attribute.
-
-```python
+from opentelemetry import trace
 tracer = trace.get_tracer("podcast-engine")
-
-async def infer_speaker_names(...):
-    with tracer.start_as_current_span("speaker_inference") as span:
-        result = await _run_inference(...)
-        found = sum(1 for v in result.values() if v is not None)
-        span.set_attribute("speakers.total", len(result))
-        span.set_attribute("speakers.inferred", found)
-        return result
+```
+Safe to import before `setup_telemetry()` runs — returns a no-op tracer until
+a provider is registered. Any file needing a custom span imports this directly:
+```python
+from src.telemetry.tracer import tracer
 ```
 
-#### 9.3 Phoenix in Docker Compose
-Already in `docker-compose.yml` under `observability` profile.
+**Custom spans:**
 
-#### 9.4 Verify
-Run a chat turn. Open Phoenix at `:6006`. Confirm:
-- LLM call traced with tokens
-- Tool calls as child spans
-- Speaker inference span with found/total attributes
-- Retrieval span with query + score distribution
+| File                      | Span name                     | Key attributes                                                                                                                                                                                                                                           |
+| ------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pipeline.py`             | `ingest_episode`              | `episode.id`, `episode.title`, `episode.has_transcript_url`, chunk counts, `episode.inferred_speaker`; `record_exception` + `set_status(ERROR)` on unrecoverable failure; RSS transcript fallback logged only — not marked ERROR since pipeline recovers |
+| `audio_downloader.py`     | `audio_download`              | `audio.url`, `audio.size_bytes` (when content-length present), `audio.bytes_received`; span starts after cache-hit early return — no span if file already exists                                                                                         |
+| `transcription/local.py`  | `transcription`               | `transcription.backend`, `transcription.model`, `transcription.language`, `transcription.diarization_enabled`, `transcription.diarization_model`, `transcription.segment_count`                                                                          |
+| `transcription/remote.py` | `transcription`               | `transcription.backend`, `transcription.service_url`, `transcription.language`, `transcription.segment_count`                                                                                                                                            |
+| `speaker_resolver.py`     | `speaker_inference`           | `speaker.intro_segment_count`, `speaker.name_found` (always set), `speaker.confidence` (set on success only)                                                                                                                                             |
+| `embedder.py`             | `embedding`                   | `embedding.leaf_count`, `embedding.batch_size`, `embedding.batch_count` via `math.ceil`                                                                                                                                                                  |
+| `retriever.py`            | `retrieval`                   | `retrieval.query`, `retrieval.top_k`, `retrieval.feed_ids`, `retrieval.result_count`, `retrieval.score_max`, `retrieval.score_min`, `retrieval.score_mean` (all scores rounded to 4dp)                                                                   |
+| LLM calls                 | auto via `OpenAIInstrumentor` | tokens, model, full prompt/response content, finish reason                                                                                                                                                                                               |
 
-### Phase 9 Done When
-- Phoenix shows full trace for chat turn including speaker inference
+**Why transcription span wraps the executor await, not the subprocess:**
+OTel context does not cross `ProcessPoolExecutor` subprocess boundaries — the
+context is thread/coroutine-local and is not copied on fork. A span started
+inside `_transcribe_sync` would have no parent and appear as an orphaned trace.
+The span wraps `run_in_executor()` in the async layer instead — wall-clock
+duration of the full executor call is the meaningful metric for model comparison.
+Sub-span timing for Whisper vs Pyannote requires splitting `_transcribe_sync`
+into two separate executor calls — deferred to transcription refactor (Future
+Scope 1.6).
+
+**Config keys added:**
+- `tracing_enabled: bool = False` — master switch; `phoenix_enabled` was never used
+- `otel_endpoint: str = "http://localhost:6006/v1/traces"` — OTLP/HTTP URL
+- `otel_api_key: str | None = None` — Bearer token for hosted Phoenix/Arize
+- `otel_project_name: str = "podcast-engine"` — Phoenix project routing
+
+**Verified against Arize hosted Phoenix:**
+- Endpoint: `https://app.phoenix.arize.com/s/{username}/v1/traces`
+- LLM traces visible with token counts and prompt/response content
+- `retrieval` span with score distribution attributes confirmed
+- `speaker_inference` child span nested under `ingest_episode` confirmed
+
+### Known tech debt
+- `_transcribe_sync` not split — sub-span timing for Whisper vs Pyannote
+  deferred to transcription refactor (Future Scope 1.6)
+- `WHISPER_MODEL_SIZE` → `WHISPER_MODEL` rename deferred to Phase 10
+
+### Phase 9 Done When ✅
+- Phoenix shows full trace for chat turn: LLM spans, `retrieval` child span
+- `retrieval` span carries score distribution attributes
+- Ingestion trace shows `ingest_episode` → `speaker_inference` → LLM child span
 - Git tag: `v0.1.9-observability`
 
 ---
@@ -1510,22 +1542,28 @@ Run a chat turn. Open Phoenix at `:6006`. Confirm:
 - 5-command quick start
 - Config reference
 - Screenshot or demo GIF
+- Backend README updated in Phase 9. Frontend README still needed.
 
-#### 10.2 Error handling audit
+#### 10.2 Whisper config rename
+Rename `WHISPER_MODEL_SIZE` → `WHISPER_MODEL` in `local.py` constructor,
+`_transcribe_sync` signature, and `dependencies.py` call site.
+`config.py` already updated in Phase 9.
+
+#### 10.3 Error handling audit
 - All pipeline errors stored and surfaced via status endpoint and SSE
 - Frontend shows meaningful error states
 - Chat 404 on missing session handled gracefully
 
-#### 10.3 Remove superseded endpoint
+#### 10.4 Remove superseded endpoint
 Remove `POST /api/v1/query/simple` — superseded by chat endpoints in Phase 6.
 
-#### 10.4 Demo seed script
+#### 10.5 Demo seed script
 ```bash
 uv run python scripts/seed_demo.py --feed-url https://... --episodes 5
 ```
 Pre-ingest demo episodes. Commit this so anyone can reproduce your demo.
 
-#### 10.5 Final test pass
+#### 10.6 Final test pass
 ```bash
 uv run pytest --cov=src --cov-report=term-missing
 ```
@@ -1603,5 +1641,5 @@ Test that BackgroundTaskQueue satisfies the IngestionQueue Protocol."
 | `v0.1.6-tool-calling`       | Multi-turn chat, tool-calling, conditional retrieval, multi-feed scope            |
 | `v0.1.7-frontend-ingestion` | Browser-based ingestion with SSE progress                                         |
 | `v0.1.8-frontend-chat`      | Full product in browser; chat in three contexts; resizable panels; citations with audio |
-| `v0.1.9-observability`      | Phoenix traces including speaker inference metrics                                |
+| `v0.1.9-observability`      | OTel traces via Phoenix; LLM, retrieval, pipeline, speaker inference all traced   |
 | `v1.0.0`                    | Shippable, documented, demo-ready                                                 |

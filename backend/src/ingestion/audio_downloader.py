@@ -4,8 +4,10 @@ from pathlib import Path
 from uuid import UUID
 
 import httpx
+from opentelemetry import trace
 
 from src.config import get_settings
+from src.telemetry.tracer import tracer
 
 
 class AudioDownloader:
@@ -29,28 +31,42 @@ class AudioDownloader:
         if dest.exists():
             return str(dest)
 
-        async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
-            async with client.stream("GET", audio_url) as response:
-                response.raise_for_status()
+        with tracer.start_as_current_span("audio_download") as span:
+            span.set_attribute("episode.id", str(episode_id))
+            span.set_attribute("audio.url", audio_url)
 
-                total = int(response.headers.get("content-length", 0))
-                received = 0
+            try:
+                async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
+                    async with client.stream("GET", audio_url) as response:
+                        response.raise_for_status()
 
-                tmp = dest.with_suffix(".tmp")
-                try:
-                    with open(tmp, "wb") as f:
-                        async for chunk in response.aiter_bytes(chunk_size=65536):
-                            f.write(chunk)
-                            received += len(chunk)
+                        total = int(response.headers.get("content-length", 0))
+                        if total:
+                            span.set_attribute("audio.size_bytes", total)
 
-                            if on_progress and total:
-                                progress = received / total
-                                await on_progress(progress)
-                    tmp.rename(dest)
+                        received = 0
 
-                except Exception:
-                    if tmp.exists():
-                        tmp.unlink()
-                    raise
+                        tmp = dest.with_suffix(".tmp")
+                        try:
+                            with open(tmp, "wb") as f:
+                                async for chunk in response.aiter_bytes(chunk_size=65536):
+                                    f.write(chunk)
+                                    received += len(chunk)
+
+                                    if on_progress and total:
+                                        progress = received / total
+                                        await on_progress(progress)
+                            tmp.rename(dest)
+
+                        except Exception:
+                            if tmp.exists():
+                                tmp.unlink()
+                            raise
+                span.set_attribute("audio.bytes_received", received)
+
+            except Exception as e:
+                span.record_exception(e)
+                span.set_status(trace.StatusCode.ERROR, str(e))
+                raise
 
         return str(dest)
