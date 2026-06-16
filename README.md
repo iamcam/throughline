@@ -7,7 +7,7 @@ This project contains backend and frontend components for a podcast knowledge en
 
 This engine ingests select podcast episodes, transcribes + diarizes speaker, and conversational RAG to serve as a topic-specific knowledgebase.
 
-Backend/Frontend component details are available in the `frontend` and `backend` directory README files.
+Backend/Frontend component details are available in the [`frontend/README.md`](frontend/README.md) and [`backend/README.md`](backend/README.md) directory README files.
 
 ## General Approach
 

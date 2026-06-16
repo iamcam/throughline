@@ -18,7 +18,7 @@ def _transcribe_sync(
     language: str,
     huggingface_token: str,
     whisper_backend: str,
-    whisper_model_size: str,
+    whisper_model: str,
     diarization_model: str
 ) -> TranscriptResult:
     """
@@ -35,11 +35,11 @@ def _transcribe_sync(
     # MPS not supported by faster-whisper; fall back to CPU on Apple Silicon
     words = []
     if whisper_backend == "mlx_whisper":
-        logger.info(f"Using mlx_whisper with model whisper-{whisper_model_size}-mlx")
+        logger.info(f"Using mlx_whisper with model {whisper_model}")
         import mlx_whisper
         result = mlx_whisper.transcribe(
             audio_path,
-            path_or_hf_repo=f"mlx-community/whisper-{whisper_model_size}-mlx",
+            path_or_hf_repo=whisper_model,
             word_timestamps=True,
         )
         words = [
@@ -48,10 +48,10 @@ def _transcribe_sync(
             for w in s.get("words", [])
         ]
     else:
-        logger.info(f"Using faster_whisper with model {whisper_model_size}")
+        logger.info(f"Using faster_whisper with model {whisper_model}")
         from faster_whisper import WhisperModel
         compute_type = "int8" if device == "cpu" else "float16"
-        whisper = WhisperModel(whisper_model_size, device=device, compute_type=compute_type)
+        whisper = WhisperModel(whisper_model, device=device, compute_type=compute_type)
         segments_iter, _ = whisper.transcribe(
             audio_path,
             language=language,
@@ -211,17 +211,24 @@ def _make_wav_for_diarization(audio_path: str) -> str:
     return wav_path
 
 
+def shutdown_executor():
+    """
+    Performs a proper shutdown; cleans up any leaked semaphores.
+    """
+    _executor.shutdown(wait=True)
+
+
 class LocalTranscriptionService:
     def __init__(
         self,
         huggingface_token: str,
         whisper_backend: str,
-        whisper_model_size: str,
+        whisper_model: str,
         diarization_model: str | None
     ):
         self._hf_token = huggingface_token
         self._whisper_backend = whisper_backend
-        self._model_size = whisper_model_size
+        self._model_size = whisper_model
         self._diarization_model = diarization_model
 
 

@@ -6,7 +6,7 @@ import { SearchFilterList } from '@/components/SearchFilterList'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useChatSession } from '@/hooks/useChatSession'
-import { LucidePodcast } from 'lucide-react'
+import { LucideCircleAlert, LucidePodcast } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
@@ -135,19 +135,23 @@ export function ChatInterface({ scopeFeedIds, scopeEpisodeIds }: ChatInterfacePr
 
   return (
     <div className="flex flex-col h-full">
+      {/* Session error — shown in all contexts */}
+      {sessionError && (
+        <p className="text-sm text-destructive px-4 py-2 shrink-0 flex items-center gap-2"><LucideCircleAlert className='' />{sessionError}</p>
+      )}
 
-      {/* Toolbar */}
-      {showKnowledgeBase && (<div className="flex items-center gap-3 border-b px-4 py-2 shrink-0">
-
+      {/* Toolbar — only in unscoped context */}
+      {showKnowledgeBase && (
+        <div className="flex items-center gap-3 border-b px-4 py-2 shrink-0">
           <Button variant="outline" size="sm" onClick={() => setSheetOpen(true)}>
-             <LucidePodcast /> Episodes
+            <LucidePodcast /> Episodes
           </Button>
+          <span className="text-sm text-muted-foreground">
+            {isCreating && 'Starting session...'}
+          </span>
+        </div>
+      )}
 
-        <span className="text-sm text-muted-foreground">
-          {isCreating && 'Starting session...'}
-          {sessionError && sessionError}
-        </span>
-      </div>)}
 
       {/* Messages */}
       <div className="overflow-y-auto flex-1 px-4 py-6">

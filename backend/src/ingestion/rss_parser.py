@@ -1,7 +1,10 @@
+# src/ingestion/rss_parser.py
 import feedparser
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import re
+
+from src.ingestion.html import html_to_markdown
 
 
 @dataclass
@@ -80,7 +83,7 @@ def parse_feed(rss_url: str) -> ParsedFeed:
         episodes.append(ParsedEpisode(
             guid=entry.get("id", entry.get("link", "")),
             title=entry.get("title"),
-            description=entry.get("summary"),
+            description=html_to_markdown(entry.get("summary")),
             published_at=published_at,
             audio_url=audio_url,
             duration_seconds=duration_seconds,
@@ -89,7 +92,7 @@ def parse_feed(rss_url: str) -> ParsedFeed:
 
     return ParsedFeed(
         title=feed.get("title"),
-        description=feed.get("subtitle") or feed.get("description"),
+        description=html_to_markdown(feed.get("subtitle") or feed.get("description")),
         image_url=image_url,
         episodes=episodes,
     )

@@ -3,9 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.config import get_settings
-from src.api.routers import health, feeds, episodes, speakers, query, chat
+from src.api.middleware.auth import BasicAuthMiddleware
+from src.api.routers import health, feeds, episodes, speakers, chat
 from src.query.session_store import InMemorySessionStore
 from src.telemetry.setup import setup_telemetry
+from src.transcription.local import shutdown_executor
 
 from src.ingestion.queue import BackgroundTaskQueue
 from src.config import get_settings
@@ -32,6 +34,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Shutdown - to clean up leaked semaphores while service was running
+    shutdown_executor()
+
 app = FastAPI(
     title="Podcast Knowledge Engine",
     version="0.1.8",
@@ -45,10 +50,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+app.add_middleware(BasicAuthMiddleware)
 
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(feeds.router, prefix="/api/v1")
 app.include_router(episodes.router, prefix="/api/v1")
 app.include_router(speakers.router, prefix="/api/v1")
-app.include_router(query.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")

@@ -2,7 +2,7 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: "/api/v1",
+  baseURL: `${import.meta.env.VITE_API_URL ?? ""}/api/v1`,
   headers: { "Content-Type": "application/json" },
 });
 
@@ -154,3 +154,15 @@ export const deleteChatSession = (sessionId: string) =>
   api.delete(`/chat/${sessionId}`);
 
 export default api;
+
+
+// ── Error helpers ─────────────────────────────────────────────────────────────
+
+export function isError404(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'response' in error &&
+    (error as { response?: { status?: number } }).response?.status === 404
+  )
+}

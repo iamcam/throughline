@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { LucideArrowUpRight, LucideCloudBackup, Trash } from 'lucide-react';
+import { LucideAlertCircle, LucideArrowUpRight, LucideCloudBackup, Trash } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -13,7 +13,7 @@ export default function FeedsPage() {
     const queryClient = useQueryClient()
     const navigate = useNavigate()
 
-    const { data: feeds, isLoading } = useQuery({
+    const { data: feeds, isLoading, isError } = useQuery({
         queryKey: ['feeds'],
         queryFn: listFeeds,
     })
@@ -42,6 +42,8 @@ export default function FeedsPage() {
     }
 
     if (isLoading) return <div>Loading feeds...</div>
+    if (isError) return <div className="p-6 text-sm text-destructive">Failed to load feeds. Is the backend running?</div>
+
 
     return (
         <div className="space-y-6 p-6">
@@ -50,7 +52,7 @@ export default function FeedsPage() {
                     value={url}
                     onChange={e => setUrl(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleAdd()}
-                    placeholder="Paste RSS feed URL..."
+                    placeholder="Apple Podcast or RSS feed URL..."
                     className="grow"
                 />
                 <Button
@@ -62,11 +64,17 @@ export default function FeedsPage() {
             </div>
 
             {addMutation.isError && (
-                <p>Failed to add feed. Check the URL and try again.</p>
+                <p className="text-sm text-destructive"><LucideAlertCircle className="inline-block mr-2" /> Failed to add feed. Check the URL and try again.</p>
+            )}
+            {deleteMutation.isError && (
+                <p className="text-sm text-destructive"><LucideAlertCircle className="inline-block mr-2" /> Failed to delete feed. Please try again.</p>
             )}
 
+            {refreshMutation.isError && (
+                <p className="text-sm text-destructive"><LucideAlertCircle className="inline-block mr-2" />Failed to refresh feed. Please try again.</p>
+            )}
             {feeds?.length === 0 && (
-                <p>No feeds yet. Paste an RSS URL above to get started.</p>
+                <p>No feeds yet. Paste an Apple Podcast or RSS URL above to get started.</p>
             )}
 
             <div className="space-y-4">
@@ -92,7 +100,7 @@ export default function FeedsPage() {
                                 {feed.description && <p>{feed.description}</p>}
                             </CardContent>
                           </div>
-                          <LucideArrowUpRight />
+                          <LucideArrowUpRight className="shrink-0" />
 
                         </div>
                         <CardFooter className="flex gap-6 justify-between">

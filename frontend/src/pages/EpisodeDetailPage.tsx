@@ -1,20 +1,21 @@
 // src/pages/EpisodeDetailPage.tsx
-import { getEpisode, ingestEpisode, listSpeakers, reingestEpisode } from '@/api/client'
+import { getEpisode, ingestEpisode, isError404, listSpeakers, reingestEpisode } from '@/api/client'
 import { ChatInterface } from '@/components/ChatInterface'
+import { ExpandableDescription } from '@/components/ExpandableDescription'
 import { SpeakerRow } from '@/components/SpeakerRow'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardFooter } from '@/components/ui/card'
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from '@/components/ui/resizable'
 import { Separator } from '@/components/ui/separator'
+import StatusBadge from '@/components/ui/StatusBadge'
 import { useEpisodeStatus } from '@/hooks/useEpisodeStatus'
 import { ACTIVE_STATUSES, formatDate, formatDuration } from '@/lib/episode'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, LoaderCircle, LucideX, Sparkles } from 'lucide-react'
+import { LoaderCircle, LucideCircleAlert, LucideCloudDownload, LucideCopy, LucideEllipsis, LucideMessageCircleDashed, LucideRefreshCw, LucideX, LucideXCircle, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
 import { useParams } from 'react-router-dom'
@@ -33,13 +34,13 @@ export default function EpisodeDetailPage() {
   const { episodeId } = useParams<{ episodeId: string }>()
   const queryClient = useQueryClient()
 
-  const { data: episode, isLoading } = useQuery({
+  const { data: episode, isLoading, isError, error } = useQuery({
     queryKey: ['episode', episodeId],
     queryFn: () => getEpisode(episodeId!),
     enabled: !!episodeId,
   })
 
-  const { data: speakers } = useQuery({
+  const { data: speakers, isError: speakersError } = useQuery({
     queryKey: ['speakers', episodeId],
     queryFn: () => listSpeakers(episodeId!),
     enabled: !!episodeId && episode?.pipeline_status === 'READY',
@@ -64,8 +65,21 @@ export default function EpisodeDetailPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['episode', episodeId] }),
   })
 
-  if (isLoading) return <div>Loading episode...</div>
-  if (!episode) return <div>Episode not found.</div>
+  if (isLoading) return (
+    <div className="p-6"><LucideEllipsis className='inline-block mr-2 animate-pulse' />Loading episode...</div>
+  )
+  if (isError) return (
+    <div className="p-6 text-destructive">
+      {isError404(error) ? "Episode not found" : (
+        <><LucideCircleAlert className='inline-block mr-2' /> Failed to load episode.</>
+      )}
+    </div>
+  )
+  if (!episode) return (
+    <div className="p-6 text-destructive">
+      <LucideCircleAlert className='inline-block mr-2' /> Failed to load episode.
+    </div>
+  )
 
   return (
     <ResizablePanelGroup orientation="horizontal" className="h-full">
@@ -88,25 +102,38 @@ export default function EpisodeDetailPage() {
               <div className="flex items-center gap-3 text-sm text-muted-foreground">
                 <span>{formatDate(episode.published_at)}</span>
                 <span>{formatDuration(episode.duration_seconds)}</span>
-                <Badge variant={status === 'READY' ? 'default' : status === 'ERROR' ? 'destructive' : 'secondary'}>
-                  {status}
-                </Badge>
               </div>
+              <Button variant="outline" onClick={() => navigator.clipboard.writeText(episode.id)}>
+                <LucideCopy />{episode.id}
+              </Button>
             </div>
-            <Button
-              disabled={isActive || ingestMutation.isPending || reingestMutation.isPending}
-              onClick={() => status === 'READY' ? reingestMutation.mutate() : ingestMutation.mutate()}
-            >
-              {isActive ? <LoaderCircle className="animate-spin " /> : null}
+            <div className='flex flex-col items-end gap-2'>
+              <Button
+                disabled={isActive || ingestMutation.isPending || reingestMutation.isPending}
+                onClick={() => status === 'READY' ? reingestMutation.mutate() : ingestMutation.mutate()}
+              >
+                {isActive ? <LoaderCircle className="animate-spin " /> : null}
 
-              {isActive ? 'Ingesting...' : status === 'READY' ? 'Reingest' : 'Ingest'}
-            </Button>
+                {isActive ? 'Ingesting...' : status === 'READY' ? <><LucideRefreshCw />Reingest</> : <><LucideCloudDownload />Ingest</>}
+              </Button>
+
+              {status && status !== 'READY' && <StatusBadge status={status} />}
+            </div>
           </div>
           <Card>
             <CardContent>
+              {episode && episode.description && episode.audio_url && (
+                <div className='flex flex-col gap-4'>
+                  <audio
+                    src={episode.audio_url}
+                    controls
+                    className="mt-2 w-92 max-w-full h-8"
+                  />
 
-            {episode.description && (
-              <CardDescription>{episode.description}</CardDescription>
+                  <CardDescription>
+                    <ExpandableDescription collapsedLines={4} description={episode.description} />
+                  </CardDescription>
+                </div>
             )}
 
             {isActive && stage && (
@@ -114,11 +141,15 @@ export default function EpisodeDetailPage() {
                 {stage}{progress != null ? ` — ${Math.round(progress * 100)}%` : ''}
               </p>
             )}
-            <div className="flex items-center gap-2">
-              <Button variant="outline" onClick={() => navigator.clipboard.writeText(episode.id)}>
-                <Copy />{episode.id}
-              </Button>
-            </div>
+            {ingestMutation.isError && (
+              <p className="text-sm text-destructive"><LucideXCircle className='inline-block mr-2'/>Failed to start ingestion. Please try again.</p>
+            )}
+            {reingestMutation.isError && (
+                <p className="text-sm text-destructive"><LucideXCircle className='inline-block mr-2' />Failed to reingest. Please try again.</p>
+            )}
+              <CardFooter>
+
+              </CardFooter>
             </CardContent>
 
           </Card>
@@ -138,6 +169,9 @@ export default function EpisodeDetailPage() {
                     episodeId={episodeId!}
                   />
                 ))}
+                {speakersError && (
+                  <p className="text-sm text-destructive"><LucideMessageCircleDashed className='inline-block mr-2' />Failed to load speakers.</p>
+                )}
               </div>
             </>
           )}

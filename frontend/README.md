@@ -1,73 +1,77 @@
-# React + TypeScript + Vite
+# Pod Knowledge Engine - Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+This is the frontend for the Pod Knowledge Engine project — a React + TypeScript SPA built with Vite and Tailwind v4.
 
-Currently, two official plugins are available:
+## Requirements
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Node 20+
+- Yarn
 
-## React Compiler
+> This project uses Yarn. Do not use `npm install` — it will create a `package-lock.json` and conflict with `yarn.lock`.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Setup
 
-## Expanding the ESLint configuration
+### 1. Install Dependencies
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cd frontend
+yarn
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### 2. Run the Dev Server
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+yarn dev
 ```
+
+> App available at http://localhost:3000
+
+The Vite dev server proxies `/api/*` requests to `http://localhost:3001`. The backend must be running for any data to load — see `backend/README.md`.
+
+## Environment
+
+Copy `.env.example` to `.env` and adjust as needed.
+
+```bash
+cp .env.example .env
+```
+
+| Variable       | Default   | Description                                                                                                                                                             |
+| -------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `VITE_API_URL` | *(empty)* | Backend URL. Leave unset in local dev - Vite proxy handles `/api/*` routing automatically. Set to your backend URL for production builds e.g. `https://your-domain.com` |
+| `VITE_PORT`    | `3000`    | Dev server port                                                                                                                                                         |
+
+
+## Useful Commands
+
+```bash
+yarn dev        # development server with HMR
+yarn build      # TypeScript check + production build
+yarn lint       # ESLint
+```
+
+## Key Tech
+
+- **React 19** + **TypeScript**
+- **Vite 8** with `@tailwindcss/vite` — no `postcss.config.js` needed
+- **TanStack Query v5** — data fetching and cache management
+- **React Router v7** — client-side routing
+- **shadcn/ui** — component library; add components with `yarn dlx shadcn add <component>`
+- **axios** — API client (`src/api/client.ts`)
+
+## Project Structure
+
+```
+src/
+  api/           # axios client and TypeScript types for all API responses
+  components/    # shared UI components including shadcn/ui components in ui/
+  hooks/         # data-fetching and SSE hooks
+  lib/           # utilities (episode formatting, text helpers)
+  pages/         # one component per route
+```
+
+## Notes
+
+- Path alias `@/*` resolves to `src/*` — use `@/components/Foo` not relative paths
+- SSE hooks in `src/hooks/` stream ingestion pipeline status in real time
+- Chat state is session-scoped and held in memory — refreshing the page starts a new session

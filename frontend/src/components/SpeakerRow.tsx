@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { LucideBadgeCheck, LucideBadgeQuestionMark, LucidePencil } from 'lucide-react'
 import { useState } from 'react'
 
 interface SpeakerRowProps {
@@ -42,55 +43,58 @@ export function SpeakerRow({ speaker, episodeId }: SpeakerRowProps) {
 
   return (
     <div className="flex items-center justify-between gap-4 py-2">
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-4">
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="xs"><LucidePencil /></Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-72 space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor={`speaker-name-${speaker.speaker_id}`}>
+                Speaker name
+              </Label>
+              <Input
+                id={`speaker-name-${speaker.speaker_id}`}
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="Enter speaker name..."
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setName(speaker.display_name ?? '')
+                  setOpen(false)
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                disabled={updateMutation.isPending}
+                onClick={() => updateMutation.mutate()}
+              >
+                {updateMutation.isPending ? 'Saving...' : 'Save'}
+              </Button>
+            </div>
+            {updateMutation.isError && (
+              <p className="text-destructive text-sm">Failed to save. Try again.</p>
+            )}
+          </PopoverContent>
+        </Popover>
         <span className="font-medium">
           {speaker.display_name ?? speaker.speaker_id}
         </span>
-        <ConfidenceBadge confidence={speaker.confidence} />
-        {speaker.name_inferred && !speaker.name_confirmed && (
-          <Badge variant="outline">unconfirmed</Badge>
+        {!speaker.name_confirmed && <ConfidenceBadge confidence={speaker.confidence} />}
+        {speaker.name_inferred && !speaker.name_confirmed ? (
+          <Badge variant="outline"><LucideBadgeQuestionMark />Unconfirmed</Badge>
+        ) : (
+            <Badge variant="outline" className="bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300"><LucideBadgeCheck /></Badge>
         )}
       </div>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button variant="outline" size="sm">Edit</Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-72 space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor={`speaker-name-${speaker.speaker_id}`}>
-              Speaker name
-            </Label>
-            <Input
-              id={`speaker-name-${speaker.speaker_id}`}
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="Enter speaker name..."
-            />
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setName(speaker.display_name ?? '')
-                setOpen(false)
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              disabled={updateMutation.isPending}
-              onClick={() => updateMutation.mutate()}
-            >
-              {updateMutation.isPending ? 'Saving...' : 'Save'}
-            </Button>
-          </div>
-          {updateMutation.isError && (
-            <p className="text-destructive text-sm">Failed to save. Try again.</p>
-          )}
-        </PopoverContent>
-      </Popover>
+
     </div>
   )
 }

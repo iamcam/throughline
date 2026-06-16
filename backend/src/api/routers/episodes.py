@@ -44,7 +44,7 @@ def _build_pipeline_services(settings) -> PipelineServices:
         transcription = LocalTranscriptionService(
             huggingface_token=settings.huggingface_token,
             whisper_backend=settings.whisper_backend,
-            whisper_model_size=settings.whisper_model_size,
+            whisper_model=settings.whisper_model,
             diarization_model=settings.diarization_model,
         )
 

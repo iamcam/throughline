@@ -1,5 +1,5 @@
 // src/pages/EpisodesPage.tsx
-import { getFeed, ingestEpisode, listEpisodes, reingestEpisode } from '@/api/client'
+import { getFeed, ingestEpisode, isError404, listEpisodes, reingestEpisode } from '@/api/client'
 import { ChatInterface } from '@/components/ChatInterface'
 import { EpisodeRow } from '@/components/EpisodeRow'
 import { Button } from '@/components/ui/button'
@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/resizable'
 import { Separator } from '@/components/ui/separator'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { LucideX, Sparkles } from 'lucide-react'
+import { LucideCircleAlert, LucideX, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
 
@@ -32,13 +32,13 @@ export default function EpisodesPage() {
   const [chatOpen, setChatOpen] = useState(false)
   const chatPanelRef = usePanelRef()
 
-  const { data: feed } = useQuery({
+  const { data: feed, isLoading: isFeedLoading, isError: isFeedError, error: feedError } = useQuery({
     queryKey: ['feed', feedId],
     queryFn: () => getFeed(feedId!),
     enabled: !!feedId,
   })
 
-  const { data: episodes, isLoading } = useQuery({
+  const { data: episodes, isLoading: isEpisodesLoading, isError: isEpisodesError, isError: episodesError } = useQuery({
     queryKey: ['episodes', feedId],
     queryFn: () => listEpisodes(feedId!),
     enabled: !!feedId,
@@ -87,7 +87,15 @@ export default function EpisodesPage() {
     }
   }
 
-  if (isLoading && episodes) return <div>Loading episodes...</div>
+  if (isFeedLoading || isEpisodesLoading) return <div>Loading episodes...</div>
+
+  if (isFeedError) {
+    return(
+    <p className="text-sm text-destructive">
+      {isError404(feedError) ? 'Feed not found.' : 'Failed to load feed details.'}
+    </p>
+    )
+  }
 
   return (
     <ResizablePanelGroup orientation="horizontal" className="h-full">
@@ -97,7 +105,7 @@ export default function EpisodesPage() {
 
           {feed && (
             <div className="flex items-start justify-between gap-6">
-              {feed.image_url && <img className="aspect-square w-42" src={feed.image_url} />}
+              {feed.image_url && <img className="aspect-square w-54" src={feed.image_url} />}
               <div className="space-y-1 grow">
                 <h1 className="text-2xl font-bold">{feed.title ?? feed.rss_url}</h1>
                 {feed.description && (
@@ -117,30 +125,42 @@ export default function EpisodesPage() {
           )}
 
           <Separator />
+          {!isEpisodesError && (
+            <>
+              <Input
+                placeholder="Search episodes..."
+                value={search}
+                onChange={e => handleSearch(e.target.value)}
+                className="max-w-100"
+              />
 
-          <Input
-            placeholder="Search episodes..."
-            value={search}
-            onChange={e => handleSearch(e.target.value)}
-            className="grow"
-          />
-
-          <ButtonGroup>
-            <Button
-              variant={filter === 'all' ? 'default' : 'outline'}
-              onClick={() => handleFilter('all')}
-            >
-              All
-            </Button>
-            <Button
-              variant={filter === 'ingested' ? 'default' : 'outline'}
-              onClick={() => handleFilter('ingested')}
-            >
-              Ingested ({ingestedCount})
-            </Button>
-          </ButtonGroup>
-
+              <ButtonGroup>
+                <Button
+                  variant={filter === 'all' ? 'default' : 'outline'}
+                  onClick={() => handleFilter('all')}
+                >
+                  All
+                </Button>
+                <Button
+                  variant={filter === 'ingested' ? 'default' : 'outline'}
+                  onClick={() => handleFilter('ingested')}
+                >
+                  Ingested ({ingestedCount})
+                </Button>
+              </ButtonGroup>
+            </>
+          )}
+          {ingestMutation.isError && (
+            <p className="text-sm text-destructive"><LucideCircleAlert className='inline-block mr-2' />Failed to start ingestion. Please try again.</p>
+          )}
+          {reingestMutation.isError && (
+            <p className="text-sm text-destructive"><LucideCircleAlert className='inline-block mr-2' />Failed to reingest. Please try again.</p>
+          )}
           <div className="space-y-2">
+            {episodesError && (
+              <p className="text-sm text-destructive"><LucideCircleAlert className='inline-block mr-2' />Failed to load episodes. Is the backend running?</p>
+            )}
+
             {paginated.length === 0 && (
               <p className="text-muted-foreground text-sm">No episodes match your search.</p>
             )}

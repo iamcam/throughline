@@ -1,16 +1,26 @@
+# src/api/routers/feeds.py
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from src.api.dependencies import get_db
 from src.models.schemas import AddFeedRequest, FeedResponse, EpisodeResponse
 from src.ingestion import feed_service
+from src.ingestion.itunes import is_itunes_url, resolve_itunes_url
 
 router = APIRouter(prefix="/feeds", tags=["feeds"])
 
 
 @router.post("", response_model=FeedResponse)
 async def add_feed(body: AddFeedRequest, db: AsyncSession = Depends(get_db)):
-    feed = await feed_service.add_feed(str(body.rss_url), db)
+    rss_url = str(body.rss_url)
+
+    if is_itunes_url(rss_url):
+        try:
+            rss_url = await resolve_itunes_url(rss_url)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+    feed = await feed_service.add_feed(rss_url, db)
     episode_count = await feed_service.list_episodes(feed.id, db)
     return FeedResponse(
         id=feed.id,

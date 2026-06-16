@@ -13,7 +13,8 @@ export function formatDuration(seconds: number | null): string {
   if (!seconds) return "";
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  const s = Math.floor(seconds % 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m ${s}s`;
 }
 
 export function formatDate(dateStr: string | null): string {

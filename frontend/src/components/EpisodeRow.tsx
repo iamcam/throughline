@@ -1,10 +1,11 @@
 // src/components/EpisodeRow.tsx
 import type { Episode } from '@/api/client'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import StatusBadge from '@/components/ui/StatusBadge'
 import { useEpisodeStatus } from '@/hooks/useEpisodeStatus'
 import { ACTIVE_STATUSES, formatDate, formatDuration } from '@/lib/episode'
+import { stripMarkdown } from '@/lib/text'
 import { Copy, LoaderCircle, LucideArrowUpRight, LucideCloudDownload, LucideRefreshCw, LucideSparkles } from 'lucide-react'
 
 
@@ -26,18 +27,22 @@ export function EpisodeRow({ episode, onIngest, onReingest, onNavigate }: Episod
   const isReady = status === 'READY'
 
   return (
-    <Card className={isReady ? 'border-2 border-accent' : ''}>
+    <Card className={isReady ? 'border-2 border-accent' : ''} onClick={() => onNavigate(episode.id)}>
       <CardHeader className='flex flex-row'>
         <div className='flex-1 w-100'>
           <CardTitle className="line-clamp-2 flex flex-row gap-2 items-center">
             {isReady && <LucideSparkles className="text-accent size-4" />}
             {episode.title ?? 'Untitled'}
           </CardTitle>
-            {episode.description && (<CardDescription className="line-clamp-2">{episode.description}</CardDescription>)}
+          {episode.description && (
+            <CardDescription className="line-clamp-2">
+              {stripMarkdown(episode.description)}
+            </CardDescription>
+          )}
         </div>
-        <Button variant="outline" size="icon" onClick={() => onNavigate(episode.id)}>
-          <LucideArrowUpRight className='shrink-0' />
-        </Button>
+
+        <LucideArrowUpRight className='shrink-0' />
+
       </CardHeader>
       <CardContent >
         <div className="flex justify-between items-center">
@@ -45,7 +50,6 @@ export function EpisodeRow({ episode, onIngest, onReingest, onNavigate }: Episod
 
             <span>{formatDate(episode.published_at)}</span>
             <span>{formatDuration(episode.duration_seconds)}</span>
-            {status !== 'READY' && <StatusBadge status={status} />}
           </div>
             {isActive && stage && (
               <div className="text-sm text-muted-foreground">
@@ -53,18 +57,24 @@ export function EpisodeRow({ episode, onIngest, onReingest, onNavigate }: Episod
               </div>
             )}
 
-          <div className="flex gap-2">
+          <div className="flex flex-col items-end gap-2">
               <Button
               disabled={isActive}
-              onClick={() => status === 'READY' ? onReingest(episode.id) : onIngest(episode.id)}
-            >
+              onClick={(e) => {
+                e.stopPropagation();
+                if (status === 'READY') onReingest(episode.id)
+                else onIngest(episode.id);
+              }}
+              >
               {isActive ? <LoaderCircle className="animate-spin " /> : null}
               {isActive ? 'Ingesting...' : status === 'READY' ? <><LucideRefreshCw />Reingest</> : <><LucideCloudDownload />Ingest</>}
             </Button>
+            {status !== 'READY' && <StatusBadge status={status} />}
+
           </div>
         </div>
         <div className="flex items-center gap-2 ">
-          <Button variant="outline"  onClick={() => navigator.clipboard.writeText(episode.id)}>
+          <Button variant="outline" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(episode.id) }}>
             <Copy />{episode.id.slice(0,5)} … {episode.id.slice(-5)}
           </Button>
         </div>
@@ -73,12 +83,3 @@ export function EpisodeRow({ episode, onIngest, onReingest, onNavigate }: Episod
   )
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const variants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
-    READY: 'default',
-    ERROR: 'destructive',
-    PENDING: 'outline',
-  }
-  const variant = variants[status] ?? 'secondary'
-  return <Badge variant={variant}>{status}</Badge>
-}

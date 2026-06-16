@@ -213,7 +213,7 @@ def test_local_satisfies_protocol():
     svc = LocalTranscriptionService(
         huggingface_token="hf_fake",
         whisper_backend="faster_whisper",
-        whisper_model_size="tiny",
+        whisper_model="tiny",
         diarization_model=None,
     )
     assert isinstance(svc, TranscriptionService)
