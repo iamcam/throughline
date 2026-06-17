@@ -2,7 +2,7 @@
 set -e
 
 # Load .env
-export $(grep -v '^#' .env | xargs)
+export $(grep -v '^#' .env | grep -v '^\s*$' | sed 's/#.*//' | xargs)
 
 echo "Starting DB..."
 podman compose -f docker-compose.dev.yml up --wait

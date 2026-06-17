@@ -68,33 +68,39 @@ HUGGINGFACE_TOKEN=hf_...
 
 Pyannote requires a Hugging Face token and model access. Accept the terms at https://huggingface.co/pyannote/speaker-diarization-3.1 before setting the token.
 
+
 ### 4. Bootstrapping
 
-This project uses Postgres with pgvector for embeddings.
-
-**Start the database container**
+This project uses Postgres with pgvector for embeddings. If you don't already have a Postgres instance with pgvector, use the included `docker-compose.dev.yml`:
 
 ```bash
 podman compose -f docker-compose.dev.yml up -d
 ```
 
-Note the container name — it may be `backend-db-1`.
-
-**Enable pgvector**
-
-```bash
-podman exec -it <container-name> psql -U <username> -d podcast_engine -c "CREATE EXTENSION IF NOT EXISTS vector;"
-```
-
-**Run migrations and create the test database**
+**Run migrations**
 
 ```bash
 uv run alembic upgrade head
+```
+
+Migrations handle pgvector installation — no separate step needed.
+
+**(Local dev only) Create the test database**
+
+Required only if you want to run the integration test suite:
+
+```bash
 PYTHONPATH=. uv run python scripts/create_test_db.py
-podman exec -it <container-name> psql -U <username> -d podcast_engine_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+Then enable pgvector on the test DB (note the container name may differ):
+
+```bash
+podman exec -it backend-db-1 psql -U <username> -d podcast_engine_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
 The test database only needs to be created once.
+
 
 ### 5. Run the Dev Server
 
