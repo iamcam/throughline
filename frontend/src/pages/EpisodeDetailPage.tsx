@@ -3,6 +3,7 @@ import { getEpisode, ingestEpisode, isError404, listSpeakers, reingestEpisode } 
 import { ChatInterface } from '@/components/ChatInterface'
 import { ExpandableDescription } from '@/components/ExpandableDescription'
 import { SpeakerRow } from '@/components/SpeakerRow'
+import { TranscriptViewer } from '@/components/TranscriptViewer'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter } from '@/components/ui/card'
 import {
@@ -28,7 +29,7 @@ export default function EpisodeDetailPage() {
     if (chatOpen) {
       chatPanelRef.current?.collapse()
     } else {
-      chatPanelRef.current?.expand()
+      chatPanelRef.current?.resize("33%")
     }
   }
   const { episodeId } = useParams<{ episodeId: string }>()
@@ -40,7 +41,7 @@ export default function EpisodeDetailPage() {
     enabled: !!episodeId,
   })
 
-  const { data: speakers, isError: speakersError } = useQuery({
+  const { data: speakers, isLoading: isSpeakersLoading, isError: speakersError } = useQuery({
     queryKey: ['speakers', episodeId],
     queryFn: () => listSpeakers(episodeId!),
     enabled: !!episodeId && episode?.pipeline_status === 'READY',
@@ -68,7 +69,7 @@ export default function EpisodeDetailPage() {
   if (isLoading) return (
     <div className="p-6"><LucideEllipsis className='inline-block mr-2 animate-pulse' />Loading episode...</div>
   )
-  if (isError) return (
+  if (isError || !episodeId) return (
     <div className="p-6 text-destructive">
       {isError404(error) ? "Episode not found" : (
         <><LucideCircleAlert className='inline-block mr-2' /> Failed to load episode.</>
@@ -88,7 +89,7 @@ export default function EpisodeDetailPage() {
 
           {/* Header row — replaces the back button */}
           <div className="flex items-center justify-between">
-            <h1>{episode.title ?? 'Untitled'}</h1>
+            <h1 className="font-bold">{episode.title ?? 'Untitled'}</h1>
             {!chatOpen && (
               <Button disabled={status !== "READY"} variant="outline" size="sm" onClick={toggleChat}>
                 <Sparkles className="h-4 w-4 mr-1" />
@@ -159,21 +160,28 @@ export default function EpisodeDetailPage() {
               <Separator />
               <div className="space-y-2">
                 <h2 className="font-semibold">Speakers</h2>
-                {!speakers?.length && (
+                {isSpeakersLoading && <div className='text-muted-foreground'>...</div>}
+                {speakersError && (
+                  <p className="text-sm text-muted-foreground">
+                    <LucideMessageCircleDashed className='inline-block mr-2' size={16} />
+                    Failed to load speakers.
+                  </p>
+                )}
+                {!isSpeakersLoading && !speakersError && !speakers?.length && (
                   <p className="text-sm text-muted-foreground">No speakers identified.</p>
                 )}
-                {speakers?.map(speaker => (
+                {!speakersError && speakers?.map(speaker => (
                   <SpeakerRow
                     key={speaker.speaker_id}
                     speaker={speaker}
-                    episodeId={episodeId!}
+                    episodeId={episodeId}
                   />
                 ))}
-                {speakersError && (
-                  <p className="text-sm text-destructive"><LucideMessageCircleDashed className='inline-block mr-2' />Failed to load speakers.</p>
-                )}
               </div>
-            </>
+              <Separator />
+              <h2 className="font-semibold">Transcript</h2>
+              <TranscriptViewer episodeId={episodeId} />
+      </>
           )}
 
           {status === 'PENDING' && (

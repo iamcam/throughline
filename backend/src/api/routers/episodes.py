@@ -3,14 +3,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 import asyncio
-from sqlalchemy import update, delete
+from sqlalchemy import update, delete, select
 
 from sse_starlette.sse import EventSourceResponse
 
 from src.api.dependencies import get_db, get_ingestion_queue, AsyncSessionLocal, get_llm_client, get_embedding_client
 from src.ingestion.queue import IngestionQueue
 from src.models.db import Episode as EpisodeModel, Chunk, TranscriptSegment, EpisodeSpeaker
-from src.models.schemas import EpisodeResponse, PipelineStatusUpdate, IngestRequest
+from src.models.schemas import EpisodeResponse, PipelineStatusUpdate, IngestRequest, TranscriptResponse, TranscriptSegmentResponse
 from src.ingestion import feed_service
 from src.ingestion.pipeline import PipelineServices, ingest_episode
 from src.ingestion.audio_downloader import AudioDownloader
@@ -94,6 +94,44 @@ async def get_episode(episode_id: UUID, db: AsyncSession = Depends(get_db)):
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     return EpisodeResponse.model_validate(episode)
+
+
+
+@router.get("/{episode_id}/transcript", response_model=TranscriptResponse)
+async def get_transcript(episode_id: UUID, db: AsyncSession = Depends(get_db)):
+    episode = await feed_service.get_episode(episode_id, db)
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+    # Load segments ordered by sequence
+    segments_result = await db.execute(
+        select(TranscriptSegment)
+        .where(TranscriptSegment.episode_id == episode_id)
+        .order_by(TranscriptSegment.sequence_order)
+    )
+    segments = segments_result.scalars().all()
+
+    # Load speaker display names for this episode
+    speakers_result = await db.execute(
+        select(EpisodeSpeaker)
+        .where(EpisodeSpeaker.episode_id == episode_id)
+    )
+    speakers = {s.speaker_id: s.display_name for s in speakers_result.scalars().all()}
+
+    return TranscriptResponse(
+        episode_id=str(episode_id),
+        segments=[
+            TranscriptSegmentResponse(
+                speaker_id=seg.speaker_id,
+                display_name=speakers.get(seg.speaker_id),
+                text=seg.text,
+                start_ms=seg.start_ms,
+                end_ms=seg.end_ms,
+                sequence_order=seg.sequence_order,
+            )
+            for seg in segments
+        ]
+    )
 
 
 @router.get("/{episode_id}/status", response_model=PipelineStatusUpdate)

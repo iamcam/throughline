@@ -32,6 +32,20 @@ export interface Episode {
   ingestion_job_id: string | null;
 }
 
+export interface TranscriptSegment {
+  speaker_id: string;
+  display_name: string | null;
+  text: string;
+  start_ms: number;
+  end_ms: number;
+  sequence_order: number;
+}
+
+export interface Transcript {
+  episode_id: string;
+  segments: TranscriptSegment[];
+}
+
 export interface PipelineStatusUpdate {
   status: string;
   stage: string | null;
@@ -116,6 +130,13 @@ export const reingestEpisode = (episodeId: string, speakerCountHint?: number) =>
       speaker_count_hint: speakerCountHint,
     })
     .then((r) => r.data);
+
+
+// ── Transcript ────────────────────────────────────────────────────────────────
+
+export const getTranscript = (episodeId: string) =>
+  api.get<Transcript>(`/episodes/${episodeId}/transcript`).then((r) => r.data);
+
 
 // ── Speakers ──────────────────────────────────────────────────────────────────
 

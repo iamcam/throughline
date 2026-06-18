@@ -35,6 +35,19 @@ class EpisodeResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TranscriptSegmentResponse(BaseModel):
+    speaker_id: str
+    display_name: str | None
+    text: str
+    start_ms: int
+    end_ms: int
+    sequence_order: int
+
+class TranscriptResponse(BaseModel):
+    episode_id: str
+    segments: list[TranscriptSegmentResponse]
+
+
 class PipelineStatusUpdate(BaseModel):
     status: str
     stage: str | None = None
@@ -62,4 +75,4 @@ class SpeakerPreviewResponse(BaseModel):
 
 class UpdateSpeakerRequest(BaseModel):
     speaker_id: str
-    display_name: str
+    display_name: str | None

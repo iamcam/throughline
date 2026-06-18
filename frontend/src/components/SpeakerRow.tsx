@@ -7,8 +7,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { LucideBadgeCheck, LucideBadgeQuestionMark, LucidePencil } from 'lucide-react'
-import { useState } from 'react'
+import { LucideBadgeCheck, LucideBadgeQuestionMark, LucidePencil, LucideStar } from 'lucide-react'
+import { useState, type ReactElement } from 'react'
 
 interface SpeakerRowProps {
   speaker: Speaker
@@ -22,7 +22,22 @@ function ConfidenceBadge({ confidence }: { confidence: string | null }) {
     low: 'outline',
   }
   if (!confidence) return null
-  return <Badge variant={variants[confidence] ?? 'outline'}>{confidence}</Badge>
+  return <Badge variant={variants[confidence] ?? 'outline'}>{confidence} confidence</Badge>
+}
+
+function ConfidenceRating({ confidence }: { confidence: string | null }) {
+  const rating: Record<string, 1 | 2 | 3> = {
+    high: 3,
+    medium: 2,
+    low: 1
+  }
+  if (!confidence) return null
+  const stars = rating[confidence]
+  const output: ReactElement[] = []
+  for (let ii = 0; ii < stars; ii++){
+    output.push(<LucideStar size={14} />)
+  }
+  return <div className="flex">{output}</div>
 }
 
 export function SpeakerRow({ speaker, episodeId }: SpeakerRowProps) {
@@ -84,15 +99,15 @@ export function SpeakerRow({ speaker, episodeId }: SpeakerRowProps) {
             )}
           </PopoverContent>
         </Popover>
-        <span className="font-medium">
-          {speaker.display_name ?? speaker.speaker_id}
+        <span className="font-medium min-w-24">
+          {speaker.display_name ?? <div className='text-sm italic text-muted-foreground' onClick={(e) => { e.stopPropagation(); setOpen(true)}}>Add name</div>}
         </span>
-        {!speaker.name_confirmed && <ConfidenceBadge confidence={speaker.confidence} />}
         {speaker.name_inferred && !speaker.name_confirmed ? (
           <Badge variant="outline"><LucideBadgeQuestionMark />Unconfirmed</Badge>
         ) : (
-            <Badge variant="outline" className="bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300"><LucideBadgeCheck /></Badge>
+             speaker.display_name && (<Badge variant="outline" className="bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300"><LucideBadgeCheck /></Badge>)
         )}
+        {!speaker.name_confirmed && (<div className='text-sm'><ConfidenceRating confidence={speaker.confidence} /></div>)}
       </div>
 
     </div>
