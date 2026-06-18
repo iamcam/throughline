@@ -36,9 +36,10 @@ def _build_pipeline_services(settings) -> PipelineServices:
     Build PipelineServices from current settings.
     Called once per ingest request - all services are stateless.
     """
-    if settings.transcription_backend == "remote":
+    if settings.transcription_service_url:
         transcription = RemoteTranscriptionService(
-            service_url=settings.transcription_service_url
+            service_url=settings.transcription_service_url,
+            api_key=settings.transcription_api_key
         )
     else:
         transcription = LocalTranscriptionService(

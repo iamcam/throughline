@@ -130,7 +130,6 @@ Transcription runs locally via Whisper by default. For the Docker setup this mea
 To use a separate transcription service instead:
 
 ```dotenv
-TRANSCRIPTION_BACKEND=remote
 TRANSCRIPTION_SERVICE_URL=http://host.docker.internal:8001  # Docker
 # or
 TRANSCRIPTION_SERVICE_URL=http://localhost:8001              # local dev

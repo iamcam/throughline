@@ -52,10 +52,23 @@ uv add mlx-whisper
 **Configure `.env`**
 
 ```bash
-# All platforms
+# Local Whisper
 WHISPER_BACKEND=faster_whisper   # faster_whisper | mlx_whisper
-WHISPER_MODEL_SIZE=medium        # tiny | base | small | medium | large-v3
+WHISPER_MODEL=medium             # size: tiny | base | small | medium | large-v3
+                                 # or HF repo: mlx-community/whisper-medium-mlx
 ```
+
+**Remote transcription (optional)**
+
+To use a remote OpenAI-compatible transcription service instead of local Whisper:
+
+```bash
+TRANSCRIPTION_SERVICE_URL=http://localhost:8001/v1   # any OpenAI-compatible endpoint
+TRANSCRIPTION_API_KEY=your-key-here                  # required for OpenAI; leave empty for local services
+```
+
+When `TRANSCRIPTION_SERVICE_URL` is set, local Whisper config is ignored.
+
 
 **Speaker Diarization (optional)**
 
@@ -126,7 +139,7 @@ docker run -p 6006:6006 arizephoenix/phoenix:latest
 # .env
 TRACING_ENABLED=true
 OTEL_ENDPOINT=http://localhost:6006/v1/traces
-OTEl_PROJECT_NAME=podcast-engine
+OTEL_PROJECT_NAME=podcast-engine
 # OTEL_API_KEY not required for local Phoenix unless configured
 ```
 

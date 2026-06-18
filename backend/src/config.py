@@ -36,10 +36,12 @@ class Settings(BaseSettings):
     embedding_dimensions: int = 768
 
     # Transcription
-    transcription_backend: str = "local" # TODO can probably remove with transcription_service_url
     transcription_service_url: str = "" # TODO
+    transcription_api_key: str | None = None
+
     whisper_backend: str = "faster_whisper"
     whisper_model: str = "medium"
+
     diarization_model: str | None = None
     speaker_inference_window_ms: int = 900_000
 

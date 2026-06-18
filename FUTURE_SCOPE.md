@@ -183,6 +183,29 @@ remote backend simultaneously.
 
 ---
 
+### 1.8 Remote Transcription Service
+
+**What it is:** A validated, working remote transcription path via an OpenAI-compatible `/v1/audio/transcriptions` endpoint. `RemoteTranscriptionService` exists in v1 but was not fully validated end-to-end.
+
+**Why deferred from v1:** No clear standard has emerged for self-hosted transcription APIs — providers expose different paths, request formats, and response schemas. The OpenAI format (`/v1/audio/transcriptions`) is the closest thing to a standard but adoption is inconsistent. Local Whisper via `LocalTranscriptionService` is the only fully tested path in v1.
+
+**What we learned:**
+- oMLX exposes OpenAI-compatible transcription but requires a specific model to be loaded
+- `verbose_json` response format returns segments with timestamps — worth requesting where supported; flat `text` response requires reconstructing segments without timestamps
+- Diarization and transcription are natural companions — most providers that offer both return them together in a single response
+
+**Natural pairing with 1.5:** Remote transcription and diarization should be implemented together. Cloud providers (OpenAI, Deepgram, AssemblyAI) return transcript + speaker turns in one API call — splitting them into separate implementation phases adds unnecessary complexity. When implementing, choose one provider and validate the full pipeline: transcription → diarization → `TranscriptResult` with real `SPEAKER_XX` IDs.
+
+**Candidate providers:**
+- **OpenAI** — works with current `remote.py`; diarization via `gpt-4o-transcribe`
+- **Deepgram / AssemblyAI** — hosted, competitive pricing, strong diarization; not OpenAI-compatible, needs provider-specific client
+- **FunASR** — self-hosted, OpenAI-compatible endpoints for both transcription and diarization ([github.com/modelscope/FunASR](https://github.com/modelscope/FunASR))
+- **Local Pyannote on CUDA** — already stubbed in `local.py`; practical on GPU, impractical on CPU
+
+**Effort:** 1 weekend per provider
+
+---
+
 ### 1.9 Audio Clip Playback for Speaker Verification
 
 **What it is:** When editing a speaker name in `SpeakerRow`, play a short audio clip from the inferred timestamp so the user can verify the name by ear rather than reading the transcript text.
@@ -441,11 +464,12 @@ If you finish v1 and want to keep going, this is the highest-value sequence:
 4. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models; pairs well with the decoupled worker since the API is now free to stream
 5. **Episode summarization** — 1 weekend, shows a two-level LLM pipeline; good interview story; useful day-to-day
 6. **Persistent conversations** — 1 weekend, turns the tool into a research companion; Protocol means it's a one-file swap
-7. **Automatic feed polling** — 1 weekend, natural complement to the worker queue; don't build before 2
-8. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
-9. **Temporal reasoning** — unique angle, memorable demo
-10. **Graph RAG** — the "big" upgrade, strongest architectural story
-11. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
+7. **Remote transcription + diarization** — pairs with 1.5; choose one provider and validate end-to-end
+8. **Automatic feed polling** — 1 weekend, natural complement to the worker queue; don't build before 2
+9. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
+10. **Temporal reasoning** — unique angle, memorable demo
+11. **Graph RAG** — the "big" upgrade, strongest architectural story
+12. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
 
 **On sequencing:** The decoupled worker (ARQ) is deliberately second rather than later — it's infrastructure that makes everything else better. Batch ingestion becomes viable, the API becomes responsive during heavy work, and automatic polling (item 7) requires it anyway. Getting it in early pays dividends across all subsequent work.
 
