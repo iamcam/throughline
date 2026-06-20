@@ -1,7 +1,8 @@
 // src/pages/EpisodesPage.tsx
-import { getFeed, ingestEpisode, isError404, listEpisodes, reingestEpisode } from '@/api/client'
+import { deleteFeed, getFeed, ingestEpisode, isError404, listEpisodes, refreshFeed, reingestEpisode } from '@/api/client'
 import { ChatInterface } from '@/components/ChatInterface'
 import { EpisodeRow } from '@/components/EpisodeRow'
+import FeedKebab from '@/components/FeedKebab'
 import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
 import { Input } from '@/components/ui/input'
@@ -11,9 +12,11 @@ import {
   ResizablePanelGroup,
 } from '@/components/ui/resizable'
 import { Separator } from '@/components/ui/separator'
+import { formatRelativeDate } from '@/lib/date'
+import { invalidateAfterFeedDelete, invalidateFeedAndEpisodes } from '@/lib/queryInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { LucideCircleAlert, LucideX, Sparkles } from 'lucide-react'
-import { useState } from 'react'
+import { LucideActivity, LucideChevronLeft, LucideCircleAlert, LucideX, Sparkles } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
 
 
@@ -31,6 +34,12 @@ export default function EpisodesPage() {
   const [page, setPage] = useState(1)
   const [chatOpen, setChatOpen] = useState(false)
   const chatPanelRef = usePanelRef()
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    scrollContainerRef?.current?.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [page])
+
 
   const { data: feed, isLoading: isFeedLoading, isError: isFeedError, error: feedError } = useQuery({
     queryKey: ['feed', feedId],
@@ -38,7 +47,7 @@ export default function EpisodesPage() {
     enabled: !!feedId,
   })
 
-  const { data: episodes, isLoading: isEpisodesLoading, isError: isEpisodesError, isError: episodesError } = useQuery({
+  const { data: episodes, isLoading: isEpisodesLoading, isError: isEpisodesError, error: episodesError } = useQuery({
     queryKey: ['episodes', feedId],
     queryFn: () => listEpisodes(feedId!),
     enabled: !!feedId,
@@ -52,6 +61,19 @@ export default function EpisodesPage() {
   const reingestMutation = useMutation({
     mutationFn: (episodeId: string) => reingestEpisode(episodeId),
     onSuccess: async () => await queryClient.invalidateQueries({ queryKey: ['episodes', feedId] }),
+  })
+
+  const refreshMutation = useMutation({
+    mutationFn: refreshFeed,
+    onSuccess: (_, feedId) => invalidateFeedAndEpisodes(queryClient, feedId),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: deleteFeed,
+    onSuccess: (_, feedId) => {
+      invalidateAfterFeedDelete(queryClient, feedId);
+      navigate(`/feeds/`);
+    },
   })
 
   const filtered = (episodes ?? [])
@@ -101,26 +123,55 @@ export default function EpisodesPage() {
     <ResizablePanelGroup orientation="horizontal" className="h-full">
       {/* Main content */}
       <ResizablePanel defaultSize="100%" minSize="50%">
-        <div className="space-y-6 overflow-y-auto h-full p-6">
-
+        <div ref={scrollContainerRef} className="space-y-6 overflow-y-auto h-full p-6">
           {feed && (
-            <div className="flex items-start justify-between gap-6">
-              {feed.image_url && <img className="aspect-square w-54" src={feed.image_url} />}
-              <div className="space-y-1 grow">
+            <div className="flex justify-between">
+              <Button variant="link"
+                className='p-0'
+                onClick={() => navigate(`/feeds/`)}>
+                <LucideChevronLeft />
+                Feeds
+              </Button>
+
+            </div>
+          )}
+          {feed && (
+            <div className="flex items-stretch justify-between gap-6">
+              {feed.image_url && <div className='shrink-0 w-1/3 aspect-square  max-h-64 max-w-64 '><img src={feed.image_url} /></div>}
+
+              <div className="space-y-1">
                 <h1 className="text-2xl font-bold">{feed.title ?? feed.rss_url}</h1>
+
+
+                <div className='text-sm flex gap-2 items-center text-muted-foreground'>
+                  {feed.episode_count > 0 ? (<>
+                    <p>{feed.episode_count} {feed.episode_count === 1 ? "episode" : "episodes"}</p>
+                    {feed.episode_count > 0 && (<p><LucideActivity size={12} /></p>)}
+                    <p>{feed.latest_episode_published_at && formatRelativeDate(feed.latest_episode_published_at)}</p>
+
+                  </>) : (
+                    <p>No episodes</p>
+                  )}
+                </div>
+
+
                 {feed.description && (
-                  <p className="text-sm ">
+                  <p className="text-md ">
                     {feed.description}
                   </p>
                 )}
-                <p className="text-sm text-muted-foreground">{feed.episode_count} episodes</p>
               </div>
-              {!chatOpen && (
-                <Button variant="outline" size="sm" onClick={toggleChat}>
-                  <Sparkles className="h-4 w-4 mr-1" />
-                  Ask AI
-                </Button>
-              )}
+
+              <div className='flex flex-col justify-between items-end '>
+                {!chatOpen ? (
+                  <Button variant="outline" size="sm" disabled={!ingestedCount} onClick={toggleChat}>
+                    <Sparkles className="h-4 w-4 mr-1" />
+                    Ask AI
+                  </Button>
+                ) : <div></div>}
+
+                <FeedKebab feedTitle={feed.title}  feedId={feed.id} refreshMutation={refreshMutation} deleteMutation={deleteMutation} />
+              </div>
             </div>
           )}
 
@@ -158,19 +209,23 @@ export default function EpisodesPage() {
           )}
           <div className="space-y-2">
             {episodesError && (
-              <p className="text-sm text-destructive"><LucideCircleAlert className='inline-block mr-2' />Failed to load episodes. Is the backend running?</p>
+              <p className="text-sm text-destructive"><LucideCircleAlert className='inline-block mr-2' />Failed to load episodes. {episodesError.message}</p>
             )}
 
-            {paginated.length === 0 && (
+            {episodes && episodes.length === 0 && (
+              <p className="text-muted-foreground text-sm">No episodes found. Try refreshing the feed.</p>
+            )}
+            {episodes && episodes.length > 0 && episodes && paginated.length === 0 && (
               <p className="text-muted-foreground text-sm">No episodes match your search.</p>
             )}
+
             {paginated.map(episode => (
               <EpisodeRow
                 key={episode.id}
                 episode={episode}
                 onIngest={(id) => ingestMutation.mutate(id)}
                 onReingest={(id) => reingestMutation.mutate(id)}
-                onNavigate={(id) => navigate(`/episodes/${id}`)}
+                link={`/episodes/${episode.id}`}
               />
             ))}
           </div>

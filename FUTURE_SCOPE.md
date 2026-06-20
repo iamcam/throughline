@@ -183,7 +183,7 @@ remote backend simultaneously.
 
 ---
 
-### 1.8 Remote Transcription Service
+### 1.9 Remote Transcription Service
 
 **What it is:** A validated, working remote transcription path via an OpenAI-compatible `/v1/audio/transcriptions` endpoint. `RemoteTranscriptionService` exists in v1 but was not fully validated end-to-end.
 
@@ -206,7 +206,7 @@ remote backend simultaneously.
 
 ---
 
-### 1.9 Audio Clip Playback for Speaker Verification
+### 1.10 Audio Clip Playback for Speaker Verification
 
 **What it is:** When editing a speaker name in `SpeakerRow`, play a short audio clip from the inferred timestamp so the user can verify the name by ear rather than reading the transcript text.
 
@@ -221,7 +221,7 @@ remote backend simultaneously.
 
 ---
 
-### 1.10 V2 Chat Scope Filtering
+### 1.11 V2 Chat Scope Filtering
 
 **What it is:** Allow users to change the scope of a chat session mid-conversation, and read back the current scope at any time. In v1, scope is set once at session creation and cannot be changed. The frontend has no way to read back what scope is active.
 
@@ -246,7 +246,7 @@ remote backend simultaneously.
 
 ---
 
-### 1.11 Individual Episode Artwork
+### 1.12 Individual Episode Artwork
 
 **What it is:** Display per-episode artwork (`<itunes:image>` at the item level) in episode lists and detail pages. Feed-level artwork (`feeds.image_url`) is already implemented.
 
@@ -459,18 +459,19 @@ response = await asyncio.wait_for(
 If you finish v1 and want to keep going, this is the highest-value sequence:
 
 1. **LLM request timeout** — 1 hour, immediately improves local model UX; do this first, it's trivial
-2. **Decoupled worker queue (ARQ)** — 1 weekend, eliminates ingestion/query resource contention; enables overnight batch processing; unlocks everything that depends on reliable background work
-3. **Query rewriting** — 1 day, directly improves retrieval quality on vague and follow-up queries; measurable before/after in Phoenix
-4. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models; pairs well with the decoupled worker since the API is now free to stream
-5. **Episode summarization** — 1 weekend, shows a two-level LLM pipeline; good interview story; useful day-to-day
-6. **Persistent conversations** — 1 weekend, turns the tool into a research companion; Protocol means it's a one-file swap
-7. **Remote transcription + diarization** — pairs with 1.5; choose one provider and validate end-to-end
-8. **Automatic feed polling** — 1 weekend, natural complement to the worker queue; don't build before 2
-9. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
-10. **Temporal reasoning** — unique angle, memorable demo
-11. **Graph RAG** — the "big" upgrade, strongest architectural story
-12. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
+2. **Episode delete** — half a day, meaningful product gap (no way to remove ingested content); confirmation pattern already proven via FeedKebab/AlertDialog
+3. **Decoupled worker queue (ARQ)** — 1 weekend, eliminates ingestion/query resource contention; enables overnight batch processing; unlocks everything that depends on reliable background work
+4. **Query rewriting** — 1 day, directly improves retrieval quality on vague and follow-up queries; measurable before/after in Phoenix
+5. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models; pairs well with the decoupled worker since the API is now free to stream
+6. **Episode summarization** — 1 weekend, shows a two-level LLM pipeline; good interview story; useful day-to-day
+7. **Persistent conversations** — 1 weekend, turns the tool into a research companion; Protocol means it's a one-file swap
+8. **Remote transcription + diarization** — pairs with 1.5; choose one provider and validate end-to-end
+9. **Automatic feed polling** — 1 weekend, natural complement to the worker queue; don't build before 3
+10. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
+11. **Temporal reasoning** — unique angle, memorable demo
+12. **Graph RAG** — the "big" upgrade, strongest architectural story
+13. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
 
-**On sequencing:** The decoupled worker (ARQ) is deliberately second rather than later — it's infrastructure that makes everything else better. Batch ingestion becomes viable, the API becomes responsive during heavy work, and automatic polling (item 7) requires it anyway. Getting it in early pays dividends across all subsequent work.
+**On sequencing:** The decoupled worker (ARQ) is deliberately early rather than later — it's infrastructure that makes everything else better. Batch ingestion becomes viable, the API becomes responsive during heavy work, and automatic polling (item 9) requires it anyway. Getting it in early pays dividends across all subsequent work.
 
 Graph RAG is deliberately near the end — you'll understand your retrieval failure modes better after real use, which makes the graph design decisions more grounded rather than speculative.

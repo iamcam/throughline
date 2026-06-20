@@ -89,9 +89,8 @@ LLM_MODEL_NAME=claude-sonnet-4-20250514     # or gpt-4o
 **Local (pyannote + Whisper):**
 ```bash
 # .env
-TRANSCRIPTION_BACKEND=local
 HUGGINGFACE_TOKEN=hf_...
-WHISPER_MODEL_SIZE=medium   # tiny/base/small/medium/large
+WHISPER_MODEL=medium   # tiny/base/small/medium/large, or a Hugging Face repo for mlx_whisper
 ```
 
 Accept that diarization is slow on CPU. For dev, use the `sample_transcript.json` fixture to skip transcription entirely.
@@ -101,9 +100,11 @@ Accept that diarization is slow on CPU. For dev, use the `sample_transcript.json
 docker compose --profile transcription up transcription
 
 # .env
-TRANSCRIPTION_BACKEND=remote
 TRANSCRIPTION_SERVICE_URL=http://localhost:8001
+TRANSCRIPTION_API_KEY=...   # if required by the remote service
 ```
+
+Presence of `TRANSCRIPTION_SERVICE_URL` is what selects remote transcription — absence means local. Don't set it if you want local Whisper.
 
 ---
 

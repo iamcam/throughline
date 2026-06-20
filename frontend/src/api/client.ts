@@ -15,6 +15,7 @@ export interface Feed {
   description: string | null;
   image_url: string | null;
   episode_count: number;
+  latest_episode_published_at: string | null;
   created_at: string;
 }
 
@@ -99,7 +100,7 @@ export interface ChatMessageResponse {
 export const addFeed = (rss_url: string) =>
   api.post<Feed>("/feeds", { rss_url }).then((r) => r.data);
 
-export const listFeeds = () => api.get<Feed[]>("/feeds").then((r) => r.data);
+export const listFeeds = () => api.get<Feed[]>("/feeds", { params: { sort: "latest_episode" } }).then((r) => r.data);
 
 export const getFeed = (feedId: string) =>
   api.get<Feed>(`/feeds/${feedId}`).then((r) => r.data);

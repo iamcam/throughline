@@ -1371,7 +1371,7 @@ The `useEpisodeStatus` hook must invalidate the TanStack cache on terminal statu
 
 **Known tech debt from this phase:**
 - Episode delete not implemented — needs frontend + backend work
-- Audio clip playback for speaker verification not implemented — uses `#t=` fragment approach proven in Phase 8 citations; see Future Scope 1.8
+- Audio clip playback for speaker verification not implemented — uses `#t=` fragment approach proven in Phase 8 citations; see Future Scope 1.10
 - `SpeakerNamingPage` is a stub at `/episodes/:episodeId/speakers` — may be removed or repurposed
 - Frontend Docker build not validated against Tailwind v4 Vite plugin — verify before demo deployment
 - No error boundaries — API failures surface as silent empty states in most cases
@@ -1436,7 +1436,7 @@ episode_data = {
 Audio playback uses `#t=` URI fragment (Media Fragments spec) — browser seeks natively without JS event listeners. Seek to `start_ms - 3000ms` for context. Confirmed working on major podcast CDNs.
 
 **Known tech debt:**
-- V2 scope filtering deferred — scope set once at session creation, no mid-conversation update. Backend needs `GET /chat/{session_id}` and `PATCH /chat/{session_id}`. See Future Scope 1.9.
+- V2 scope filtering deferred — scope set once at session creation, no mid-conversation update. Backend needs `GET /chat/{session_id}` and `PATCH /chat/{session_id}`. See Future Scope 1.11.
 - `SpeakerNamingPage` still a stub
 - Frontend Docker build not validated against Tailwind v4
 - No error boundaries
@@ -1583,6 +1583,33 @@ Target: >70% coverage. Ensure contract tests cover all Protocols:
 
 ---
 
+## Phase 10.1 — Feed Sort, Cache Invalidation, Pagination Fixes
+
+**Goal:** Unplanned follow-up to Phase 10, scoped from its deferred polish items. Feed list sortable by latest episode; fixes a class of cache-invalidation bugs found during manual testing; pagination scroll fix.
+
+### Tasks
+
+#### 10.1.1 Feed sort by latest episode
+`GET /api/v1/feeds?sort=created_at|latest_episode` — descending only. `list_feeds()` selects `MAX(Episode.published_at)` alongside the existing `COUNT(Episode.id)` in the same grouped query; `nulls_last()` on the `latest_episode` sort so feeds with zero episodes sort to the bottom, not the top — sort answers "what's recent," not "what's broken." `FeedResponse` gains `latest_episode_published_at: datetime | None`, populated by every route that returns a `FeedResponse` (new `get_feed_stats()` helper for the single-feed routes).
+
+#### 10.1.2 FeedKebab component
+Reusable refresh/delete menu (shadcn `DropdownMenu` + `AlertDialog` confirm step), replacing always-visible refresh/delete buttons on the feed card footer. Used on `FeedsPage` and `EpisodeDetailPage`. Narrow `MutationLike` prop type, not the full TanStack `UseMutationResult` generic — component only needs `.mutate()` and `.isPending`.
+
+#### 10.1.3 Cache invalidation consolidation
+Found and fixed the same bug independently in four places: a mutation invalidating only the TanStack query key for the page it was triggered from, not the related feed↔episode keys. Consolidated into `frontend/src/lib/queryInvalidation.ts` — `invalidateFeedAndEpisodes()` and `invalidateAfterFeedDelete()` (delete uses `removeQueries()`, not `invalidateQueries()`, since the data no longer exists).
+
+#### 10.1.4 Pagination scroll fix
+`EpisodesPage` pagination wasn't scrolling the list back to top on page change. Fixed with `useLayoutEffect` + a ref on the actual scrolling container (not `window`) — `useEffect` was visibly landing short when the new page's content height differed from the old page's.
+
+### Phase 10.1 Done When
+- `GET /feeds?sort=latest_episode` returns correctly sorted, fully-populated results
+- Feed card shows episode count + relative latest-episode date
+- Refresh/delete on either Feeds or EpisodeDetail correctly updates all affected views
+- Pagination returns to top of list on page change
+- Git tag: `v0.2.1-app-polish`
+
+---
+
 ## Agent-Assisted Development Guide
 
 **DO give the agent:**
@@ -1630,16 +1657,18 @@ Test that BackgroundTaskQueue satisfies the IngestionQueue Protocol."
 
 ## Milestone Summary
 
-| Tag                         | What Works                                                                        |
-| --------------------------- | --------------------------------------------------------------------------------- |
-| `v0.1.0-scaffold`           | Health endpoint, DB connected                                                     |
-| `v0.1.1-feeds`              | RSS ingestion, episode listing, queue abstraction                                 |
-| `v0.1.2-transcription`      | Transcription pipeline, SSE status streaming                                      |
-| `v0.1.3-speakers`           | LLM speaker inference with confidence; pipeline runs straight to READY            |
-| `v0.1.4-chunking`           | Chunks + embeddings, speaker_id preserved, short segment merging                 |
-| `v0.1.5-basic-rag`          | Simple Q&A with resolved speaker names; parent_text used for LLM context         |
-| `v0.1.6-tool-calling`       | Multi-turn chat, tool-calling, conditional retrieval, multi-feed scope            |
-| `v0.1.7-frontend-ingestion` | Browser-based ingestion with SSE progress                                         |
-| `v0.1.8-frontend-chat`      | Full product in browser; chat in three contexts; resizable panels; citations with audio |
-| `v0.1.9-observability`      | OTel traces via Phoenix; LLM, retrieval, pipeline, speaker inference all traced   |
-| `v1.0.0`                    | Shippable, documented, demo-ready                                                 |
+| Tag                         | What Works                                                                                   |
+| --------------------------- | -------------------------------------------------------------------------------------------- |
+| `v0.1.0-scaffold`           | Health endpoint, DB connected                                                                |
+| `v0.1.1-feeds`              | RSS ingestion, episode listing, queue abstraction                                            |
+| `v0.1.2-transcription`      | Transcription pipeline, SSE status streaming                                                 |
+| `v0.1.3-speakers`           | LLM speaker inference with confidence; pipeline runs straight to READY                       |
+| `v0.1.4-chunking`           | Chunks + embeddings, speaker_id preserved, short segment merging                             |
+| `v0.1.5-basic-rag`          | Simple Q&A with resolved speaker names; parent_text used for LLM context                     |
+| `v0.1.6-tool-calling`       | Multi-turn chat, tool-calling, conditional retrieval, multi-feed scope                       |
+| `v0.1.7-frontend-ingestion` | Browser-based ingestion with SSE progress                                                    |
+| `v0.1.8-frontend-chat`      | Full product in browser; chat in three contexts; resizable panels; citations with audio      |
+| `v0.1.9-observability`      | OTel traces via Phoenix; LLM, retrieval, pipeline, speaker inference all traced              |
+| `v0.2.1`                    | Transcript viewer, speaker name removal                                                      |
+| `v0.2.1-app-polish`         | Feed sort by latest episode, FeedKebab menu, cache invalidation fixes, pagination scroll fix |
+| `v1.0.0`                    | Shippable, documented, demo-ready                                                            |

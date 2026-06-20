@@ -47,7 +47,7 @@ export function ExpandableDescription({
         className="px-0 h-auto text-muted-foreground"
         onClick={() => setExpanded(e => !e)}
       >
-        {expanded ? 'Show less' : 'More...'}
+        {expanded ? 'Less...' : 'More...'}
       </Button>
     </div>
   )

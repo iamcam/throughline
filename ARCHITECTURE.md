@@ -134,7 +134,7 @@ def get_ingestion_queue(request: Request) -> IngestionQueue:
 
 def get_transcription_service() -> TranscriptionService:
     # Returns LocalTranscriptionService or RemoteTranscriptionService
-    # based on TRANSCRIPTION_BACKEND setting
+    # Presence of TRANSCRIPTION_SERVICE_URL implies remote; absence implies local
 
 def get_vector_store() -> VectorStore:
     # Returns PgvectorStore
@@ -820,6 +820,8 @@ CREATE INDEX ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists =
 - `transcript_segments` and `chunks` store `speaker_id` only
 - `VectorStore.search()` returns raw results with `speaker_id`; `ResultHydrator` resolves names
 - All cascade deletes defined
+- `FeedResponse.latest_episode_published_at` is not a stored column — derived via `MAX(episodes.published_at)` grouped by feed (`feed_service.list_feeds()`, `feed_service.get_feed_stats()`); always recomputed at read time
+
 
 ---
 
@@ -943,7 +945,7 @@ docker compose --profile observability up
 
 ---
 
-### 3.13 Frontend — React + Vite
+### ### 3.13 Frontend — React + Vite
 
 **Tech stack (as built, Phase 8):**
 - React 19 + TypeScript, Vite 8, Tailwind v4 via `@tailwindcss/vite` plugin
@@ -953,6 +955,32 @@ docker compose --profile observability up
 - `react-markdown` for LLM response rendering in chat
 - `react-resizable-panels` via shadcn `Resizable` for split-panel chat layout
 - Path alias: `@/*` → `src/*` in both tsconfig and vite config
+
+**TanStack Query defaults (`main.tsx`):**
+
+```typescript
+new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      staleTime: 30_000,
+    },
+  },
+})
+```
+
+`staleTime: 30_000` is global — any `useQuery` without its own `staleTime` override is considered fresh for 30 seconds after a successful fetch, even across component remounts. This matters when debugging "data isn't updating" symptoms: a remounted query that doesn't refetch is not necessarily a missing-invalidation bug — check whether the 30-second window is simply still open before assuming the cache key is wrong. Explicit `invalidateQueries()` calls bypass `staleTime` entirely and force a refetch regardless of this window; `useChatSession`'s `staleTime: Infinity` (below) is a per-hook override of this default, set for a different reason (session-orphaning prevention, not general staleness tolerance).
+
+**Feed/episode cache invalidation pattern (`lib/queryInvalidation.ts`):**
+
+Feed-level mutations (refresh, delete) affect data cached under multiple, separate query keys — `['feeds']` (list), `['feed', feedId]` (detail), and `['episodes', feedId]` (episode list for that feed). A mutation invalidating only the query key for the page it's triggered from leaves the others stale; this happened independently in four places before being consolidated. Two shared helpers encode the relationship once:
+
+```typescript
+invalidateFeedAndEpisodes(queryClient, feedId)   // refresh — all three keys still valid, just stale
+invalidateAfterFeedDelete(queryClient, feedId)   // delete — list key invalidated; detail/episode keys removed via removeQueries(), not invalidateQueries(), since the feed no longer exists
+```
+
+Any new mutation that changes feed-level or episode-level data should use these rather than inlining `invalidateQueries()` calls — the rule is about the data relationship (a feed and its episodes), not about which page or component triggers the change.
 
 **App shell layout:**
 - `Layout.tsx` uses `h-screen flex flex-col` — nav takes natural height, `<main>` is `flex-1 overflow-auto p-6`
@@ -1102,7 +1130,7 @@ Full OpenAPI docs at `/docs` (Swagger) and `/redoc`.
 
 ### Feeds
 ```
-GET    /api/v1/feeds
+GET    /api/v1/feeds                          Query: ?sort=created_at|latest_episode (default created_at, descending only)
 POST   /api/v1/feeds                          Body: { rss_url }
 GET    /api/v1/feeds/{feed_id}
 DELETE /api/v1/feeds/{feed_id}
@@ -1133,11 +1161,6 @@ POST   /api/v1/chat/sessions                  Body: { scope_feed_ids?: UUID[], s
 POST   /api/v1/chat/{session_id}/message      Body: { message }
 GET    /api/v1/chat/{session_id}/history
 DELETE /api/v1/chat/{session_id}
-```
-
-### Simple Query (superseded by chat, retained until Phase 10)
-```
-POST   /api/v1/query/simple                   Body: { question, feed_id?, episode_ids?, top_k? }
 ```
 
 ### System
@@ -1201,7 +1224,6 @@ podcast-knowledge-engine/
 │   │   │   │   ├── episodes.py
 │   │   │   │   ├── speakers.py
 │   │   │   │   ├── chat.py
-│   │   │   │   ├── query.py          # POST /query/simple (Phase 5); superseded by chat in Phase 6
 │   │   │   │   └── health.py
 │   │   │   ├── middleware/
 │   │   │   │   └── auth.py
@@ -1268,26 +1290,33 @@ podcast-knowledge-engine/
 │   │   │   └── client.ts            # Typed axios wrapper; all backend types and endpoint functions
 │   │   ├── components/
 │   │   │   ├── ui/                  # shadcn/ui components (button, badge, card, input, sheet,
-│   │   │   │                        #   accordion, collapsible, resizable, separator, popover, etc.)
+│   │   │   │                        #   accordion, collapsible, resizable, separator, popover,
+│   │   │   │                        #   dropdown-menu, alert-dialog, etc.)
 │   │   │   ├── ChatInterface.tsx    # Reusable chat UI; scopeFeedIds/scopeEpisodeIds props
 │   │   │   ├── CitationList.tsx     # Collapsible citations; audio playback via #t= fragment
+│   │   │   ├── ErrorBoundary.tsx    # Class component wrapping all routes
 │   │   │   ├── EpisodeRow.tsx       # Episode card; owns SSE connection; derives isActive from live status
+│   │   │   ├── ExpandableDescription.tsx # Plain text preview + markdown expanded view
+│   │   │   ├── FeedKebab.tsx        # Reusable refresh/delete menu; AlertDialog confirm; narrow MutationLike prop type
 │   │   │   ├── Layout.tsx           # Nav shell; h-screen flex flex-col; main is flex-1 overflow-auto
 │   │   │   ├── SearchFilterList.tsx # Sheet-based knowledge base browser; self-contained data fetch
-│   │   │   └── SpeakerRow.tsx       # Speaker display + popover edit
+│   │   │   ├── SpeakerRow.tsx       # Speaker display + popover edit
+│   │   │   └── TranscriptViewer.tsx # Expand/collapse; standalone and reusable
 │   │   ├── hooks/
 │   │   │   ├── useChatSession.ts    # TanStack useQuery session creation; StrictMode-safe
 │   │   │   └── useEpisodeStatus.ts  # SSE hook; invalidates TanStack cache on terminal status
 │   │   ├── lib/
-│   │   │   ├── episode.ts           # ACTIVE_STATUSES, formatDuration, formatDate
+│   │   │   ├── date.ts              # formatDate, formatDuration, formatRelativeDate (Intl.RelativeTimeFormat)
+│   │   │   ├── episode.ts           # ACTIVE_STATUSES; episode-specific logic only — date helpers moved to date.ts
+│   │   │   ├── queryInvalidation.ts # invalidateFeedAndEpisodes, invalidateAfterFeedDelete — shared feed↔episode cache rules
+│   │   │   ├── text.ts              # stripMarkdown()
 │   │   │   └── utils.ts             # shadcn cn() helper
 │   │   ├── pages/
 │   │   │   ├── ChatPage.tsx         # Thin wrapper around ChatInterface; lazy-loaded
-│   │   │   ├── EpisodeDetailPage.tsx # Full detail, ingest/reingest, speakers; resizable chat panel
+│   │   │   ├── EpisodeDetailPage.tsx # Full detail, ingest/reingest, speakers, transcript; resizable chat panel
 │   │   │   ├── EpisodesPage.tsx     # List with search, filter, pagination; resizable chat panel
-│   │   │   ├── FeedsPage.tsx        # Add/refresh/delete feeds
-│   │   │   └── SpeakerNamingPage.tsx # Stub — speaker naming in EpisodeDetailPage
-│   │   ├── App.tsx                  # Route definitions; ChatPage lazy-loaded via React.lazy()
+│   │   │   └── FeedsPage.tsx        # Add/sort feeds; refresh/delete via FeedKebab
+│   │   ├── App.tsx                  # Route definitions; ErrorBoundary wraps routes; ChatPage lazy-loaded
 │   │   ├── index.css                # @import "tailwindcss"
 │   │   └── main.tsx                 # QueryClientProvider + StrictMode + App mount
 │   ├── components.json              # shadcn config; aliases use explicit src/ paths
