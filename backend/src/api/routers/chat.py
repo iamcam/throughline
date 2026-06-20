@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 from src.api.dependencies import get_db, get_session_store, get_query_engine
-from src.query.engine import QueryEngine
+from src.query.engine import QueryEngine, LLMTimeoutError
 from src.query.session_store import SessionStore, ChatSession
 
 logger = logging.getLogger(__name__)
@@ -84,6 +84,8 @@ async def send_message(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except LLMTimeoutError as e:
+        raise HTTPException(status_code=504, detail=str(e))
 
 
 @router.get("/{session_id}/history", response_model=SessionHistoryResponse)

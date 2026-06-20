@@ -723,8 +723,15 @@ as invalid JSON.
 `break`. When max rounds are exhausted, a final LLM call without tools forces a text response using whatever
 was retrieved across all rounds.
 
-**Known tech debt — no request timeout:** Long-running chat requests (multiple tool rounds on a slow local
-model) hold the HTTP connection open indefinitely. Fix: wrap `llm.complete()` in `asyncio.wait_for(..., timeout=60.0)`.
+**Request timeout:** Each `llm_client.complete()` call (both tool-calling rounds and the final synthesis
+call) is wrapped in `asyncio.wait_for(..., timeout=LLM_REQUEST_TIMEOUT_SECONDS)` (60s, module-level constant
+in `engine.py`). A timeout raises `LLMTimeoutError`, caught in `src/api/routers/chat.py` and mapped to
+`504 Gateway Timeout`. The session is never saved when a timeout fires — `SessionStore.save()` only runs
+on the success path at the end of `chat()` — so a timed-out request leaves no partial state and is safe
+to retry. The whole `chat()` body runs inside a custom `"chat"` tracing span (`session.id`,
+`chat.tool_rounds_used`, `chat.citation_count` on success; `record_exception` + `set_status` on any
+exception) — this is orchestration-level instrumentation, distinct from the automatic per-call spans
+`OpenAIInstrumentor` already provides for each `llm_client.complete()` call.
 
 **`ChatResponse`:**
 ```python
@@ -821,6 +828,7 @@ CREATE INDEX ON chunks USING ivfflat (embedding vector_cosine_ops) WITH (lists =
 - `VectorStore.search()` returns raw results with `speaker_id`; `ResultHydrator` resolves names
 - All cascade deletes defined
 - `FeedResponse.latest_episode_published_at` is not a stored column — derived via `MAX(episodes.published_at)` grouped by feed (`feed_service.list_feeds()`, `feed_service.get_feed_stats()`); always recomputed at read time
+-
 
 
 ---
@@ -1452,7 +1460,6 @@ uv run pytest --cov=src --cov-report=term-missing
 | Speaker diarization      | See Future Scope 1.5. Reinstates `PENDING_NAMES` pipeline status; `UNKNOWN` speaker_ids get real diarization labels; existing episodes re-ingestable |
 | Non-OpenAI LLM SDK       | Implement `LLMClient` Protocol; swap in `dependencies.py`; no business logic changes                                                                 |
 | Chat response streaming  | `LLMClient.stream()` async generator; chat endpoint returns `EventSourceResponse`; applies to final synthesis only — tool rounds still block         |
-| LLM request timeout      | `asyncio.wait_for(llm.complete(...), timeout=60.0)` in engine loop; graceful timeout response                                                        |
 | V2 chat scope filtering  | `GET /chat/{session_id}` returns full session object; `PATCH /chat/{session_id}` updates scope mid-conversation; frontend scope selector calls resetSession on change |
 
 ---
