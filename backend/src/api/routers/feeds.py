@@ -21,32 +21,37 @@ async def add_feed(body: AddFeedRequest, db: AsyncSession = Depends(get_db)):
             raise HTTPException(status_code=422, detail=str(e))
 
     feed = await feed_service.add_feed(rss_url, db)
-    episode_count = await feed_service.list_episodes(feed.id, db)
+    episode_count, latest_episode_published_at = await feed_service.get_feed_stats(feed.id, db)
     return FeedResponse(
         id=feed.id,
         rss_url=feed.rss_url,
         title=feed.title,
         description=feed.description,
         image_url=feed.image_url,
-        episode_count=len(episode_count),
+        episode_count=episode_count,
+        latest_episode_published_at=latest_episode_published_at,
         created_at=feed.created_at,
     )
 
 
 @router.get("", response_model=list[FeedResponse])
-async def list_feeds(db: AsyncSession = Depends(get_db)):
-    rows = await feed_service.list_feeds(db)
+async def list_feeds(
+    sort: feed_service.FeedSort = "created_at",
+    db: AsyncSession = Depends(get_db),
+):
+    rows = await feed_service.list_feeds(db, sort=sort)
     return [
-        FeedResponse(
+            FeedResponse(
             id=feed.id,
             rss_url=feed.rss_url,
             title=feed.title,
             description=feed.description,
             image_url=feed.image_url,
             episode_count=count,
+            latest_episode_published_at=latest_episode,
             created_at=feed.created_at,
         )
-        for feed, count in rows
+        for feed, count, latest_episode in rows
     ]
 
 
@@ -55,14 +60,15 @@ async def get_feed(feed_id: UUID, db: AsyncSession = Depends(get_db)):
     feed = await feed_service.get_feed(feed_id, db)
     if not feed:
         raise HTTPException(status_code=404, detail="Feed not found")
-    episodes = await feed_service.list_episodes(feed_id, db)
+    episode_count, latest_episode_published_at = await feed_service.get_feed_stats(feed_id, db)
     return FeedResponse(
         id=feed.id,
         rss_url=feed.rss_url,
         title=feed.title,
         description=feed.description,
         image_url=feed.image_url,
-        episode_count=len(episodes),
+        episode_count=episode_count,
+        latest_episode_published_at=latest_episode_published_at,
         created_at=feed.created_at,
     )
 

@@ -15,6 +15,7 @@ class FeedResponse(BaseModel):
     description: str | None
     image_url: str | None
     episode_count: int
+    latest_episode_published_at: datetime | None
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -15,15 +15,6 @@ interface SpeakerRowProps {
   episodeId: string
 }
 
-function ConfidenceBadge({ confidence }: { confidence: string | null }) {
-  const variants: Record<string, 'default' | 'secondary' | 'outline'> = {
-    high: 'default',
-    medium: 'secondary',
-    low: 'outline',
-  }
-  if (!confidence) return null
-  return <Badge variant={variants[confidence] ?? 'outline'}>{confidence} confidence</Badge>
-}
 
 function ConfidenceRating({ confidence }: { confidence: string | null }) {
   const rating: Record<string, 1 | 2 | 3> = {

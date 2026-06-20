@@ -5,7 +5,9 @@ export default function Layout() {
   return (
     <div className="flex flex-col h-screen">
       <nav className="border-b px-6 py-3 flex items-center gap-6 shrink-0">
-        <span className="font-semibold">Podcast Knowledge Engine</span>
+        <NavLink to="/">
+          <span className="font-semibold">Podcast Knowledge Engine</span>
+        </NavLink>
         <NavLink
           to="/feeds"
           className={({ isActive }) =>

@@ -15,7 +15,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
-import { formatDate, formatDuration } from '@/lib/episode'
+import { formatDate, formatDuration } from '@/lib/date'
 import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -58,15 +58,18 @@ function FeedAccordionItem({ feed, onNavigate }: { feed: Feed; onNavigate: (path
   return (
     <AccordionItem value={feed.id}>
       <AccordionTrigger>
-        <div>
-        <div className="">
-          {feed.title ?? feed.rss_url}
-        </div>
-        <div className="text-xs">
-          {episodes
-            ? `${readyEpisodes.length} of ${totalCount}`
-            : `${feed.episode_count}`} episodes
-        </div>
+        <div className="flex flex-row gap-4">
+          <div>{feed.image_url && <img src={feed.image_url} className="size-24" />}</div>
+          <div className="grow flex flex-col justify-center">
+            <div className="font-bold">
+              {feed.title ?? feed.rss_url}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {episodes
+                ? `${readyEpisodes.length} of ${totalCount}`
+                : `${feed.episode_count}`} episodes
+            </div>
+          </div>
         </div>
       </AccordionTrigger>
       <AccordionContent>

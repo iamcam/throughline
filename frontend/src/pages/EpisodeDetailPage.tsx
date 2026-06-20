@@ -1,11 +1,11 @@
 // src/pages/EpisodeDetailPage.tsx
-import { getEpisode, ingestEpisode, isError404, listSpeakers, reingestEpisode } from '@/api/client'
+import { getEpisode, getFeed, ingestEpisode, isError404, listSpeakers, reingestEpisode } from '@/api/client'
 import { ChatInterface } from '@/components/ChatInterface'
 import { ExpandableDescription } from '@/components/ExpandableDescription'
 import { SpeakerRow } from '@/components/SpeakerRow'
 import { TranscriptViewer } from '@/components/TranscriptViewer'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardFooter } from '@/components/ui/card'
+
 import {
   ResizableHandle,
   ResizablePanel,
@@ -14,16 +14,18 @@ import {
 import { Separator } from '@/components/ui/separator'
 import StatusBadge from '@/components/ui/StatusBadge'
 import { useEpisodeStatus } from '@/hooks/useEpisodeStatus'
-import { ACTIVE_STATUSES, formatDate, formatDuration } from '@/lib/episode'
+import { formatDate, formatDuration } from '@/lib/date'
+import { ACTIVE_STATUSES } from '@/lib/episode'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { LoaderCircle, LucideCircleAlert, LucideCloudDownload, LucideCopy, LucideEllipsis, LucideMessageCircleDashed, LucideRefreshCw, LucideX, LucideXCircle, Sparkles } from 'lucide-react'
+import { LoaderCircle, LucideChevronLeft, LucideCircleAlert, LucideCloudDownload, LucideEllipsis, LucideMessageCircleDashed, LucideRefreshCw, LucideX, LucideXCircle, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 
 export default function EpisodeDetailPage() {
   const [chatOpen, setChatOpen] = useState(false)
   const chatPanelRef = usePanelRef()
+  const navigate = useNavigate()
 
   const toggleChat = () => {
     if (chatOpen) {
@@ -47,6 +49,12 @@ export default function EpisodeDetailPage() {
     enabled: !!episodeId && episode?.pipeline_status === 'READY',
   })
 
+  const { data: feed } = useQuery({
+    queryKey: ['feeds', episode?.feed_id],
+    queryFn: () => getFeed(episode!.feed_id),
+    enabled: !!episodeId && !!episode,
+  })
+
   const liveStatus = useEpisodeStatus(
     episode && ACTIVE_STATUSES.includes(episode.pipeline_status) ? episodeId! : null
   )
@@ -55,6 +63,7 @@ export default function EpisodeDetailPage() {
   const stage = liveStatus?.stage ?? episode?.pipeline_stage
   const progress = liveStatus?.progress ?? episode?.pipeline_progress
   const isActive = ACTIVE_STATUSES.includes(status ?? '')
+  const coverArt = feed?.image_url || null
 
   const ingestMutation = useMutation({
     mutationFn: () => ingestEpisode(episodeId!),
@@ -65,6 +74,7 @@ export default function EpisodeDetailPage() {
     mutationFn: () => reingestEpisode(episodeId!),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['episode', episodeId] }),
   })
+
 
   if (isLoading) return (
     <div className="p-6"><LucideEllipsis className='inline-block mr-2 animate-pulse' />Loading episode...</div>
@@ -86,103 +96,117 @@ export default function EpisodeDetailPage() {
     <ResizablePanelGroup orientation="horizontal" className="h-full">
       <ResizablePanel defaultSize="100%" minSize="50%">
         <div className="space-y-6 overflow-y-auto h-full p-6">
+          {feed &&
+            <Button variant="link" size="default"
+              className='px-0'
+              onClick={() => navigate(`/feeds/${feed.id}/episodes`)}>
+            <LucideChevronLeft />
+            {feed.title}
+          </Button>}
 
-          {/* Header row — replaces the back button */}
-          <div className="flex items-center justify-between">
-            <h1 className="font-bold">{episode.title ?? 'Untitled'}</h1>
-            {!chatOpen && (
-              <Button disabled={status !== "READY"} variant="outline" size="sm" onClick={toggleChat}>
-                <Sparkles className="h-4 w-4 mr-1" />
-                Ask AI
-              </Button>
-            )}
-          </div>
+          <div className='flex flex-row gap-4'>
 
-          <div className="flex items-start justify-between gap-4">
-            <div className="space-y-1">
-              <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                <span>{formatDate(episode.published_at)}</span>
-                <span>{formatDuration(episode.duration_seconds)}</span>
+            {/* Left column - cover art, if any */}
+            {coverArt && <div className='shrink-0'><img className="aspect-square w-54" src={coverArt} /></div>}
+
+            {/* Center - title, description, etc column */}
+            <div className='grow flex flex-col gap-2'>
+              <div className='flex flex-col gap-2 grow items-start'>
+                <h1 className="font-bold">{episode.title ?? 'Untitled'}</h1>
+
+                <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                  <span>{formatDate(episode.published_at)}</span>
+                  <span>{formatDuration(episode.duration_seconds)}</span>
+                </div>
+
+                {/* <CopyButton copyValue={episode.id} displayText={episode.id.slice(0, 4) + "..." + episode.id.slice(-4)} /> */}
               </div>
-              <Button variant="outline" onClick={() => navigator.clipboard.writeText(episode.id)}>
-                <LucideCopy />{episode.id}
-              </Button>
-            </div>
-            <div className='flex flex-col items-end gap-2'>
-              <Button
-                disabled={isActive || ingestMutation.isPending || reingestMutation.isPending}
-                onClick={() => status === 'READY' ? reingestMutation.mutate() : ingestMutation.mutate()}
-              >
-                {isActive ? <LoaderCircle className="animate-spin " /> : null}
 
-                {isActive ? 'Ingesting...' : status === 'READY' ? <><LucideRefreshCw />Reingest</> : <><LucideCloudDownload />Ingest</>}
-              </Button>
-
-              {status && status !== 'READY' && <StatusBadge status={status} />}
-            </div>
-          </div>
-          <Card>
-            <CardContent>
-              {episode && episode.description && episode.audio_url && (
-                <div className='flex flex-col gap-4'>
+              {episode && episode.audio_url && (
+                <div className=''>
                   <audio
                     src={episode.audio_url}
                     controls
                     className="mt-2 w-92 max-w-full h-8"
                   />
-
-                  <CardDescription>
-                    <ExpandableDescription collapsedLines={4} description={episode.description} />
-                  </CardDescription>
                 </div>
-            )}
+              )}
 
-            {isActive && stage && (
-              <p className="text-sm text-muted-foreground">
-                {stage}{progress != null ? ` — ${Math.round(progress * 100)}%` : ''}
-              </p>
-            )}
-            {ingestMutation.isError && (
-              <p className="text-sm text-destructive"><LucideXCircle className='inline-block mr-2'/>Failed to start ingestion. Please try again.</p>
-            )}
-            {reingestMutation.isError && (
-                <p className="text-sm text-destructive"><LucideXCircle className='inline-block mr-2' />Failed to reingest. Please try again.</p>
-            )}
-              <CardFooter>
+            </div>
 
-              </CardFooter>
-            </CardContent>
+            {/* Right / Buttons column */}
+            <div className={'flex flex-col ' + (!chatOpen ? 'justify-between' : 'justify-end')}>
+              {!chatOpen && (
+                <Button disabled={status !== "READY"} variant="outline" size="sm" onClick={toggleChat}>
+                  <Sparkles className="h-4 w-4 mr-1" />
+                  Ask AI
+                </Button>
+              )}
 
-          </Card>
+              <div className='flex flex-col items-end gap-2'>
+                <Button
+                  disabled={isActive || ingestMutation.isPending || reingestMutation.isPending}
+                  onClick={() => status === 'READY' ? reingestMutation.mutate() : ingestMutation.mutate()}
+                >
+                  {isActive ? <LoaderCircle className="animate-spin " /> : null}
 
-          {status === 'READY' && (
-            <>
-              <Separator />
-              <div className="space-y-2">
-                <h2 className="font-semibold">Speakers</h2>
-                {isSpeakersLoading && <div className='text-muted-foreground'>...</div>}
-                {speakersError && (
-                  <p className="text-sm text-muted-foreground">
-                    <LucideMessageCircleDashed className='inline-block mr-2' size={16} />
-                    Failed to load speakers.
-                  </p>
-                )}
-                {!isSpeakersLoading && !speakersError && !speakers?.length && (
-                  <p className="text-sm text-muted-foreground">No speakers identified.</p>
-                )}
-                {!speakersError && speakers?.map(speaker => (
-                  <SpeakerRow
-                    key={speaker.speaker_id}
-                    speaker={speaker}
-                    episodeId={episodeId}
-                  />
-                ))}
+                  {isActive ? 'Ingesting...' : status === 'READY' ? <><LucideRefreshCw />Reingest</> : <><LucideCloudDownload />Ingest</>}
+                </Button>
+
+                {status && ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
+
               </div>
-              <Separator />
-              <h2 className="font-semibold">Transcript</h2>
-              <TranscriptViewer episodeId={episodeId} />
-      </>
+
+            </div>
+          </div>
+
+          {episode && episode.description && (
+            <>
+              <h2 className="font-semibold">Summary</h2>
+              <ExpandableDescription collapsedLines={3} description={episode.description} />
+            </>
           )}
+
+        {isActive && stage && (
+          <p className="text-sm text-muted-foreground">
+            {stage}{progress != null ? ` — ${Math.round(progress * 100)}%` : ''}
+          </p>
+        )}
+        {ingestMutation.isError && (
+          <p className="text-sm text-destructive"><LucideXCircle className='inline-block mr-2'/>Failed to start ingestion. Please try again.</p>
+        )}
+        {reingestMutation.isError && (
+            <p className="text-sm text-destructive"><LucideXCircle className='inline-block mr-2' />Failed to reingest. Please try again.</p>
+        )}
+
+        {status === 'READY' && (
+          <>
+            <Separator />
+            <div className="space-y-2">
+              <h2 className="font-semibold">Speakers</h2>
+              {isSpeakersLoading && <div className='text-muted-foreground'>...</div>}
+              {speakersError && (
+                <p className="text-sm text-muted-foreground">
+                  <LucideMessageCircleDashed className='inline-block mr-2' size={16} />
+                  Failed to load speakers.
+                </p>
+              )}
+              {!isSpeakersLoading && !speakersError && !speakers?.length && (
+                <p className="text-sm text-muted-foreground">No speakers identified.</p>
+              )}
+              {!speakersError && speakers?.map(speaker => (
+                <SpeakerRow
+                  key={speaker.speaker_id}
+                  speaker={speaker}
+                  episodeId={episodeId}
+                />
+              ))}
+            </div>
+            <Separator />
+            <h2 className="font-semibold">Transcript</h2>
+            <TranscriptViewer episodeId={episodeId} />
+          </>
+        )}
 
           {status === 'PENDING' && (
             <p className="text-sm text-muted-foreground">

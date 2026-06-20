@@ -1,3 +1,5 @@
+# src/ingestion/feed_service.py
+from typing import Literal
 from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,12 +83,23 @@ async def refresh_feed(feed_id: UUID, db: AsyncSession) -> list[Episode]:
     return new_episodes
 
 
-async def list_feeds(db: AsyncSession) -> list[tuple[Feed, int]]:
-    result = await db.execute(
-        select(Feed, func.count(Episode.id).label("episode_count"))
+FeedSort = Literal["created_at", "latest_episode"]
+
+async def list_feeds(db: AsyncSession, sort: FeedSort = "created_at") -> list[tuple[Feed, int, datetime | None]]:
+    latest_episode = func.max(Episode.published_at).label("latest_episode_published_at")
+
+    query = (
+        select(Feed, func.count(Episode.id).label("episode_count"), latest_episode)
         .outerjoin(Episode, Episode.feed_id == Feed.id)
         .group_by(Feed.id)
     )
+
+    if sort == "latest_episode":
+        query = query.order_by(latest_episode.desc().nulls_last())
+    else:
+        query = query.order_by(Feed.created_at.desc())
+
+    result = await db.execute(query)
     return result.all()
 
 
@@ -111,6 +124,18 @@ async def list_episodes(feed_id: UUID, db: AsyncSession) -> list[Episode]:
         .order_by(Episode.published_at.desc())
     )
     return result.scalars().all()
+
+
+async def get_feed_stats(feed_id: UUID, db: AsyncSession) -> tuple[int, datetime | None]:
+    result = await db.execute(
+        select(
+            func.count(Episode.id),
+            func.max(Episode.published_at),
+        )
+        .where(Episode.feed_id == feed_id)
+    )
+    count, latest_episode = result.one()
+    return count, latest_episode
 
 
 async def get_episode(episode_id: UUID, db: AsyncSession) -> Episode | None:

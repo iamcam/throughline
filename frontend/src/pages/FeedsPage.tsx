@@ -1,12 +1,17 @@
 // src/pages/FeedsPage.tsx
 import { addFeed, deleteFeed, listFeeds, refreshFeed } from '@/api/client';
+import FeedKebab from '@/components/FeedKebab';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardFooter, CardHeader } from '@/components/ui/card';
+import { Card, CardTitle } from '@/components/ui/card';
+
 import { Input } from '@/components/ui/input';
+import { formatRelativeDate } from '@/lib/date';
+import { invalidateFeedAndEpisodes } from '@/lib/queryInvalidation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { LucideAlertCircle, LucideArrowUpRight, LucideCloudBackup, Trash } from 'lucide-react';
+import { LucideActivity, LucideAlertCircle, LucideArrowUpRight } from 'lucide-react';
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+
 
 export default function FeedsPage() {
     const [url, setUrl] = useState('')
@@ -33,7 +38,7 @@ export default function FeedsPage() {
 
     const refreshMutation = useMutation({
         mutationFn: refreshFeed,
-        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['feeds'] }),
+        onSuccess: (_, feedId) => invalidateFeedAndEpisodes(queryClient, feedId),
     })
 
     const handleAdd = () => {
@@ -43,7 +48,6 @@ export default function FeedsPage() {
 
     if (isLoading) return <div>Loading feeds...</div>
     if (isError) return <div className="p-6 text-sm text-destructive">Failed to load feeds. Is the backend running?</div>
-
 
     return (
         <div className="space-y-6 p-6">
@@ -79,52 +83,45 @@ export default function FeedsPage() {
 
             <div className="space-y-4">
                 {feeds?.map(feed => (
+                    <Card className='shadow-md' key={`feed-card-${feed.id}`}>
 
+                        <div className="flex gap-6 items-stretch px-(--card-spacing) ">
+                            {feed.image_url && (
+                                <Link to={`/feeds/${feed.id}/episodes`} className="shrink-0">
 
-                    <Card
-                        key={feed.id}
-                        onClick={() => navigate(`/feeds/${feed.id}/episodes`)}
-                    >
-                        <div className="flex gap-4 items-start px-(--card-spacing)">
-                          {feed.image_url && (
-                              <img className="aspect-square w-42"
-                                  src={feed.image_url}
-                              />
-                          )}
-                          <div className='w-full'>
-                            <CardHeader>
-                                <h1 className="text-2xl font-bold">{feed.title ?? feed.rss_url}</h1>
-                            </CardHeader>
-                            <CardContent>
-                                <p>{feed.episode_count} episodes</p>
+                                <img className="shadow-md aspect-square h-42 "
+                                    onClick={() => navigate(`/feeds/${feed.id}/episodes`)}
+                                    src={feed.image_url}
+                                />
+                                </Link>
+                            )}
+
+                            <div className='space-y-1'>
+                                <CardTitle>
+                                    <h1 className="text-2xl font-bold ">
+                                        <Link to={`/feeds/${feed.id}/episodes`}
+                                            className=' hover:text-cyan-500 transition-colors'>
+                                            {feed.title ?? feed.rss_url}
+                                        </Link>
+                                    </h1>
+                                </CardTitle>
+                                <div className='flex gap-2 items-center text-muted-foreground'>
+                                    <p>{feed.episode_count} episodes</p>
+                                    {feed.episode_count > 0 && (<p><LucideActivity size={12} /></p>)}
+                                    <p>{feed.latest_episode_published_at && formatRelativeDate(feed.latest_episode_published_at)}</p>
+                                </div>
                                 {feed.description && <p>{feed.description}</p>}
-                            </CardContent>
-                          </div>
-                          <LucideArrowUpRight className="shrink-0" />
+                            </div>
 
+                            <div className='flex flex-col justify-between  '>
+                                <Button size="icon" variant="outline" onClick={() => navigate(`/feeds/${feed.id}/episodes`)}>
+                                    <LucideArrowUpRight  />
+                                </Button>
+                                <FeedKebab feedTitle={feed.title}  feedId={feed.id} refreshMutation={refreshMutation} deleteMutation={deleteMutation} />
+                            </div>
                         </div>
-                        <CardFooter className="flex gap-6 justify-between">
-                          <div className="flex gap-6">
-                            <Button
-                              variant="outline"
-                              className=""
-                              disabled={refreshMutation.isPending}
-                              onClick={(e) => { e.stopPropagation(); refreshMutation.mutate(feed.id) }}
-                            >
-                              <LucideCloudBackup /> Refresh
-                            </Button>
-                          </div>
-                          <Button
-                          variant="destructive"
-                          size="icon"
-                          disabled={deleteMutation.isPending}
-                          onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(feed.id) }}
-                          >
-                            <Trash />
-                          </Button>
-                        </CardFooter>
-                        </Card>
 
+                    </Card>
                 ))}
             </div>
         </div>
