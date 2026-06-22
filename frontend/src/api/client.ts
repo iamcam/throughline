@@ -6,7 +6,7 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// -- Types ---------------------------------------------------------------------
 
 export interface Feed {
   id: string;
@@ -34,6 +34,7 @@ export interface Episode {
 }
 
 export interface TranscriptSegment {
+  id: string;
   speaker_id: string;
   display_name: string | null;
   text: string;
@@ -95,7 +96,7 @@ export interface ChatMessageResponse {
   citations: CitationResult[];
 }
 
-// ── Feeds ─────────────────────────────────────────────────────────────────────
+// -- Feeds ---------------------------------------------------------------------
 
 export const addFeed = (rss_url: string) =>
   api.post<Feed>("/feeds", { rss_url }).then((r) => r.data);
@@ -110,7 +111,7 @@ export const deleteFeed = (feedId: string) => api.delete(`/feeds/${feedId}`);
 export const refreshFeed = (feedId: string) =>
   api.post<Episode[]>(`/feeds/${feedId}/refresh`).then((r) => r.data);
 
-// ── Episodes ──────────────────────────────────────────────────────────────────
+// -- Episodes ------------------------------------------------------------------
 
 export const listEpisodes = (feedId: string) =>
   api.get<Episode[]>(`/feeds/${feedId}/episodes`).then((r) => r.data);
@@ -133,13 +134,15 @@ export const reingestEpisode = (episodeId: string, speakerCountHint?: number) =>
     .then((r) => r.data);
 
 
-// ── Transcript ────────────────────────────────────────────────────────────────
+// -- Transcript ----------------------------------------------------------------
 
 export const getTranscript = (episodeId: string) =>
   api.get<Transcript>(`/episodes/${episodeId}/transcript`).then((r) => r.data);
 
+export const deleteEpisodeTranscript = (episodeId: string) =>
+  api.delete(`/episodes/${episodeId}/transcript`);
 
-// ── Speakers ──────────────────────────────────────────────────────────────────
+// -- Speakers ------------------------------------------------------------------
 
 export const listSpeakers = (episodeId: string) =>
   api.get<Speaker[]>(`/episodes/${episodeId}/speakers`).then((r) => r.data);
@@ -154,7 +157,7 @@ export const updateSpeakers = (
   speakers: Pick<Speaker, "speaker_id" | "display_name">[]
 ) => api.put(`/episodes/${episodeId}/speakers`, speakers).then((r) => r.data);
 
-// ── Chat ──────────────────────────────────────────────────────────────────────
+// -- Chat ----------------------------------------------------------------------
 
 export const createChatSession = (
   scopeFeedIds: string[] = [],
@@ -178,7 +181,7 @@ export const deleteChatSession = (sessionId: string) =>
 export default api;
 
 
-// ── Error helpers ─────────────────────────────────────────────────────────────
+// -- Error helpers -------------------------------------------------------------
 
 export function isError404(error: unknown): boolean {
   return (

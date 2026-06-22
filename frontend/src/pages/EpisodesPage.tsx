@@ -1,5 +1,5 @@
 // src/pages/EpisodesPage.tsx
-import { deleteFeed, getFeed, ingestEpisode, isError404, listEpisodes, refreshFeed, reingestEpisode } from '@/api/client'
+import { deleteEpisodeTranscript, deleteFeed, getFeed, ingestEpisode, isError404, listEpisodes, refreshFeed, reingestEpisode } from '@/api/client'
 import { ChatInterface } from '@/components/ChatInterface'
 import { EpisodeRow } from '@/components/EpisodeRow'
 import FeedKebab from '@/components/FeedKebab'
@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/resizable'
 import { Separator } from '@/components/ui/separator'
 import { formatRelativeDate } from '@/lib/date'
-import { invalidateAfterFeedDelete, invalidateFeedAndEpisodes } from '@/lib/queryInvalidation'
+import { invalidateAfterFeedDelete, invalidateEpisode, invalidateFeedAndEpisodes } from '@/lib/queryInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { LucideActivity, LucideChevronLeft, LucideCircleAlert, LucideX, Sparkles } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -55,12 +55,17 @@ export default function EpisodesPage() {
 
   const ingestMutation = useMutation({
     mutationFn: (episodeId: string) => ingestEpisode(episodeId),
-    onSuccess: async () => await queryClient.invalidateQueries({ queryKey: ['episodes', feedId] }),
+    onSuccess: (_data, episodeId) => invalidateEpisode(queryClient, episodeId, feedId!),
   })
 
   const reingestMutation = useMutation({
     mutationFn: (episodeId: string) => reingestEpisode(episodeId),
-    onSuccess: async () => await queryClient.invalidateQueries({ queryKey: ['episodes', feedId] }),
+    onSuccess: (_data, episodeId) => invalidateEpisode(queryClient, episodeId, feedId!),
+  })
+
+  const deleteTranscriptMutation = useMutation({
+    mutationFn: (episodeId: string) => deleteEpisodeTranscript(episodeId),
+    onSuccess: (_data, episodeId) => invalidateEpisode(queryClient, episodeId, feedId!),
   })
 
   const refreshMutation = useMutation({
@@ -224,9 +229,10 @@ export default function EpisodesPage() {
                 key={episode.id}
                 episode={episode}
                 onIngest={(id) => ingestMutation.mutate(id)}
-                onReingest={(id) => reingestMutation.mutate(id)}
+                // onReingest={(id) => reingestMutation.mutate(id)}
                 link={`/episodes/${episode.id}`}
-              />
+                reingestMutation={reingestMutation}
+                deleteTranscriptMutation={deleteTranscriptMutation} />
             ))}
           </div>
 

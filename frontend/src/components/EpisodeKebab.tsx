@@ -1,4 +1,4 @@
-// src/components/FeedKebab.tsx
+// src/components/EpisodeKebab.tsx
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -19,41 +19,42 @@ import {
   AlertDialogTitle
 } from "@/components/ui/alert-dialog";
 
-
-import { LucideCloudBackup, LucideEllipsis, LucideTrash } from 'lucide-react';
+import { LucideEllipsis, LucideRefreshCw, LucideTrash } from 'lucide-react';
 
 import { useState } from 'react';
 
 
-interface MutationLike {
-  mutate: (feedId: string) => void;
+export interface MutationLike {
+  mutate: (episodeId: string) => void;
   isPending: boolean;
 }
 
-interface KebabPopoverProps {
-  feedId: string;
-  feedTitle?: string | null;
-  deleteMutation: MutationLike;
-  refreshMutation: MutationLike;
+interface EpisodeKebabProps {
+  disabled: boolean;
+  episodeId: string;
+  episodeTitle?: string | null;
+  reingestMutation: MutationLike;
+  deleteTranscriptMutation: MutationLike;
 }
 
-interface KebabDeleteProps {
+interface DeleteConfirmationProps {
   isOpen: boolean;
-  feedTitle?: string | null;
+  episodeTitle?: string | null;
   onDelete: () => void;
   onCancel: () => void;
 }
 
-function Confirmation({ isOpen, onDelete, onCancel, feedTitle }: KebabDeleteProps) {
+function Confirmation({ isOpen, onDelete, onCancel, episodeTitle }: DeleteConfirmationProps) {
   return (
     <AlertDialog open={isOpen}>
       <AlertDialogContent size="sm">
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete Feed?</AlertDialogTitle>
+          <AlertDialogTitle>Delete Transcript?</AlertDialogTitle>
           <AlertDialogDescription>
-            Are you sure you want to delete {!feedTitle && 'this feed?'}
-            {feedTitle && (<span className='text-primary block p-1 text-md font-semibold italic'>{feedTitle}?</span>)}
-            It will remove all episodes and transcription content.
+            Are you sure you want to delete the transcript for {
+              !episodeTitle ? 'this episode?' :
+                (<span className='text-primary block p-1 text-md font-semibold italic'>{episodeTitle}?</span>)
+            }
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -65,13 +66,13 @@ function Confirmation({ isOpen, onDelete, onCancel, feedTitle }: KebabDeleteProp
   )
 }
 
-export default function FeedKebab({ feedId, feedTitle, deleteMutation, refreshMutation }: KebabPopoverProps) {
+export default function EpisodeKebab({ disabled, episodeId, episodeTitle, reingestMutation, deleteTranscriptMutation }: EpisodeKebabProps) {
   const [isOpen, setIsOpen] = useState(false)
 
   const onDelete = () => {
-    if (deleteMutation.isPending) return;
+    if (deleteTranscriptMutation.isPending) return;
     setIsOpen(false);
-    deleteMutation.mutate(feedId)
+    deleteTranscriptMutation.mutate(episodeId)
   }
 
   const onCancel = () => {
@@ -80,27 +81,27 @@ export default function FeedKebab({ feedId, feedTitle, deleteMutation, refreshMu
 
   return (
     <div>
-      <Confirmation feedTitle={feedTitle} isOpen={isOpen} onDelete={onDelete} onCancel={onCancel}/>
+      <Confirmation episodeTitle={episodeTitle} isOpen={isOpen} onDelete={onDelete} onCancel={onCancel} />
       <DropdownMenu>
-        <DropdownMenuTrigger asChild disabled={deleteMutation.isPending || refreshMutation.isPending}>
-          <Button variant="outline"><LucideEllipsis /></Button>
+        <DropdownMenuTrigger asChild>
+          <Button disabled={disabled} variant="outline"><LucideEllipsis /></Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className='w-auto'>
           <DropdownMenuItem
-            disabled={refreshMutation.isPending}
-            onClick={() => {  refreshMutation.mutate(feedId) }}
+            disabled={reingestMutation.isPending}
+            onClick={() => { reingestMutation.mutate(episodeId) }}
           >
-            <LucideCloudBackup /> Refresh Feed
+            <LucideRefreshCw /> Reingest
           </DropdownMenuItem>
 
           <DropdownMenuSeparator />
 
           <DropdownMenuItem variant="destructive"
-            disabled={deleteMutation.isPending}
-            onClick={() => {  setIsOpen(true); }}
+            disabled={deleteTranscriptMutation.isPending}
+            onClick={() => { setIsOpen(true); }}
           >
             <LucideTrash />
-            Delete
+            Delete transcript
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

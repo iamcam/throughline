@@ -134,6 +134,13 @@ async def get_transcript(episode_id: UUID, db: AsyncSession = Depends(get_db)):
     )
 
 
+@router.delete("/{episode_id}/transcript", status_code=204)
+async def delete_episode_transcription_handler(episode_id: UUID, db: AsyncSession = Depends(get_db)):
+    deleted = await feed_service.delete_episode_transcription(episode_id, db)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Episode not found")
+
+
 @router.get("/{episode_id}/status", response_model=PipelineStatusUpdate)
 async def get_episode_status(episode_id: UUID, db: AsyncSession = Depends(get_db)):
     episode = await feed_service.get_episode(episode_id, db)
@@ -276,3 +283,4 @@ async def reingest_episode_handler(
         "job_id": job_id,
         "queue_position": position,
     }
+

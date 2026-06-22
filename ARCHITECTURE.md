@@ -984,11 +984,12 @@ new QueryClient({
 Feed-level mutations (refresh, delete) affect data cached under multiple, separate query keys — `['feeds']` (list), `['feed', feedId]` (detail), and `['episodes', feedId]` (episode list for that feed). A mutation invalidating only the query key for the page it's triggered from leaves the others stale; this happened independently in four places before being consolidated. Two shared helpers encode the relationship once:
 
 ```typescript
-invalidateFeedAndEpisodes(queryClient, feedId)   // refresh — all three keys still valid, just stale
-invalidateAfterFeedDelete(queryClient, feedId)   // delete — list key invalidated; detail/episode keys removed via removeQueries(), not invalidateQueries(), since the feed no longer exists
+invalidateFeedAndEpisodes(queryClient, feedId)       // feed refresh — all three keys still valid, just stale
+invalidateAfterFeedDelete(queryClient, feedId)       // feed delete — detail/episode keys removed via removeQueries(); list key invalidated
+invalidateEpisode(queryClient, episodeId, feedId)    // any single-episode mutation (reingest, transcript delete) — invalidates ['episode', episodeId] and ['episodes', feedId]; does not touch feed-level keys
 ```
 
-Any new mutation that changes feed-level or episode-level data should use these rather than inlining `invalidateQueries()` calls — the rule is about the data relationship (a feed and its episodes), not about which page or component triggers the change.
+Any new mutation that changes feed or episode data should use these helpers rather than inlining `invalidateQueries()` calls — the rule is about the data relationship, not about which page or component triggers the change. The `invalidateEpisode` helper was introduced in Phase 11 after the same missing-key bug (status not updating cross-page mid-ingestion) was found independently across four mutations.
 
 **App shell layout:**
 - `Layout.tsx` uses `h-screen flex flex-col` — nav takes natural height, `<main>` is `flex-1 overflow-auto p-6`
@@ -1303,7 +1304,8 @@ podcast-knowledge-engine/
 │   │   │   ├── ChatInterface.tsx    # Reusable chat UI; scopeFeedIds/scopeEpisodeIds props
 │   │   │   ├── CitationList.tsx     # Collapsible citations; audio playback via #t= fragment
 │   │   │   ├── ErrorBoundary.tsx    # Class component wrapping all routes
-│   │   │   ├── EpisodeRow.tsx       # Episode card; owns SSE connection; derives isActive from live status
+│   │   │   ├── EpisodeKebab.tsx     # Episode reingest/delete-transcript menu; AlertDialog confirm; MutationLike exported
+│   │   │   ├── EpisodeRow.tsx       # Episode card; owns SSE connection; EpisodeKebab when status !== PENDING
 │   │   │   ├── ExpandableDescription.tsx # Plain text preview + markdown expanded view
 │   │   │   ├── FeedKebab.tsx        # Reusable refresh/delete menu; AlertDialog confirm; narrow MutationLike prop type
 │   │   │   ├── Layout.tsx           # Nav shell; h-screen flex flex-col; main is flex-1 overflow-auto
@@ -1316,12 +1318,12 @@ podcast-knowledge-engine/
 │   │   ├── lib/
 │   │   │   ├── date.ts              # formatDate, formatDuration, formatRelativeDate (Intl.RelativeTimeFormat)
 │   │   │   ├── episode.ts           # ACTIVE_STATUSES; episode-specific logic only — date helpers moved to date.ts
-│   │   │   ├── queryInvalidation.ts # invalidateFeedAndEpisodes, invalidateAfterFeedDelete — shared feed↔episode cache rules
+│   │   │   ├── queryInvalidation.ts # invalidateFeedAndEpisodes, invalidateAfterFeedDelete, invalidateEpisode — shared cache invalidation rules
 │   │   │   ├── text.ts              # stripMarkdown()
 │   │   │   └── utils.ts             # shadcn cn() helper
 │   │   ├── pages/
 │   │   │   ├── ChatPage.tsx         # Thin wrapper around ChatInterface; lazy-loaded
-│   │   │   ├── EpisodeDetailPage.tsx # Full detail, ingest/reingest, speakers, transcript; resizable chat panel
+│   │   │   ├── EpisodeDetailPage.tsx # Full detail, ingest/EpisodeKebab (reingest + delete transcript), speakers, transcript; resizable chat panel
 │   │   │   ├── EpisodesPage.tsx     # List with search, filter, pagination; resizable chat panel
 │   │   │   └── FeedsPage.tsx        # Add/sort feeds; refresh/delete via FeedKebab
 │   │   ├── App.tsx                  # Route definitions; ErrorBoundary wraps routes; ChatPage lazy-loaded

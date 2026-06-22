@@ -18,3 +18,12 @@ export function invalidateAfterFeedDelete(
   queryClient.removeQueries({ queryKey: ["feed", feedId] });
   queryClient.removeQueries({ queryKey: ["episodes", feedId] });
 }
+
+export function invalidateEpisode(
+  queryClient: QueryClient,
+  episodeId: string,
+  feedId: string
+) {
+  queryClient.invalidateQueries({ queryKey: ["episode", episodeId] });
+  queryClient.invalidateQueries({ queryKey: ["episodes", feedId] });
+}

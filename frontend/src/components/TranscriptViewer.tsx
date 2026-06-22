@@ -2,7 +2,7 @@
 import { getTranscript } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { useQuery } from '@tanstack/react-query'
-import { LucideChevronDown, LucideChevronUp } from 'lucide-react'
+import { LucideChevronDown, LucideChevronRight, LucideChevronUp } from 'lucide-react'
 import { useState } from 'react'
 
 const COLLAPSED_SEGMENTS = 6
@@ -39,11 +39,11 @@ export function TranscriptViewer({ episodeId, collapsedSegments = COLLAPSED_SEGM
           className="px-0 h-auto text-muted-foreground"
           onClick={() => setExpanded(e => !e)}
         >
-          <LucideChevronUp /> Show less
+          <LucideChevronDown /> Show less
         </Button>
       )}
       {visible.map((seg) => (
-        <div key={seg.sequence_order} className="text-sm">
+        <div key={`${seg.sequence_order}`} className="text-sm">
           {/* <span className="text-muted-foreground font-medium">
             {seg.display_name ?? seg.speaker_id}
           </span> */}
@@ -52,14 +52,14 @@ export function TranscriptViewer({ episodeId, collapsedSegments = COLLAPSED_SEGM
       ))}
       {canCollapse && (
         <>
-          {expanded ? null : <div>...</div>}
+
           <Button
           variant="link"
           size="sm"
           className="px-0 h-auto text-muted-foreground"
           onClick={() => setExpanded(e => !e)}
           >
-            {expanded ? <LucideChevronUp /> : <LucideChevronDown />}
+            {expanded ? <LucideChevronUp /> : <LucideChevronRight />}
 
             {expanded
               ? 'Show less'

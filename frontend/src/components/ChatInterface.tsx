@@ -10,7 +10,7 @@ import { LucideCircleAlert, LucidePodcast } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// -- Types --------------------------------------------------------------------─
 
 interface Message {
   id: string
@@ -20,7 +20,7 @@ interface Message {
   isThinking?: boolean
 }
 
-// ── MessageBubble ─────────────────────────────────────────────────────────────
+// -- MessageBubble ------------------------------------------------------------─
 
 function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === 'user'
@@ -57,7 +57,7 @@ function MessageBubble({ message }: { message: Message }) {
   )
 }
 
-// ── ChatInterface ─────────────────────────────────────────────────────────────
+// -- ChatInterface ------------------------------------------------------------─
 
 interface ChatInterfaceProps {
   scopeFeedIds?: string[]

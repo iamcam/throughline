@@ -1,5 +1,7 @@
 // src/components/EpisodeRow.tsx
 import type { Episode } from '@/api/client'
+import EpisodeKebab, { type MutationLike } from '@/components/EpisodeKebab'
+
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import StatusBadge from '@/components/ui/StatusBadge'
@@ -7,19 +9,19 @@ import { useEpisodeStatus } from '@/hooks/useEpisodeStatus'
 import { formatDate, formatDuration } from '@/lib/date'
 import { ACTIVE_STATUSES } from '@/lib/episode'
 import { stripMarkdown } from '@/lib/text'
-import { LoaderCircle, LucideArrowUpRight, LucideCloudDownload, LucideRefreshCw, LucideSparkles } from 'lucide-react'
+import { LucideArrowUpRight, LucideCloudDownload, LucideLoaderCircle, LucideSparkles } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 
 interface EpisodeRowProps {
   episode: Episode
   onIngest: (episodeId: string) => void
-  onReingest: (episodeId: string) => void
+  reingestMutation: MutationLike
+  deleteTranscriptMutation: MutationLike
   link: string
 }
 
-
-export function EpisodeRow({ episode, link, onIngest, onReingest }: EpisodeRowProps) {
+export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTranscriptMutation }: EpisodeRowProps) {
 
   const liveStatus = useEpisodeStatus(ACTIVE_STATUSES.includes(episode.pipeline_status) ? episode.id : null)
   const status = liveStatus?.status ?? episode.pipeline_status
@@ -61,26 +63,44 @@ export function EpisodeRow({ episode, link, onIngest, onReingest }: EpisodeRowPr
         <div className="flex justify-end items-center">
 
           <div className="flex flex-col items-end gap-2">
+
+            {status === "PENDING" ? (
               <Button
-              disabled={isActive}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (status === 'READY') onReingest(episode.id)
-                else onIngest(episode.id);
-              }}
+                disabled={isActive}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onIngest(episode.id);
+                }}
               >
-              {isActive ? <LoaderCircle className="animate-spin " /> : null}
-              {isActive ? 'Ingesting...' : status === 'READY' ? <><LucideRefreshCw />Reingest</> : <><LucideCloudDownload />Ingest</>}
-            </Button>
-            {ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
+                <LucideCloudDownload />Ingest
+              </Button>
+            ) : undefined}
+
+            {ACTIVE_STATUSES.includes(status) ? (
+              <div className='flex items-end gap-2'>
+              {ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
+              <Button size="icon" variant="outline" disabled={true}><LucideLoaderCircle className='animate-spin' /></Button>
+              </div>
+            ) : (status === "READY" ? (
+              <EpisodeKebab
+                disabled={isActive}
+                episodeId={episode.id}
+                episodeTitle={episode.title}
+                reingestMutation={reingestMutation}
+                deleteTranscriptMutation={deleteTranscriptMutation}
+              />
+            ) : undefined)
+            }
+
 
           </div>
         </div>
-        <div className="flex items-center gap-2 ">
-          {/* <Button variant="outline" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(episode.id) }}>
-            <Copy />{episode.id.slice(0,5)} … {episode.id.slice(-5)}
-          </Button> */}
-        </div>
+        {/* Episode ID copy button */}
+        {/* <div className="flex items-center gap-2 ">
+          <Button variant="outline" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(episode.id) }}>
+            <LucideCopy />{episode.id.slice(0,5)} … {episode.id.slice(-5)}
+          </Button>
+        </div> */}
       </CardContent>
     </Card>
   )

@@ -167,19 +167,8 @@ remote backend simultaneously.
 
 ---
 
-### 1.8 Episode Delete
-
-**What it is:** Delete an ingested episode and all associated data — transcript segments, chunks, embeddings, speaker rows — from the DB.
-
-**Why deferred from Phase 7:** Requires both frontend (confirmation UI) and backend (DELETE endpoint with cascade through all tables). The cascade deletes are already defined in the schema so the DB side is straightforward. The frontend needs a confirmation step to avoid accidental deletion of ingested content.
-
-**Implementation path:**
-- Backend: `DELETE /api/v1/episodes/{episode_id}` — cascade handles transcript_segments, chunks, episode_speakers
-- Frontend: confirmation dialog (shadcn AlertDialog) on the episode card and detail page
-- Update `listEpisodes` cache after successful delete
-
-**Effort:** Half a day
-**Note:** Low novelty but a meaningful product gap — users currently cannot clean up episodes they no longer want.
+### 1.8 Episode Transcript Delete
+Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
 
 ---
 
@@ -380,21 +369,7 @@ Same codebase, different entry point. The worker imports the same pipeline code,
 ---
 
 ### 2.6 LLM Request Timeout
-
-**What it is:** Wrap `llm.complete()` calls in `asyncio.wait_for()` with a configurable timeout. Return a graceful "request timed out" response rather than hanging indefinitely.
-
-**Why it matters:** Currently observed in practice — slow local models on complex multi-round queries hold the HTTP connection open indefinitely. Simple fix with meaningful UX improvement.
-
-**Implementation path:**
-```python
-response = await asyncio.wait_for(
-    self._llm.complete(messages, tools=TOOLS),
-    timeout=settings.llm_timeout_seconds
-)
-```
-
-**Effort:** 1 hour
-**Note:** Low effort, high value for local model usage. Good quick win — do this before anything else.
+Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
 
 ---
 
@@ -458,19 +433,18 @@ response = await asyncio.wait_for(
 
 If you finish v1 and want to keep going, this is the highest-value sequence:
 
-1. **LLM request timeout** — 1 hour, immediately improves local model UX; do this first, it's trivial
-2. **Episode delete** — half a day, meaningful product gap (no way to remove ingested content); confirmation pattern already proven via FeedKebab/AlertDialog
-3. **Decoupled worker queue (ARQ)** — 1 weekend, eliminates ingestion/query resource contention; enables overnight batch processing; unlocks everything that depends on reliable background work
-4. **Query rewriting** — 1 day, directly improves retrieval quality on vague and follow-up queries; measurable before/after in Phoenix
-5. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models; pairs well with the decoupled worker since the API is now free to stream
-6. **Episode summarization** — 1 weekend, shows a two-level LLM pipeline; good interview story; useful day-to-day
-7. **Persistent conversations** — 1 weekend, turns the tool into a research companion; Protocol means it's a one-file swap
-8. **Remote transcription + diarization** — pairs with 1.5; choose one provider and validate end-to-end
-9. **Automatic feed polling** — 1 weekend, natural complement to the worker queue; don't build before 3
-10. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
-11. **Temporal reasoning** — unique angle, memorable demo
-12. **Graph RAG** — the "big" upgrade, strongest architectural story
-13. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
+1. **Decoupled worker queue (ARQ)** — 1 weekend, eliminates ingestion/query resource contention; enables overnight batch processing; unlocks everything that depends on reliable background work
+2. **Query rewriting** — 1 day, directly improves retrieval quality on vague and follow-up queries; measurable before/after in Phoenix
+3. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models; pairs well with the decoupled worker since the API is now free to stream
+4. **Episode summarization** — 1 weekend, shows a two-level LLM pipeline; good interview story; useful day-to-day
+5. **Persistent conversations** — 1 weekend, turns the tool into a research companion; Protocol means it's a one-file swap
+6. **Remote transcription + diarization** — pairs with 1.5; choose one provider and validate end-to-end
+7. **Automatic feed polling** — 1 weekend, natural complement to the worker queue; don't build before 1
+8. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
+9. **Temporal reasoning** — unique angle, memorable demo
+10. **Graph RAG** — the "big" upgrade, strongest architectural story
+11. **Multi-feed persona synthesis** — the killer demo feature
+    (plumbing already done in Phase 6)
 
 **On sequencing:** The decoupled worker (ARQ) is deliberately early rather than later — it's infrastructure that makes everything else better. Batch ingestion becomes viable, the API becomes responsive during heavy work, and automatic polling (item 9) requires it anyway. Getting it in early pays dividends across all subsequent work.
 

@@ -1610,6 +1610,9 @@ Found and fixed the same bug independently in four places: a mutation invalidati
 
 ---
 
+
+---
+
 ## Agent-Assisted Development Guide
 
 **DO give the agent:**
@@ -1655,20 +1658,58 @@ Test that BackgroundTaskQueue satisfies the IngestionQueue Protocol."
 
 ---
 
+## Phase 11 — LLM Timeout + Episode Transcript Delete
+
+### 11.1 LLM request timeout
+- `src/query/engine.py` — `LLM_REQUEST_TIMEOUT_SECONDS = 60.0`; `LLMTimeoutError(Exception)`; both `llm_client.complete()` call sites wrapped in `asyncio.wait_for()`; `asyncio.TimeoutError` re-raised as `LLMTimeoutError`; entire `chat()` body wrapped in a custom `"chat"` tracing span (`session.id`, `chat.tool_rounds_used`, `chat.citation_count` on success; `record_exception` + `span.set_status(trace.StatusCode.ERROR)` on exception); requires both `from opentelemetry import trace` (for `StatusCode`) and `from src.telemetry.tracer import tracer` (for `.start_as_current_span()`)
+- `src/api/routers/chat.py` — `LLMTimeoutError` caught in `send_message`, mapped to `504 Gateway Timeout`
+- `ARCHITECTURE.md` — tech debt callout replaced with description of what shipped; row removed from Upgrade Path table
+
+### 11.2 Episode transcript delete
+- `src/ingestion/feed_service.py` — `delete_episode_transcription(episode_id, db) -> bool`; existence check via `get_episode()` first (child tables may have zero rows for a valid never-ingested episode); bulk-deletes `Chunk`, `TranscriptSegment`, `EpisodeSpeaker`; resets `pipeline_status="PENDING"`, clears `pipeline_stage`, `pipeline_progress`, `pipeline_error`, `ingestion_job_id`; episode row preserved
+- `src/api/routers/episodes.py` — `DELETE /{episode_id}/transcript` → `204`/`404`
+- `src/api/client.ts` — `deleteEpisodeTranscript(episodeId)`
+- `src/lib/queryInvalidation.ts` — `invalidateEpisode(queryClient, episodeId, feedId)` invalidates `['episode', episodeId]` and `['episodes', feedId]`; replaces inconsistent ad-hoc inline invalidation across both pages; fixes cross-page status staleness mid-ingestion
+- `src/components/EpisodeKebab.tsx` — new; Reingest + Delete transcript menu items; `disabled` prop for external pipeline-active state; `MutationLike` exported; `AlertDialog` confirmation before delete; correct `isPending` guard polarity (`if (isPending) return`, not `if (!isPending) return`)
+- `src/components/FeedKebab.tsx` — fixed inverted `isPending` guard in `onDelete` (was preventing delete from ever firing under normal use)
+- `src/components/EpisodeRow.tsx` — `onReingest` removed; `reingestMutation`/`deleteTranscriptMutation: MutationLike` added; `EpisodeKebab` rendered conditionally when `status !== 'PENDING'`, disabled when `isActive`
+- `src/pages/EpisodesPage.tsx` — `deleteTranscriptMutation` added; `reingestMutation.onSuccess` updated to `invalidateEpisode`
+- `src/pages/EpisodeDetailPage.tsx` — `EpisodeKebab` integrated; `ingestMutation`, `reingestMutation`, `deleteTranscriptMutation` all use `invalidateEpisode`
+
+### Decisions made
+- **Transcript delete not episode delete** — a true episode delete would be resurrected on next feed refresh via `guid` upsert; correct behavior is to wipe derived pipeline output and reset to `PENDING`
+- **Bulk DELETE statements** not ORM `db.delete(episode_obj)` — DB-level `ON DELETE CASCADE` confirmed on all three child FK constraints (`pg_constraint`, `confdeltype='c'`); bulk style matches existing `reingest_episode_handler` pattern; SQLAlchemy model also carries `cascade="all, delete-orphan"` on the relationships (ORM-level, correct but effectively redundant given the DB constraint)
+- **`invalidateEpisode` as shared helper** — four mutations across two pages had inconsistent invalidation key coverage; same rationale as Phase 10.1's `queryInvalidation.ts` consolidation
+- **`LLMTimeoutError` defined in `engine.py`** not a separate `exceptions.py` — single consumer, no exceptions-module convention in this codebase
+- **Per-call timeout not whole-request** — each `complete()` call gets its own 60s budget; `asyncio.wait_for` cancellation tears down the in-flight request, not just abandons the wait; session never saved on timeout so no partial state accumulates
+
+### Known issues / tech debt noted
+- `EpisodeDetailPage` button area needs a cleanup pass — debug elements remain (e.g. `<div>status: {status}</div>`)
+- `ExpandableDescription` toggle renders unconditionally — carried from Phase 10.1
+- No feed-level error/health signal — carried from Phase 10.1
+- `FeedKebab` double-fire guard on `AlertDialogAction` — carried from Phase 10.1
+- `WHISPER_MODEL_SIZE` in `OPERATIONS.md` — carried from Phase 10
+
+### Next session starts here
+1. Decoupled worker queue (ARQ + Redis) — replaces `BackgroundTaskQueue`; eliminates no-cancellation tech debt; foundation for automatic feed polling and batch ingestion; see `FUTURE_SCOPE.md` section 2.1
+
+---
+
 ## Milestone Summary
 
-| Tag                         | What Works                                                                                   |
-| --------------------------- | -------------------------------------------------------------------------------------------- |
-| `v0.1.0-scaffold`           | Health endpoint, DB connected                                                                |
-| `v0.1.1-feeds`              | RSS ingestion, episode listing, queue abstraction                                            |
-| `v0.1.2-transcription`      | Transcription pipeline, SSE status streaming                                                 |
-| `v0.1.3-speakers`           | LLM speaker inference with confidence; pipeline runs straight to READY                       |
-| `v0.1.4-chunking`           | Chunks + embeddings, speaker_id preserved, short segment merging                             |
-| `v0.1.5-basic-rag`          | Simple Q&A with resolved speaker names; parent_text used for LLM context                     |
-| `v0.1.6-tool-calling`       | Multi-turn chat, tool-calling, conditional retrieval, multi-feed scope                       |
-| `v0.1.7-frontend-ingestion` | Browser-based ingestion with SSE progress                                                    |
-| `v0.1.8-frontend-chat`      | Full product in browser; chat in three contexts; resizable panels; citations with audio      |
-| `v0.1.9-observability`      | OTel traces via Phoenix; LLM, retrieval, pipeline, speaker inference all traced              |
-| `v0.2.1`                    | Transcript viewer, speaker name removal                                                      |
-| `v0.2.1-app-polish`         | Feed sort by latest episode, FeedKebab menu, cache invalidation fixes, pagination scroll fix |
-| `v1.0.0`                    | Shippable, documented, demo-ready                                                            |
+| Tag                                   | What Works                                                                                   |
+| ------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `v0.1.0-scaffold`                     | Health endpoint, DB connected                                                                |
+| `v0.1.1-feeds`                        | RSS ingestion, episode listing, queue abstraction                                            |
+| `v0.1.2-transcription`                | Transcription pipeline, SSE status streaming                                                 |
+| `v0.1.3-speakers`                     | LLM speaker inference with confidence; pipeline runs straight to READY                       |
+| `v0.1.4-chunking`                     | Chunks + embeddings, speaker_id preserved, short segment merging                             |
+| `v0.1.5-basic-rag`                    | Simple Q&A with resolved speaker names; parent_text used for LLM context                     |
+| `v0.1.6-tool-calling`                 | Multi-turn chat, tool-calling, conditional retrieval, multi-feed scope                       |
+| `v0.1.7-frontend-ingestion`           | Browser-based ingestion with SSE progress                                                    |
+| `v0.1.8-frontend-chat`                | Full product in browser; chat in three contexts; resizable panels; citations with audio      |
+| `v0.1.9-observability`                | OTel traces via Phoenix; LLM, retrieval, pipeline, speaker inference all traced              |
+| `v0.2.1`                              | Transcript viewer, speaker name removal                                                      |
+| `v0.2.1-app-polish`                   | Feed sort by latest episode, FeedKebab menu, cache invalidation fixes, pagination scroll fix |
+| `v0.2.2-timeout-transcript-delete`    | Added llm timeout and transcript delete capability                                           |
+| `v1.0.0`                              | (TBD) Shippable, documented, demo-ready                                                      |

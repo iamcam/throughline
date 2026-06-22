@@ -20,7 +20,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-// ── EpisodeRowShort ───────────────────────────────────────────────────────────
+// -- EpisodeRowShort ----------------------------------------------------------─
 
 function EpisodeRowShort({ episode }: { episode: Episode }) {
   return (
@@ -36,7 +36,7 @@ function EpisodeRowShort({ episode }: { episode: Episode }) {
   )
 }
 
-// ── FeedAccordionItem ─────────────────────────────────────────────────────────
+// -- FeedAccordionItem --------------------------------------------------------─
 
 function FeedAccordionItem({ feed, onNavigate }: { feed: Feed; onNavigate: (path: string) => void }) {
   const { data: episodes } = useQuery({
@@ -113,7 +113,7 @@ function FeedAccordionItem({ feed, onNavigate }: { feed: Feed; onNavigate: (path
   )
 }
 
-// ── SearchFilterList ──────────────────────────────────────────────────────────
+// -- SearchFilterList ----------------------------------------------------------
 
 interface SearchFilterListProps {
   open: boolean

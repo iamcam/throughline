@@ -1,6 +1,7 @@
 // src/pages/EpisodeDetailPage.tsx
-import { getEpisode, getFeed, ingestEpisode, isError404, listSpeakers, reingestEpisode } from '@/api/client'
+import { deleteEpisodeTranscript, getEpisode, getFeed, ingestEpisode, isError404, listSpeakers, reingestEpisode } from '@/api/client'
 import { ChatInterface } from '@/components/ChatInterface'
+import EpisodeKebab from '@/components/EpisodeKebab'
 import { ExpandableDescription } from '@/components/ExpandableDescription'
 import { SpeakerRow } from '@/components/SpeakerRow'
 import { TranscriptViewer } from '@/components/TranscriptViewer'
@@ -16,8 +17,9 @@ import StatusBadge from '@/components/ui/StatusBadge'
 import { useEpisodeStatus } from '@/hooks/useEpisodeStatus'
 import { formatDate, formatDuration } from '@/lib/date'
 import { ACTIVE_STATUSES } from '@/lib/episode'
+import { invalidateEpisode } from '@/lib/queryInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { LoaderCircle, LucideChevronLeft, LucideCircleAlert, LucideCloudDownload, LucideEllipsis, LucideMessageCircleDashed, LucideRefreshCw, LucideX, LucideXCircle, Sparkles } from 'lucide-react'
+import { LucideChevronLeft, LucideCircleAlert, LucideCloudDownload, LucideEllipsis, LucideLoaderCircle, LucideMessageCircleDashed, LucideX, LucideXCircle, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -67,14 +69,18 @@ export default function EpisodeDetailPage() {
 
   const ingestMutation = useMutation({
     mutationFn: () => ingestEpisode(episodeId!),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['episode', episodeId] }),
+    onSuccess: () => invalidateEpisode(queryClient, episodeId!, episode!.feed_id),
   })
 
   const reingestMutation = useMutation({
-    mutationFn: () => reingestEpisode(episodeId!),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['episode', episodeId] }),
+    mutationFn: (episodeId: string) => reingestEpisode(episodeId),
+    onSuccess: (_data, episodeId) => invalidateEpisode(queryClient, episodeId, episode!.feed_id),
   })
 
+  const deleteTranscriptMutation = useMutation({
+    mutationFn: (episodeId: string) => deleteEpisodeTranscript(episodeId),
+    onSuccess: (_data, episodeId) => invalidateEpisode(queryClient, episodeId, episode!.feed_id),
+  })
 
   if (isLoading) return (
     <div className="p-6"><LucideEllipsis className='inline-block mr-2 animate-pulse' />Loading episode...</div>
@@ -92,10 +98,10 @@ export default function EpisodeDetailPage() {
     </div>
   )
 
-  return (
+  if( status ) return (
     <ResizablePanelGroup orientation="horizontal" className="h-full">
-      <ResizablePanel defaultSize="100%" minSize="50%">
-        <div className="space-y-6 overflow-y-auto h-full p-6">
+      <ResizablePanel defaultSize="100%" minSize="50%" className='scrollbar-thin'>
+        <div className="space-y-6 h-full p-6 ">
           {feed &&
             <Button variant="link" size="default"
               className='px-0'
@@ -135,7 +141,7 @@ export default function EpisodeDetailPage() {
             </div>
 
             {/* Right / Buttons column */}
-            <div className={'flex flex-col ' + (!chatOpen ? 'justify-between' : 'justify-end')}>
+            <div className={'flex flex-col items-end ' + (!chatOpen ? 'justify-between' : 'justify-end')}>
               {!chatOpen && (
                 <Button disabled={status !== "READY"} variant="outline" size="sm" onClick={toggleChat}>
                   <Sparkles className="h-4 w-4 mr-1" />
@@ -144,16 +150,32 @@ export default function EpisodeDetailPage() {
               )}
 
               <div className='flex flex-col items-end gap-2'>
-                <Button
-                  disabled={isActive || ingestMutation.isPending || reingestMutation.isPending}
-                  onClick={() => status === 'READY' ? reingestMutation.mutate() : ingestMutation.mutate()}
-                >
-                  {isActive ? <LoaderCircle className="animate-spin " /> : null}
 
-                  {isActive ? 'Ingesting...' : status === 'READY' ? <><LucideRefreshCw />Reingest</> : <><LucideCloudDownload />Ingest</>}
-                </Button>
+                {status === "PENDING" && (
+                  <Button
+                    disabled={isActive}
+                    onClick={() => ingestMutation.mutate()}
+                  >
+                    <LucideCloudDownload />Ingest
+                  </Button>
+                )}
 
-                {status && ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
+              {ACTIVE_STATUSES.includes(status) ? (
+                <div className='flex items-end gap-2'>
+                {ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
+                <Button size="icon" variant="outline" disabled={true}><LucideLoaderCircle className='animate-spin' /></Button>
+                </div>
+              ) : (status === "READY" ? (
+                <EpisodeKebab
+                  disabled={isActive}
+                  episodeId={episode.id}
+                  episodeTitle={episode.title}
+                  reingestMutation={reingestMutation}
+                  deleteTranscriptMutation={deleteTranscriptMutation}
+                />
+              ) : undefined)
+              }
+
 
               </div>
 
@@ -201,6 +223,9 @@ export default function EpisodeDetailPage() {
                   episodeId={episodeId}
                 />
               ))}
+                {!speakersError && speakers && (
+                  <div className='text-xs text-muted-foreground' >Speaker names are inferred and may contain mistakes. Pleae verify.</div>
+                )}
             </div>
             <Separator />
             <h2 className="font-semibold">Transcript</h2>

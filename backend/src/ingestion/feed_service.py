@@ -3,9 +3,9 @@ from typing import Literal
 from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete, update
 from uuid import UUID
-from src.models.db import Feed, Episode
+from src.models.db import EpisodeSpeaker, Feed, Episode, Chunk, TranscriptSegment
 from src.ingestion.rss_parser import parse_feed
 
 
@@ -141,3 +141,27 @@ async def get_feed_stats(feed_id: UUID, db: AsyncSession) -> tuple[int, datetime
 async def get_episode(episode_id: UUID, db: AsyncSession) -> Episode | None:
     result = await db.execute(select(Episode).where(Episode.id == episode_id))
     return result.scalar_one_or_none()
+
+
+async def delete_episode_transcription(episode_id: UUID, db: AsyncSession) -> bool:
+    episode = await get_episode(episode_id, db)
+    if episode is None:
+        return False
+
+    await db.execute(delete(Chunk).where(Chunk.episode_id == episode_id))
+    await db.execute(delete(TranscriptSegment).where(TranscriptSegment.episode_id == episode_id))
+    await db.execute(delete(EpisodeSpeaker).where(EpisodeSpeaker.episode_id == episode_id))
+
+    await db.execute(
+        update(Episode)
+        .where(Episode.id == episode_id)
+        .values(
+            pipeline_status="PENDING",
+            pipeline_stage=None,
+            pipeline_progress=None,
+            pipeline_error=None,
+            ingestion_job_id=None,
+        )
+    )
+    await db.commit()
+    return True
