@@ -1,0 +1,12 @@
+[project]
+name = "diarization"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mlx-audio>=0.4.4",
+    "mlx-qwen3-asr[diarize]>=0.3.5",
+    "mlx-whisper>=0.4.3",
+    "pyannote-audio>=4.0.5",
+]

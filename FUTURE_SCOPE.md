@@ -82,9 +82,18 @@ Rewritten query: "Marcus Webb views on consciousness and AI"
 
 ### 1.5 Speaker Diarization + Full Speaker Identity
 
-**What it is:** Determine who is speaking at each moment in an episode, producing real `SPEAKER_00`, `SPEAKER_01`, etc. labels. This is the prerequisite for meaningful multi-speaker speaker filtering in chat queries ("what does the guest think about X?").
+**What it is:** Determine who is speaking at each moment in an episode, producing real `SPEAKER_00`, `SPEAKER_01`, etc. labels. This is the prerequisite for meaningful multi-speaker filtering in chat queries ("what does the guest think about X?").
 
-**Why deferred from v1:** CPU/local diarization via Pyannote is impractical on non-CUDA hardware — 2–4× real-time means a 2-hour episode takes 4–8 hours to diarize on CPU. v1 uses `UNKNOWN` as the speaker sentinel for all segments. `SpeakerResolver` attempts to infer a single host name from the intro, which covers single-host podcasts adequately. Multi-speaker attribution waits for this work.
+**Why deferred from v1:** Diarization feasibility was unproven on local hardware at the time. v1 uses `UNKNOWN` as the speaker sentinel for all segments. `SpeakerResolver` attempts to infer a single host name from the intro, which covers single-host podcasts adequately. Multi-speaker attribution waits for this work.
+
+**Feasibility verdict (June 2026 experiment):** Local diarization on Apple Silicon is now fast enough to be the default path. Benchmarks on a 3-speaker sample (89s, 16kHz mono WAV):
+
+| Model                                      | Backend       | Time/min audio | Notes                          |
+| ------------------------------------------ | ------------- | -------------- | ------------------------------ |
+| pyannote/speaker-diarization-community-1   | CPU (PyTorch) | 36.2s/min      | Gated HF model, no Metal path  |
+| mlx-community/diar_sortformer_4spk-v1-fp16 | MLX/Metal ✅   | 0.07s/min      | 500x faster, no token required |
+
+For a 1-hour episode: pyannote = ~36 min wall time; Sortformer MLX = ~4 seconds. See `experiments/diarization/` for full benchmark scripts and findings.
 
 **What changes when this lands:**
 
@@ -98,23 +107,40 @@ Rewritten query: "Marcus Webb views on consciousness and AI"
 
 *Speaker name resolution in `ToolDispatcher`:* Already scoped to session feed IDs (implemented Phase 6). With real diarization, `speaker_id` values are episode-scoped — the same person across two episodes will have the same display name but different `speaker_id` values. The existing resolution query handles this correctly.
 
-**Implementation backends (choose one to start):**
+**Alignment step (new):** Whisper outputs transcript segments with `start`/`end` timestamps. The diarization model outputs speaker turns with `start`/`end`. A post-processing alignment step assigns a `speaker_id` to each transcript segment by finding the speaker turn with maximum timestamp overlap. O(n×m) scan is sufficient for podcast-length audio.
 
-- **Local Pyannote (CUDA required):** `pyannote/speaker-diarization-3.1`. Fast on GPU, impractical on CPU. Requires `HUGGINGFACE_TOKEN`. Already stubbed in `src/transcription/local.py`.
-- **OpenAI Whisper API with diarization:** Single API call returns both transcript and speaker turns. Simplest path if already using OpenAI for LLM. Implement in `RemoteTranscriptionService`.
-- **Generic remote sidecar:** Docker container running Whisper + Pyannote on GPU. HTTP contract mirrors existing `TRANSCRIPTION_SERVICE_URL` pattern. Good for self-hosted GPU.
-- **Cloud GPU providers (RunPod, Modal):** POST audio, receive `TranscriptResult`-compatible JSON. One-weekend implementation per provider.
-
-**Configuration when implemented:**
-```
-DIARIZATION_BACKEND=local|remote
-DIARIZATION_MODEL=pyannote/speaker-diarization-3.1   # local backend
-# Remote backend uses TRANSCRIPTION_SERVICE_URL
+**Speaker label normalization:** Sortformer returns integer speaker IDs (`0, 1, 2`). Normalize to project convention on output:
+```python
+speaker_id = f"SPEAKER_{seg.speaker:02d}"
 ```
 
-**Effort:** 1–2 weekends depending on backend choice. OpenAI API path is fastest.
+**Implementation backends:**
 
-**Interview story:** "I deferred diarization because Pyannote on CPU was a 4-hour wall on a 2-hour episode. I used `UNKNOWN` as an honest sentinel rather than `SPEAKER_00` — that distinction matters when you want to identify which old episodes need re-ingesting after diarization lands. Here's the re-ingestion path."
+- **Local CPU (any machine):** `pyannote/speaker-diarization-community-1` via `pyannote.audio`. Requires `HF_TOKEN`. Slow on CPU (36s/min) but self-contained. Good for dev and infrequent personal ingestion via ARQ background job.
+- **Modal GPU (recommended remote path):** `modal deploy pyannote_service.py` turns the same pyannote pipeline into a persistent GPU-backed web service. T4 completes a 90-minute episode in ~280s at ~$0.046. Scales to zero when idle. No standing cost.
+- **Generic HTTP sidecar:** Any provider (RunPod, self-hosted Docker) exposing the same `POST /diarize` contract works as a drop-in. The app never knows which provider is behind the URL.
+- **Sortformer MLX (future):** `mlx-community/diar_sortformer_4spk-v1-fp16` via `mlx-audio` runs at 0.07s/min on Apple Silicon but crashes on full-length episodes due to missing chunk support in the library. Worth revisiting when `mlx-audio` ships chunked streaming.
+
+**Configuration (mirrors transcription pattern):**
+
+```
+# Leave empty to disable diarization (all segments tagged UNKNOWN)
+DIARIZATION_SERVICE_URL=
+
+# Required for pyannote regardless of backend (usage tracking)
+HF_TOKEN=
+
+# Local config — ignored when DIARIZATION_SERVICE_URL is set
+DIARIZATION_MODEL=pyannote/speaker-diarization-community-1
+```
+
+URL empty → local CPU. URL set → HTTP POST to any provider. Same pattern as `TRANSCRIPTION_SERVICE_URL`.
+
+**Effort:** 1-2 weekends. Local CPU path is fastest to implement — no deployment required. Modal path adds a deploy script and `RemoteDiarizationService` HTTP client on top of that.
+
+**Sequencing note:** Strong candidate to move ahead of the ARQ queue work. The pipeline change is self-contained (new `DiarizationService` Protocol + alignment step), performance is proven, and it unlocks the multi-speaker persona queries that are the most distinctive product feature. That said, the ARQ queue makes the local CPU path significantly more practical — local diarization as a blocking call is painful; as an ARQ background job it is fine. The two features are complementary.
+
+**Interview story:** "I benchmarked pyannote CPU vs GPU on Modal and found a 10x speedup at under $0.05 per episode — cheap enough to treat as effectively free. I designed the backend as a URL-based config so any provider fits without touching app code. I used `UNKNOWN` as an honest sentinel in v1 rather than `SPEAKER_00` — that distinction matters when re-ingesting old episodes after diarization lands."
 
 ---
 
@@ -433,19 +459,18 @@ Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
 
 If you finish v1 and want to keep going, this is the highest-value sequence:
 
-1. **Decoupled worker queue (ARQ)** — 1 weekend, eliminates ingestion/query resource contention; enables overnight batch processing; unlocks everything that depends on reliable background work
-2. **Query rewriting** — 1 day, directly improves retrieval quality on vague and follow-up queries; measurable before/after in Phoenix
-3. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models; pairs well with the decoupled worker since the API is now free to stream
-4. **Episode summarization** — 1 weekend, shows a two-level LLM pipeline; good interview story; useful day-to-day
-5. **Persistent conversations** — 1 weekend, turns the tool into a research companion; Protocol means it's a one-file swap
-6. **Remote transcription + diarization** — pairs with 1.5; choose one provider and validate end-to-end
-7. **Automatic feed polling** — 1 weekend, natural complement to the worker queue; don't build before 1
-8. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
-9. **Temporal reasoning** — unique angle, memorable demo
+1. **Decoupled worker queue (ARQ)** — 1 weekend, eliminates ingestion/query resource contention; makes local CPU diarization practical as a background job; enables overnight batch processing
+2. **Speaker diarization** — 1-2 weekends, self-contained Protocol + alignment step + one backend to start; unlocks multi-speaker persona queries; local CPU path works immediately, Modal GPU path adds a deploy script
+3. **Query rewriting** — 1 day, directly improves retrieval quality on vague and follow-up queries; measurable before/after in Phoenix
+4. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models
+5. **Episode summarization** — 1 weekend, shows a two-level LLM pipeline; good interview story
+6. **Persistent conversations** — 1 weekend, turns the tool into a research companion; Protocol means it's a one-file swap
+7. **Automatic feed polling** — 1 weekend, natural complement to the worker queue; don't build before ARQ
+8.  **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
+9.  **Temporal reasoning** — unique angle, memorable demo
 10. **Graph RAG** — the "big" upgrade, strongest architectural story
-11. **Multi-feed persona synthesis** — the killer demo feature
-    (plumbing already done in Phase 6)
+11. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
 
-**On sequencing:** The decoupled worker (ARQ) is deliberately early rather than later — it's infrastructure that makes everything else better. Batch ingestion becomes viable, the API becomes responsive during heavy work, and automatic polling (item 9) requires it anyway. Getting it in early pays dividends across all subsequent work.
+**On sequencing:** ARQ moves ahead of diarization here because local CPU diarization as a blocking pipeline call is painful at 36 min/episode. As an ARQ background job it is perfectly acceptable for personal use. The two features are designed to work together — build ARQ first, then slot diarization in as a background step. If you plan to use Modal GPU diarization from day one, the ARQ dependency is less critical and you could swap items 3 and 4.
 
-Graph RAG is deliberately near the end — you'll understand your retrieval failure modes better after real use, which makes the graph design decisions more grounded rather than speculative.
+Graph RAG is deliberately near the end — you will understand your retrieval failure modes better after real use, which makes the graph design decisions more grounded rather than speculative.
