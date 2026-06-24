@@ -10,7 +10,7 @@ import { formatDate, formatDuration } from '@/lib/date'
 import { ACTIVE_STATUSES } from '@/lib/episode'
 import { stripMarkdown } from '@/lib/text'
 import { LucideArrowUpRight, LucideCloudDownload, LucideLoaderCircle, LucideSparkles } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 
 interface EpisodeRowProps {
@@ -22,6 +22,7 @@ interface EpisodeRowProps {
 }
 
 export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTranscriptMutation }: EpisodeRowProps) {
+  const navigate = useNavigate()
 
   const liveStatus = useEpisodeStatus(ACTIVE_STATUSES.includes(episode.pipeline_status) ? episode.id : null)
   const status = liveStatus?.status ?? episode.pipeline_status
@@ -56,7 +57,9 @@ export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTr
           )}
         </div>
 
-        <LucideArrowUpRight className='shrink-0' />
+        <Button size="icon" className='shrink-0' variant="outline" aria-label={`go to feed: ${episode.title}`} onClick={() => navigate(link)}>
+        <LucideArrowUpRight  />
+        </Button>
 
       </CardHeader>
       <CardContent >
