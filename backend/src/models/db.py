@@ -105,11 +105,18 @@ class Chunk(Base):
     __table_args__ = (
         Index("chunks_episode_id_idx", "episode_id"),
         Index("chunks_parent_id_idx", "parent_id"),
+        Index(
+            "chunks_embedding_idx_leaf",
+            "embedding",
+            postgresql_using="ivfflat",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+            postgresql_where="chunk_level = 'leaf'",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     episode_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("episodes.id", ondelete="CASCADE"))
-    parent_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("chunks.id"), nullable=True)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("chunks.id", ondelete="CASCADE"), nullable=True)
     chunk_level: Mapped[str] = mapped_column(Text, nullable=False)  # "parent" | "leaf"
     speaker_id: Mapped[str] = mapped_column(Text, nullable=False)   # eg "SPEAKER_00" from speaker diarisation
     text: Mapped[str] = mapped_column(Text, nullable=False)

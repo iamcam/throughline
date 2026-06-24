@@ -1,3 +1,4 @@
+// src/hooks/useEpisodeStatus.ts
 import type { PipelineStatusUpdate } from "@/api/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -23,6 +24,7 @@ export function useEpisodeStatus(episodeId: string | null) {
         source.close();
         queryClient.invalidateQueries({ queryKey: ["episodes"] });
         queryClient.invalidateQueries({ queryKey: ["episode", episodeId] });
+        setStatus(null)
       }
     };
 
