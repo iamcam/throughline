@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -59,7 +60,7 @@ function FeedAccordionItem({ feed, onNavigate }: { feed: Feed; onNavigate: (path
     <AccordionItem value={feed.id}>
       <AccordionTrigger>
         <div className="flex flex-row gap-4">
-          <div>{feed.image_url && <img src={feed.image_url} className="size-24" />}</div>
+          <div>{feed.image_url && <img src={feed.image_url} className="size-24" alt="Feed cover artwork"/>}</div>
           <div className="grow flex flex-col justify-center">
             <div className="font-bold">
               {feed.title ?? feed.rss_url}
@@ -72,7 +73,7 @@ function FeedAccordionItem({ feed, onNavigate }: { feed: Feed; onNavigate: (path
           </div>
         </div>
       </AccordionTrigger>
-      <AccordionContent>
+      <AccordionContent >
         {!episodes && (
           <p className="text-xs text-muted-foreground py-2">Loading...</p>
         )}
@@ -138,10 +139,12 @@ export function SearchFilterList({ open, onClose }: SearchFilterListProps) {
     <Sheet open={open} onOpenChange={onClose} >
       <SheetContent side="left" className="flex flex-col">
         <SheetHeader>
-          <SheetTitle>Searchable Items</SheetTitle>
-          <p>Available transcribed episodes</p>
-        </SheetHeader>
+          <SheetTitle>Chat Feeds</SheetTitle>
 
+        </SheetHeader>
+        <SheetDescription>
+          Available transcribed episodes
+        </SheetDescription>
         {/* Scrollable feed list */}
         <div className="flex-1 overflow-y-auto px-4">
           {isLoading && (

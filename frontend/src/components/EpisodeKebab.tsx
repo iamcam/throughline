@@ -84,7 +84,7 @@ export default function EpisodeKebab({ disabled, episodeId, episodeTitle, reinge
       <Confirmation episodeTitle={episodeTitle} isOpen={isOpen} onDelete={onDelete} onCancel={onCancel} />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button disabled={disabled} variant="outline"><LucideEllipsis /></Button>
+          <Button disabled={disabled} variant="outline" aria-label='Episode Actions'><LucideEllipsis /></Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className='w-auto'>
           <DropdownMenuItem

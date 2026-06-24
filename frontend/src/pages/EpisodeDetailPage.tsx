@@ -104,7 +104,8 @@ export default function EpisodeDetailPage() {
         <div className="space-y-6 h-full p-6 ">
           {feed &&
             <Button variant="link" size="default"
-              className='px-0'
+              className='px-0 hover:text-hover'
+              aria-label="back to feed"
               onClick={() => navigate(`/feeds/${feed.id}/episodes`)}>
             <LucideChevronLeft />
             {feed.title}
@@ -113,7 +114,7 @@ export default function EpisodeDetailPage() {
           <div className='flex flex-row gap-4'>
 
             {/* Left column - cover art, if any */}
-            {coverArt && <div className='shrink-0'><img className="aspect-square w-54" src={coverArt} /></div>}
+            {coverArt && <div className='shrink-0'><img className="aspect-square w-54" src={coverArt} alt="cover artwork for episode" /></div>}
 
             {/* Center - title, description, etc column */}
             <div className='grow flex flex-col gap-2'>
@@ -143,7 +144,7 @@ export default function EpisodeDetailPage() {
             {/* Right / Buttons column */}
             <div className={'flex flex-col items-end ' + (!chatOpen ? 'justify-between' : 'justify-end')}>
               {!chatOpen && (
-                <Button disabled={status !== "READY"} variant="outline" size="sm" onClick={toggleChat}>
+                <Button disabled={status !== "READY"} variant="outline" size="sm" aria-label="open AI chat" onClick={toggleChat}>
                   <Sparkles className="h-4 w-4 mr-1" />
                   Ask AI
                 </Button>
@@ -155,6 +156,7 @@ export default function EpisodeDetailPage() {
                   <Button
                     disabled={isActive}
                     onClick={() => ingestMutation.mutate()}
+                    aria-label="Ingest episode"
                   >
                     <LucideCloudDownload />Ingest
                   </Button>
@@ -163,7 +165,7 @@ export default function EpisodeDetailPage() {
               {ACTIVE_STATUSES.includes(status) ? (
                 <div className='flex items-end gap-2'>
                 {ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
-                <Button size="icon" variant="outline" disabled={true}><LucideLoaderCircle className='animate-spin' /></Button>
+                <Button size="icon" variant="outline" aria-label="loading" disabled={true}><LucideLoaderCircle className='animate-spin' /></Button>
                 </div>
               ) : (status === "READY" ? (
                 <EpisodeKebab
@@ -259,7 +261,7 @@ export default function EpisodeDetailPage() {
       >
         <div className="flex items-center shrink-0 p-2 bg-background border-b">
           <h2 className="flex-1">Ask The Pod</h2>
-          <Button variant="outline" size="icon" className="rounded-full" onClick={toggleChat}><LucideX /></Button>
+          <Button variant="outline" size="icon" className="rounded-full" aria-label="close chat" onClick={toggleChat}><LucideX /></Button>
         </div>
 
           <div className="flex-1 min-h-0 overflow-hidden">

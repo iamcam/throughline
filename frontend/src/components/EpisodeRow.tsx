@@ -36,7 +36,7 @@ export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTr
         <div className='flex-1 w-100'>
           <CardTitle className="line-clamp-2 flex flex-row gap-2 items-center">
             {isReady && <LucideSparkles className="text-accent size-4" />}
-            <Link to={link} className="hover:text-cyan-500 transition-colors">{episode.title ?? 'Untitled'}</Link>
+            <Link to={link} className="hover:text-hover transition-colors">{episode.title ?? 'Untitled'}</Link>
           </CardTitle>
           {episode.description && (
             <CardDescription>

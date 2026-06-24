@@ -63,7 +63,7 @@ export function SpeakerRow({ speaker, episodeId }: SpeakerRowProps) {
       <div className="flex items-center gap-4">
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
-            <Button variant="outline" size="xs"><LucidePencil /></Button>
+            <Button variant="outline" size="xs" aria-label='Edit speaker name'><LucidePencil /></Button>
           </PopoverTrigger>
           <PopoverContent className="w-72 space-y-4">
             <div className="space-y-2">
@@ -85,6 +85,7 @@ export function SpeakerRow({ speaker, episodeId }: SpeakerRowProps) {
                   setName(speaker.display_name ?? '')
                   setOpen(false)
                 }}
+                aria-label='Cancel'
               >
                 Cancel
               </Button>
@@ -92,6 +93,7 @@ export function SpeakerRow({ speaker, episodeId }: SpeakerRowProps) {
                 size="sm"
                 disabled={updateMutation.isPending}
                 onClick={() => updateMutation.mutate()}
+                aria-label='Save name'
               >
                 {updateMutation.isPending ? 'Saving...' : 'Save'}
               </Button>

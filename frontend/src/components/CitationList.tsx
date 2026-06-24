@@ -5,10 +5,8 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible';
-import { ChevronDown, LucideCopy } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { useState } from 'react';
-import { Badge } from './ui/badge';
-import { Button } from './ui/button';
 
 function CitationCard({ citation, index }: { citation: CitationResult; index: number }) {
   const [audioOpen, setAudioOpen] = useState(false)
@@ -24,20 +22,19 @@ function CitationCard({ citation, index }: { citation: CitationResult; index: nu
         </span>
         <span>·</span>
         <span>{citation.timestamp_display}</span>
+      </div>
+      <div className='text-sm font-normal'>
         {citation.episode_title && (
-          <>
-            <span>·</span>
             <span className="">{citation.episode_title}</span>
-          </>
         )}
       </div>
-      <p>
-        <Button variant="outline" onClick={() => navigator.clipboard.writeText(citation.chunk_id)}>
-          <LucideCopy /> {citation.chunk_id.slice(0,4)} … {citation.chunk_id.slice(-4)}
-        </Button>
-      </p>
 
-      <Badge variant="outline" > {citation.similarity_score}</Badge>
+      {/* <p className=''>
+        <CopyButton copyValue={citation.chunk_id} displayText={citation.chunk_id.slice(0, 4) + "..." + citation.chunk_id.slice(-4)} />
+        <Badge variant="outline" > {citation.similarity_score}</Badge>
+      </p> */}
+
+
       <p className="text-muted-foreground">{citation.text}</p>
 
       {citation.audio_url && (

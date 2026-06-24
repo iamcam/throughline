@@ -132,7 +132,8 @@ export default function EpisodesPage() {
           {feed && (
             <div className="flex justify-between">
               <Button variant="link"
-                className='p-0'
+                className='p-0 hover:text-hover'
+                aria-label="Go to feeds"
                 onClick={() => navigate(`/feeds/`)}>
                 <LucideChevronLeft />
                 Feeds
@@ -142,7 +143,9 @@ export default function EpisodesPage() {
           )}
           {feed && (
             <div className="flex items-stretch justify-between gap-6">
-              {feed.image_url && <div className='shrink-0 w-1/3 aspect-square  max-h-64 max-w-64 '><img src={feed.image_url} /></div>}
+              {feed.image_url && <div className='shrink-0 w-1/3 aspect-square  max-h-64 max-w-64 '>
+                <img src={feed.image_url} alt="Feed cover artwork" />
+              </div>}
 
               <div className="space-y-1">
                 <h1 className="text-2xl font-bold">{feed.title ?? feed.rss_url}</h1>
@@ -169,7 +172,7 @@ export default function EpisodesPage() {
 
               <div className='flex flex-col justify-between items-end '>
                 {!chatOpen ? (
-                  <Button variant="outline" size="sm" disabled={!ingestedCount} onClick={toggleChat}>
+                  <Button variant="outline" size="sm" disabled={!ingestedCount} aria-label="open ai chat" onClick={toggleChat}>
                     <Sparkles className="h-4 w-4 mr-1" />
                     Ask AI
                   </Button>
@@ -190,16 +193,20 @@ export default function EpisodesPage() {
                 className="max-w-100"
               />
 
-              <ButtonGroup>
+              <ButtonGroup aria-label='Filter options'>
                 <Button
                   variant={filter === 'all' ? 'default' : 'outline'}
+                  className={filter === 'all' ? 'text-background' : 'text-foreground'}
                   onClick={() => handleFilter('all')}
+                  aria-label="show all episodes"
                 >
                   All
                 </Button>
                 <Button
                   variant={filter === 'ingested' ? 'default' : 'outline'}
+                  className={filter === 'ingested' ? 'text-background' : 'text-foreground'}
                   onClick={() => handleFilter('ingested')}
+                  aria-label="show ingested episodes"
                 >
                   Ingested ({ingestedCount})
                 </Button>
@@ -242,6 +249,7 @@ export default function EpisodesPage() {
                 variant="outline"
                 disabled={page === 1}
                 onClick={() => setPage(p => p - 1)}
+                aria-label="previous page"
               >
                 Previous
               </Button>
@@ -252,6 +260,7 @@ export default function EpisodesPage() {
                 variant="outline"
                 disabled={page === totalPages}
                 onClick={() => setPage(p => p + 1)}
+                aria-label="next page"
               >
                 Next
               </Button>
@@ -273,7 +282,7 @@ export default function EpisodesPage() {
       >
         <div className="flex items-center shrink-0 p-2 bg-background border-b">
           <h2 className="flex-1">Ask The Pod</h2>
-          <Button variant="outline" size="icon" className="rounded-full" onClick={toggleChat}><LucideX /></Button>
+          <Button variant="outline" size="icon" className="rounded-full" aria-label="close chat" onClick={toggleChat}><LucideX /></Button>
         </div>
 
           <div className="flex-1 min-h-0 overflow-hidden">

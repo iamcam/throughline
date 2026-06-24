@@ -83,7 +83,7 @@ export default function FeedKebab({ feedId, feedTitle, deleteMutation, refreshMu
       <Confirmation feedTitle={feedTitle} isOpen={isOpen} onDelete={onDelete} onCancel={onCancel}/>
       <DropdownMenu>
         <DropdownMenuTrigger asChild disabled={deleteMutation.isPending || refreshMutation.isPending}>
-          <Button variant="outline"><LucideEllipsis /></Button>
+          <Button variant="outline" aria-label='Feed Actions'><LucideEllipsis /></Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className='w-auto'>
           <DropdownMenuItem

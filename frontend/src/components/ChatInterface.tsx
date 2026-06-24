@@ -143,7 +143,7 @@ export function ChatInterface({ scopeFeedIds, scopeEpisodeIds }: ChatInterfacePr
       {/* Toolbar — only in unscoped context */}
       {showKnowledgeBase && (
         <div className="flex items-center gap-3 border-b px-4 py-2 shrink-0">
-          <Button variant="outline" size="sm" onClick={() => setSheetOpen(true)}>
+          <Button variant="outline" size="sm" aria-label="Show episodes" onClick={() => setSheetOpen(true)}>
             <LucidePodcast /> Episodes
           </Button>
           <span className="text-sm text-muted-foreground">
@@ -188,6 +188,7 @@ export function ChatInterface({ scopeFeedIds, scopeEpisodeIds }: ChatInterfacePr
           <Button
             onClick={handleSend}
             disabled={!input.trim() || !sessionId || isSending}
+            aria-label='send'
           >
             Send
           </Button>

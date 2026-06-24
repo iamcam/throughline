@@ -57,11 +57,13 @@ export default function FeedsPage() {
                     onChange={e => setUrl(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleAdd()}
                     placeholder="Apple Podcast or RSS feed URL..."
+                    name='Add feed'
                     className="grow"
                 />
                 <Button
                     onClick={handleAdd}
                     disabled={addMutation.isPending || !url.trim()}
+                    aria-label="Add podcast feed"
                 >
                     {addMutation.isPending ? 'Adding...' : 'Add Feed'}
                 </Button>
@@ -87,11 +89,12 @@ export default function FeedsPage() {
 
                         <div className="flex gap-6 items-stretch px-(--card-spacing) ">
                             {feed.image_url && (
-                                <Link to={`/feeds/${feed.id}/episodes`} className="shrink-0">
+                                <Link to={`/feeds/${feed.id}/episodes`} className="shrink-0" aria-label={`go to feed: ${feed.title}`}>
 
                                 <img className="shadow-md aspect-square h-42 "
                                     onClick={() => navigate(`/feeds/${feed.id}/episodes`)}
-                                    src={feed.image_url}
+                                        src={feed.image_url}
+                                        alt="Feed cover artwork"
                                 />
                                 </Link>
                             )}
@@ -100,7 +103,8 @@ export default function FeedsPage() {
                                 <CardTitle>
                                     <h1 className="text-2xl font-bold ">
                                         <Link to={`/feeds/${feed.id}/episodes`}
-                                            className=' hover:text-cyan-500 transition-colors'>
+                                            className='hover:text-hover'
+                                        >
                                             {feed.title ?? feed.rss_url}
                                         </Link>
                                     </h1>
@@ -114,7 +118,7 @@ export default function FeedsPage() {
                             </div>
 
                             <div className='flex flex-col justify-between  '>
-                                <Button size="icon" variant="outline" onClick={() => navigate(`/feeds/${feed.id}/episodes`)}>
+                                <Button size="icon" variant="outline" aria-label={`go to feed: ${feed.title}`} onClick={() => navigate(`/feeds/${feed.id}/episodes`)}>
                                     <LucideArrowUpRight  />
                                 </Button>
                                 <FeedKebab feedTitle={feed.title}  feedId={feed.id} refreshMutation={refreshMutation} deleteMutation={deleteMutation} />
