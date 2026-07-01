@@ -214,10 +214,10 @@ export default function EpisodesPage() {
             </>
           )}
           {ingestMutation.isError && (
-            <p className="text-sm text-destructive"><LucideCircleAlert className='inline-block mr-2' />Failed to start ingestion. Please try again.</p>
+            <p className="text-sm text-destructive"><LucideCircleAlert className='inline-block mr-2' />Failed to start transcription. Please try again.</p>
           )}
           {reingestMutation.isError && (
-            <p className="text-sm text-destructive"><LucideCircleAlert className='inline-block mr-2' />Failed to reingest. Please try again.</p>
+            <p className="text-sm text-destructive"><LucideCircleAlert className='inline-block mr-2' />Failed to transcribe. Please try again.</p>
           )}
           <div className="space-y-2">
             {episodesError && (

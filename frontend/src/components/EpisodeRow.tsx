@@ -67,21 +67,25 @@ export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTr
 
           <div className="flex flex-col items-end gap-2">
 
-            {status === "PENDING" ? (
-              <Button
-                disabled={isActive}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onIngest(episode.id);
-                }}
-              >
-                <LucideCloudDownload />Ingest
-              </Button>
-            ) : undefined}
+            {status === "PENDING" || status === "ERROR" ? (
+              <div className='flex gap-2 items-center'>
+                {status === "ERROR" && (<StatusBadge status="ERROR" />)}
 
+                <Button
+                  disabled={isActive}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onIngest(episode.id);
+                  }}
+                >
+                  <LucideCloudDownload /> Transcribe
+                </Button>
+                </div>
+            ) : undefined}
             {ACTIVE_STATUSES.includes(status) ? (
-              <div className='flex items-end gap-2'>
-              {ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
+              <div className='flex items-center gap-2'>
+                {ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
+
               <Button size="icon" variant="outline" disabled={true}><LucideLoaderCircle className='animate-spin' /></Button>
               </div>
             ) : (status === "READY" ? (

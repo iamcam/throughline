@@ -13,6 +13,7 @@ export default function StatusBadge({ status }: { status: string }) {
       'INFERRING_SPEAKERS': 'Inferring Speakers',
       'CHUNKING': 'Processing',
       'EMBEDDING': 'Saving',
+      'ERROR': 'Error'
 
   }
   const variant = variants[status] ?? 'secondary'

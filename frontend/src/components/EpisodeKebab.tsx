@@ -44,7 +44,7 @@ interface DeleteConfirmationProps {
   onCancel: () => void;
 }
 
-function Confirmation({ isOpen, onDelete, onCancel, episodeTitle }: DeleteConfirmationProps) {
+function DeleteConfirmation({ isOpen, onDelete, onCancel, episodeTitle }: DeleteConfirmationProps) {
   return (
     <AlertDialog open={isOpen}>
       <AlertDialogContent size="sm">
@@ -81,7 +81,7 @@ export default function EpisodeKebab({ disabled, episodeId, episodeTitle, reinge
 
   return (
     <div>
-      <Confirmation episodeTitle={episodeTitle} isOpen={isOpen} onDelete={onDelete} onCancel={onCancel} />
+      <DeleteConfirmation episodeTitle={episodeTitle} isOpen={isOpen} onDelete={onDelete} onCancel={onCancel} />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button disabled={disabled} variant="outline" aria-label='Episode Actions'><LucideEllipsis /></Button>
@@ -91,7 +91,7 @@ export default function EpisodeKebab({ disabled, episodeId, episodeTitle, reinge
             disabled={reingestMutation.isPending}
             onClick={() => { reingestMutation.mutate(episodeId) }}
           >
-            <LucideRefreshCw /> Reingest
+            <LucideRefreshCw /> Re-transcribe
           </DropdownMenuItem>
 
           <DropdownMenuSeparator />

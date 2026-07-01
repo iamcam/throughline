@@ -100,7 +100,7 @@ export default function EpisodeDetailPage() {
 
   if( status ) return (
     <ResizablePanelGroup orientation="horizontal" className="h-full">
-      <ResizablePanel defaultSize="100%" minSize="50%" className='scrollbar-thin'>
+      <ResizablePanel defaultSize="100%" minSize="50%" className='scrollbar-thin scrollbar-gutter-auto'>
         <div className="space-y-6 h-full p-6 ">
           {feed &&
             <Button variant="link" size="default"
@@ -152,18 +152,22 @@ export default function EpisodeDetailPage() {
 
               <div className='flex flex-col items-end gap-2'>
 
-                {status === "PENDING" && (
-                  <Button
-                    disabled={isActive}
-                    onClick={() => ingestMutation.mutate()}
-                    aria-label="Ingest episode"
-                  >
-                    <LucideCloudDownload />Ingest
-                  </Button>
+                {(status === "ERROR" || status === "PENDING") && (
+                  <div className='flex gap-2 items-center'>
+                    {status === "ERROR" && <StatusBadge status={status} />}
+
+                    <Button
+                      disabled={isActive}
+                      onClick={() => ingestMutation.mutate()}
+                      aria-label="Transcribe episode"
+                    >
+                      <LucideCloudDownload /> Transcribe
+                    </Button>
+                  </div>
                 )}
 
               {ACTIVE_STATUSES.includes(status) ? (
-                <div className='flex items-end gap-2'>
+                <div className='flex items-center gap-2'>
                 {ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
                 <Button size="icon" variant="outline" aria-label="loading" disabled={true}><LucideLoaderCircle className='animate-spin' /></Button>
                 </div>
@@ -197,10 +201,10 @@ export default function EpisodeDetailPage() {
           </p>
         )}
         {ingestMutation.isError && (
-          <p className="text-sm text-destructive"><LucideXCircle className='inline-block mr-2'/>Failed to start ingestion. Please try again.</p>
+          <p className="text-sm text-destructive"><LucideXCircle className='inline-block mr-2'/>Failed to start transcription. Please try again.</p>
         )}
         {reingestMutation.isError && (
-            <p className="text-sm text-destructive"><LucideXCircle className='inline-block mr-2' />Failed to reingest. Please try again.</p>
+            <p className="text-sm text-destructive"><LucideXCircle className='inline-block mr-2' />Failed to transcribe. Please try again.</p>
         )}
 
         {status === 'READY' && (
@@ -237,13 +241,13 @@ export default function EpisodeDetailPage() {
 
           {status === 'PENDING' && (
             <p className="text-sm text-muted-foreground">
-              Ingest this episode to identify speakers.
+              Transcribe this episode to identify speakers.
             </p>
           )}
 
           {status === 'ERROR' && (
             <p className="text-sm text-destructive">
-              Ingestion failed. Try reingesting the episode.
+              Transcription failed. Please try again.
             </p>
           )}
         </div>
@@ -259,12 +263,12 @@ export default function EpisodeDetailPage() {
         onResize={(size) => setChatOpen(size.asPercentage > 0)}
         className="h-full flex flex-col"
       >
-        <div className="flex items-center shrink-0 p-2 bg-background border-b">
+        <div className="flex items-center shrink-0 p-2 bg-background border-b px-2">
           <h2 className="flex-1">Ask The Pod</h2>
           <Button variant="outline" size="icon" className="rounded-full" aria-label="close chat" onClick={toggleChat}><LucideX /></Button>
         </div>
 
-          <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-hidden">
             {episodeId && (<ChatInterface scopeEpisodeIds={[episodeId]} />)}
           </div>
       </ResizablePanel>
