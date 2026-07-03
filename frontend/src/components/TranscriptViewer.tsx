@@ -9,10 +9,11 @@ const COLLAPSED_SEGMENTS = 6
 
 interface TranscriptViewerProps {
   episodeId: string
-  collapsedSegments?: number
+  collapsedSegments?: number,
+  className?: string
 }
 
-export function TranscriptViewer({ episodeId, collapsedSegments = COLLAPSED_SEGMENTS }: TranscriptViewerProps) {
+export function TranscriptViewer({ episodeId, collapsedSegments = COLLAPSED_SEGMENTS, className }: TranscriptViewerProps) {
   const [expanded, setExpanded] = useState(false)
 
   const { data: transcript, isLoading, isError } = useQuery({
@@ -31,7 +32,7 @@ export function TranscriptViewer({ episodeId, collapsedSegments = COLLAPSED_SEGM
   const canCollapse = transcript.segments.length > collapsedSegments
 
   return (
-    <div className="space-y-3">
+    <div className={className + " space-y-3"}>
       {canCollapse && expanded && (
         <Button
           variant="link"

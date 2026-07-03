@@ -38,8 +38,8 @@ async def lifespan(app: FastAPI):
     shutdown_executor()
 
 app = FastAPI(
-    title="Podcast Knowledge Engine",
-    version="0.1.8",
+    title="Throughline Knowledge Engine",
+    version="0.2.2",
     lifespan = lifespan
 )
 

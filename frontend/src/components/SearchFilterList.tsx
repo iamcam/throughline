@@ -142,7 +142,7 @@ export function SearchFilterList({ open, onClose }: SearchFilterListProps) {
           <SheetTitle>Chat Feeds</SheetTitle>
 
         </SheetHeader>
-        <SheetDescription>
+        <SheetDescription className='px-4'>
           Available transcribed episodes
         </SheetDescription>
         {/* Scrollable feed list */}

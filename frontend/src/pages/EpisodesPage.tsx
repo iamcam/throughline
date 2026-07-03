@@ -128,7 +128,7 @@ export default function EpisodesPage() {
     <ResizablePanelGroup orientation="horizontal" className="h-full">
       {/* Main content */}
       <ResizablePanel defaultSize="100%" minSize="50%">
-        <div ref={scrollContainerRef} className="space-y-6 overflow-y-auto h-full p-6">
+        <div ref={scrollContainerRef} className="space-y-6 overflow-y-auto h-full p-6 bg-page-background">
           {feed && (
             <div className="flex justify-between">
               <Button variant="link"
@@ -147,13 +147,13 @@ export default function EpisodesPage() {
                 <img src={feed.image_url} alt="Feed cover artwork" />
               </div>}
 
-              <div className="space-y-1">
-                <h1 className="text-2xl font-bold">{feed.title ?? feed.rss_url}</h1>
+            <div className="space-y-3">
+                <h1 className="text-3xl">{feed.title ?? feed.rss_url}</h1>
 
 
                 <div className='text-sm flex gap-2 items-center text-muted-foreground'>
                   {feed.episode_count > 0 ? (<>
-                    <p>{feed.episode_count} {feed.episode_count === 1 ? "episode" : "episodes"}</p>
+                    <p>{feed.episode_count.toLocaleString()} {feed.episode_count === 1 ? "episode" : "episodes"}</p>
                     {feed.episode_count > 0 && (<p><LucideActivity size={12} /></p>)}
                     <p>{feed.latest_episode_published_at && formatRelativeDate(feed.latest_episode_published_at)}</p>
 
@@ -185,14 +185,7 @@ export default function EpisodesPage() {
 
           <Separator />
           {!isEpisodesError && (
-            <>
-              <Input
-                placeholder="Search episodes..."
-                value={search}
-                onChange={e => handleSearch(e.target.value)}
-                className="max-w-100"
-              />
-
+            <div className='flex gap-8'>
               <ButtonGroup aria-label='Filter options'>
                 <Button
                   variant={filter === 'all' ? 'default' : 'outline'}
@@ -211,7 +204,15 @@ export default function EpisodesPage() {
                   Ingested ({ingestedCount})
                 </Button>
               </ButtonGroup>
-            </>
+
+              <Input
+                placeholder="Search episodes..."
+                value={search}
+                onChange={e => handleSearch(e.target.value)}
+                className="max-w-100 bg-card"
+              />
+
+            </div>
           )}
           {ingestMutation.isError && (
             <p className="text-sm text-destructive"><LucideCircleAlert className='inline-block mr-2' />Failed to start transcription. Please try again.</p>
@@ -219,7 +220,7 @@ export default function EpisodesPage() {
           {reingestMutation.isError && (
             <p className="text-sm text-destructive"><LucideCircleAlert className='inline-block mr-2' />Failed to transcribe. Please try again.</p>
           )}
-          <div className="space-y-2">
+          <div className="space-y-4">
             {episodesError && (
               <p className="text-sm text-destructive"><LucideCircleAlert className='inline-block mr-2' />Failed to load episodes. {episodesError.message}</p>
             )}
@@ -281,13 +282,13 @@ export default function EpisodesPage() {
         className="h-full flex flex-col "
       >
         <div className="flex items-center shrink-0 p-2 bg-background border-b">
-          <h2 className="flex-1">Ask The Pod</h2>
-          <Button variant="outline" size="icon" className="rounded-full" aria-label="close chat" onClick={toggleChat}><LucideX /></Button>
+          <h2 className="flex-1">Ask the Pod</h2>
+          <Button variant="ghost" size="icon" className="rounded-full" aria-label="close chat" onClick={toggleChat}><LucideX /></Button>
         </div>
 
-          <div className="flex-1 min-h-0 overflow-hidden">
-            {feedId && (<ChatInterface scopeFeedIds={[feedId]} />)}
-          </div>
+        <div className="flex-1 min-h-0 overflow-hidden">
+          {feedId && (<ChatInterface scopeFeedIds={[feedId]} />)}
+        </div>
 
       </ResizablePanel>
 

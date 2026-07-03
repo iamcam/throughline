@@ -100,8 +100,8 @@ export default function EpisodeDetailPage() {
 
   if( status ) return (
     <ResizablePanelGroup orientation="horizontal" className="h-full">
-      <ResizablePanel defaultSize="100%" minSize="50%" className='scrollbar-thin scrollbar-gutter-auto'>
-        <div className="space-y-6 h-full p-6 ">
+      <ResizablePanel defaultSize="100%" minSize="50%" className='scrollbar-thin scrollbar-gutter-auto bg-page-background scrollbar-thumb-muted-foreground'>
+        <div className="space-y-6 h-full p-6">
           {feed &&
             <Button variant="link" size="default"
               className='px-0 hover:text-hover'
@@ -119,7 +119,7 @@ export default function EpisodeDetailPage() {
             {/* Center - title, description, etc column */}
             <div className='grow flex flex-col gap-2'>
               <div className='flex flex-col gap-2 grow items-start'>
-                <h1 className="font-bold">{episode.title ?? 'Untitled'}</h1>
+                <h1 className="font-bold text-2xl">{episode.title ?? 'Untitled'}</h1>
 
                 <div className="flex items-center gap-3 text-sm text-muted-foreground">
                   <span>{formatDate(episode.published_at)}</span>
@@ -230,12 +230,12 @@ export default function EpisodeDetailPage() {
                 />
               ))}
                 {!speakersError && speakers && (
-                  <div className='text-xs text-muted-foreground' >Speaker names are inferred and may contain mistakes. Pleae verify.</div>
+                  <div className='text-xs text-muted-foreground' >Speaker names are inferred and may contain mistakes. Please verify.</div>
                 )}
             </div>
             <Separator />
             <h2 className="font-semibold">Transcript</h2>
-            <TranscriptViewer episodeId={episodeId} />
+            <TranscriptViewer episodeId={episodeId} className='pb-6'/>
           </>
         )}
 
@@ -264,8 +264,8 @@ export default function EpisodeDetailPage() {
         className="h-full flex flex-col"
       >
         <div className="flex items-center shrink-0 p-2 bg-background border-b px-2">
-          <h2 className="flex-1">Ask The Pod</h2>
-          <Button variant="outline" size="icon" className="rounded-full" aria-label="close chat" onClick={toggleChat}><LucideX /></Button>
+          <h2 className="flex-1">Ask the Pod</h2>
+          <Button variant="ghost" size="icon" className="rounded-full" aria-label="close chat" onClick={toggleChat}><LucideX /></Button>
         </div>
 
         <div className="flex-1 min-h-0 overflow-hidden">

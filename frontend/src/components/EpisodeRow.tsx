@@ -32,16 +32,16 @@ export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTr
   const isReady = status === 'READY'
 
   return (
-    <Card className={isReady ? 'border-2 border-accent' : ''}>
+    <Card className={"pb-0 drop-shadow " + (isReady ? 'border-2 border-accent' : '')}>
       <CardHeader className='flex flex-row'>
         <div className='flex-1 w-100'>
-          <CardTitle className="line-clamp-2 flex flex-row gap-2 items-center">
+          <CardTitle className="text-xl line-clamp-2 flex flex-row gap-2 items-center">
             {isReady && <LucideSparkles className="text-accent size-4" />}
             <Link to={link} className="hover:text-hover transition-colors">{episode.title ?? 'Untitled'}</Link>
           </CardTitle>
           {episode.description && (
-            <CardDescription>
-              <div className="text-sm text-muted-foreground flex gap-4 py-2">
+            <CardDescription className='text-md'>
+              <div className="flex gap-4 pb-4 items-center">
                 <div>{formatDate(episode.published_at)}</div>
                 <div>{formatDuration(episode.duration_seconds)}</div>
               </div>
@@ -50,7 +50,7 @@ export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTr
                   {stage}{progress != null ? ` — ${Math.round(progress * 100)}%` : ''}
                 </div>
               )}
-              <div className="line-clamp-2">
+              <div className="line-clamp-2 text-foreground">
                 {stripMarkdown(episode.description)}
               </div>
             </CardDescription>
@@ -62,7 +62,7 @@ export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTr
         </Button>
 
       </CardHeader>
-      <CardContent >
+      <CardContent className='text-primary py-6'>
         <div className="flex justify-end items-center">
 
           <div className="flex flex-col items-end gap-2">

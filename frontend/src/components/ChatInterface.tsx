@@ -6,9 +6,10 @@ import { SearchFilterList } from '@/components/SearchFilterList'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { useChatSession } from '@/hooks/useChatSession'
-import { LucideCircleAlert, LucidePodcast } from 'lucide-react'
+import { LucideArrowUp, LucideCircleAlert, LucidePodcast } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import { Card } from './ui/card'
 
 // -- Types --------------------------------------------------------------------─
 
@@ -27,7 +28,7 @@ function MessageBubble({ message }: { message: Message }) {
 
   return (
     <div className={`flex mb-4 ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`shadow max-w-[80%] rounded-lg px-4 py-2.5 text-sm ${isUser ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground'
+      <div className={`shadow max-w-[90%] rounded-lg px-4 py-2.5 text-sm ${isUser ? 'bg-primary text-primary-foreground' : 'bg-card text-foreground'
         }`}>
         {message.isThinking ? (
           <span className="text-muted-foreground animate-pulse">Thinking...</span>
@@ -134,7 +135,7 @@ export function ChatInterface({ scopeFeedIds, scopeEpisodeIds }: ChatInterfacePr
   const showKnowledgeBase = !scopeFeedIds && !scopeEpisodeIds
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full bg-page-background">
       {/* Session error — shown in all contexts */}
       {sessionError && (
         <p className="text-sm text-destructive px-4 py-2 shrink-0 flex items-center gap-2"><LucideCircleAlert className='' />{sessionError}</p>
@@ -156,8 +157,9 @@ export function ChatInterface({ scopeFeedIds, scopeEpisodeIds }: ChatInterfacePr
       {/* Messages */}
       <div className="overflow-y-auto flex-1 px-2 py-6 ">
         {messages.length === 0 ? (
-          <div className="flex items-center justify-center">
-            <p className="text-sm text-muted-foreground">Ask anything about your podcasts.</p>
+          <div className="flex flex-col items-center justify-center h-full  text-muted-foreground">
+
+            <p className="text-sm">What are you wondering about today?</p>
           </div>
         ) : (
           <>
@@ -170,8 +172,10 @@ export function ChatInterface({ scopeFeedIds, scopeEpisodeIds }: ChatInterfacePr
       </div>
 
       {/* Input */}
-      <div className="sticky bottom-0 px-4 py-3">
-        <div className="flex items-end justify-center-safe gap-2">
+      <div className="sticky bottom-0 px-4 py-3 flex justify-center">
+        <Card className='p-2 shadow-xl grow max-w-200'>
+          <div className="flex items-end justify-center-safe gap-2">
+
           <Textarea
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -181,18 +185,22 @@ export function ChatInterface({ scopeFeedIds, scopeEpisodeIds }: ChatInterfacePr
                 handleSend()
               }
             }}
-            placeholder="Ask a question… (Enter to send, Shift+Enter for newline)"
+            placeholder="Ask..."
             disabled={!sessionId || isSending}
-            className="max-w-150 min-h-16 max-h-42 bg-background"
+            className="min-h-16 max-h-42 bg-background border-0 focus-visible:ring-0 dark:bg-transparent shadow-none resize-none"
           />
           <Button
             onClick={handleSend}
             disabled={!input.trim() || !sessionId || isSending}
-            aria-label='send'
+              aria-label='send'
+              variant="outline"
+              size="icon"
+              className='rounded-full bg-accent text-accent-foreground'
           >
-            Send
+            <LucideArrowUp />
           </Button>
         </div>
+      </Card>
       </div>
 
       {showKnowledgeBase && (

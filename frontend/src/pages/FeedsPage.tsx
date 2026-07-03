@@ -50,20 +50,22 @@ export default function FeedsPage() {
     if (isError) return <div className="p-6 text-sm text-destructive">Failed to load feeds. Is the backend running?</div>
 
     return (
-        <div className="space-y-6 p-6">
-            <div className="flex gap-2">
+        <div className="space-y-6 p-6 bg-page-background">
+
+            <div className="flex items-center gap-2">
                 <Input
                     value={url}
                     onChange={e => setUrl(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleAdd()}
                     placeholder="Apple Podcast or RSS feed URL..."
                     name='Add feed'
-                    className="grow"
+                    className="bg-card max-w-72"
                 />
                 <Button
                     onClick={handleAdd}
                     disabled={addMutation.isPending || !url.trim()}
                     aria-label="Add podcast feed"
+                    className=''
                 >
                     {addMutation.isPending ? 'Adding...' : 'Add Feed'}
                 </Button>
@@ -91,7 +93,7 @@ export default function FeedsPage() {
                             {feed.image_url && (
                                 <Link to={`/feeds/${feed.id}/episodes`} className="shrink-0" aria-label={`go to feed: ${feed.title}`}>
 
-                                <img className="shadow-md aspect-square h-42 "
+                                <img className="shadow aspect-square h-42"
                                     onClick={() => navigate(`/feeds/${feed.id}/episodes`)}
                                         src={feed.image_url}
                                         alt="Feed cover artwork"
@@ -99,7 +101,7 @@ export default function FeedsPage() {
                                 </Link>
                             )}
 
-                            <div className='space-y-1'>
+                            <div className='space-y-2'>
                                 <CardTitle>
                                     <h1 className="text-2xl font-bold ">
                                         <Link to={`/feeds/${feed.id}/episodes`}
@@ -110,14 +112,14 @@ export default function FeedsPage() {
                                     </h1>
                                 </CardTitle>
                                 <div className='flex gap-2 items-center text-muted-foreground'>
-                                    <p>{feed.episode_count} episodes</p>
+                                    <p>{feed.episode_count.toLocaleString()} episodes</p>
                                     {feed.episode_count > 0 && (<p><LucideActivity size={12} /></p>)}
                                     <p>{feed.latest_episode_published_at && formatRelativeDate(feed.latest_episode_published_at)}</p>
                                 </div>
                                 {feed.description && <p>{feed.description}</p>}
                             </div>
 
-                            <div className='flex flex-col justify-between  '>
+                            <div className='flex flex-col justify-between'>
                                 <Button size="icon" variant="outline" aria-label={`go to feed: ${feed.title}`} onClick={() => navigate(`/feeds/${feed.id}/episodes`)}>
                                     <LucideArrowUpRight  />
                                 </Button>

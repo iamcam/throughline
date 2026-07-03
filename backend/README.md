@@ -1,6 +1,6 @@
-# Pod Knowledge Engine - Backend
+# Throughline - Backend
 
-This is the backend for the Pod Knowledge Engine project.
+This is the backend for the Throughline project.
 
 ## Requirements
 

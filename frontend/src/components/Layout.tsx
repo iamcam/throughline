@@ -5,27 +5,27 @@ import { NavLink, Outlet } from 'react-router-dom'
 export default function Layout() {
   return (
     <div className="flex flex-col h-screen">
-      <nav className="border-b px-6 py-3 flex justify-between items-center gap-6 shrink-0">
-        <div className="px-6 py-3 flex items-center gap-6 shrink-0">
+      <nav className="border-b px-4 py-3 flex justify-between items-center shrink-0">
+        <div className="py-3 flex items-center gap-6 shrink-0">
         <NavLink to="/">
-          <span className="font-semibold">Podcast Knowledge Engine</span>
+            <div className="font-logo text-3xl font-black text-primary">throughline</div>
         </NavLink>
-        <NavLink
+        {/* <NavLink
           to="/feeds"
           className={({ isActive }) =>
             isActive ? 'text-primary text-sm' : 'text-sm hover:text-hover transition-colors'
           }
         >
           Feeds
-        </NavLink>
-        <NavLink
+        </NavLink> */}
+        {/* <NavLink
           to="/chat"
           className={({ isActive }) =>
             isActive ? 'text-sm' : 'text-sm hover:text-hover transition-colors'
           }
         >
           Chat
-          </NavLink>
+          </NavLink> */}
         </div>
         <ModeToggle />
 

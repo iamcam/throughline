@@ -1,6 +1,6 @@
-# Pod Knowledge Engine - Frontend
+# Throughline - Frontend
 
-This is the frontend for the Pod Knowledge Engine project — a React + TypeScript SPA built with Vite and Tailwind v4.
+This is the frontend for the Throughline project — a React + TypeScript SPA built with Vite and Tailwind v4.
 
 ## Requirements
 

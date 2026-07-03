@@ -34,7 +34,7 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         if not auth_header or not auth_header.startswith("Basic "):
             return Response(
                 status_code=401,
-                headers={"WWW-Authenticate": 'Basic realm="Podcast Knowledge Engine Demo"'},
+                headers={"WWW-Authenticate": 'Basic realm="Throughline Demo"'},
                 content="Authentication required",
             )
 
@@ -51,7 +51,7 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
             logger.warning("Failed auth attempt for username: %s", username)
             return Response(
                 status_code=401,
-                headers={"WWW-Authenticate": 'Basic realm="Podcast Knowledge Engine Demo"'},
+                headers={"WWW-Authenticate": 'Basic realm="Throughline Demo"'},
                 content="Invalid credentials",
             )
 
