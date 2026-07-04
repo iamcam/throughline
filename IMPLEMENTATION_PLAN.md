@@ -3,6 +3,8 @@
 > Read alongside `ARCHITECTURE.md`. This document tells you **what to build, in what order, and why**.
 > Each phase produces something runnable. Never more than one phase "in flight" at a time.
 
+> **Public name:** This project is published as **Throughline**. Internal naming throughout this document uses the original working title (Podcast Knowledge Engine).
+
 ## Before You Start
 
 This is the implementation plan for the **Podcast Knowledge Engine** — a local-first RAG application that ingests podcast feeds, transcribes and diarizes episodes, and exposes a freeform chat interface for querying podcast content. The full system design, schema, API reference, and configuration are in `ARCHITECTURE.md`. Read that document first and keep it open alongside this one.
@@ -30,20 +32,19 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 
 ## Phase Overview
 
-| Phase | What You Build                               | Runnable At End                                                          |
-| ----- | -------------------------------------------- | ------------------------------------------------------------------------ |
-| 0     | Project scaffold, tooling, DB                | `GET /health` returns 200                                                |
-| 1     | RSS feed ingestion + IngestionQueue          | Feed + episodes in DB; queue abstraction in place                        |
-| 2     | Audio download + transcription pipeline      | Episode transcript in DB via SSE-tracked job                             |
-| 3     | Speaker inference + naming API               | LLM infers host name with confidence; pipeline runs straight to chunking |
-| 4     | Chunking + embedding                         | Chunks with vectors in pgvector; speaker_id linked                       |
-| 5     | Basic RAG query                              | Single-turn Q&A over transcript content                                  |
-| 6     | Tool-calling query engine ✅ Complete         | Multi-turn chat with conditional retrieval; multi-feed scope             |
-| 7     | Frontend — feeds + episodes + speaker naming ✅ Complete | Full ingestion flow in UI with SSE progress                  |
-| 8     | Frontend — chat interface ✅ Complete         | Full product usable end-to-end; chat in three contexts                   |
-| 9     | Observability ✅ Complete                     | OTel traces on all LLM, retrieval, and pipeline calls via Phoenix        |
-| 10    | Polish, docs, demo prep                      | Shippable                                                                |
-
+| Phase | What You Build                                          | Runnable At End                                                          |
+| ----- | ------------------------------------------------------- | ------------------------------------------------------------------------ |
+| 0     | Project scaffold, tooling, DB ✅ Complete                | `GET /health` returns 200                                                |
+| 1     | RSS feed ingestion + IngestionQueue ✅ Complete          | Feed + episodes in DB; queue abstraction in place                        |
+| 2     | Audio download + transcription pipeline ✅ Complete      | Episode transcript in DB via SSE-tracked job                             |
+| 3     | Speaker inference + naming API ✅ Complete               | LLM infers host name with confidence; pipeline runs straight to chunking |
+| 4     | Chunking + embedding ✅ Complete                         | Chunks with vectors in pgvector; speaker_id linked                       |
+| 5     | Basic RAG query ✅ Complete                              | Single-turn Q&A over transcript content                                  |
+| 6     | Tool-calling query engine ✅ Complete                    | Multi-turn chat with conditional retrieval; multi-feed scope             |
+| 7     | Frontend — feeds + episodes + speaker naming ✅ Complete | Full ingestion flow in UI with SSE progress                              |
+| 8     | Frontend — chat interface ✅ Complete                    | Full product usable end-to-end; chat in three contexts                   |
+| 9     | Observability ✅ Complete                                | OTel traces on all LLM, retrieval, and pipeline calls via Phoenix        |
+| 10    | Polish, docs, demo prep ✅ Complete                      | Shippable                                                                |
 ---
 
 ## Phase 0 — Scaffold and Infrastructure
@@ -1712,4 +1713,4 @@ Test that BackgroundTaskQueue satisfies the IngestionQueue Protocol."
 | `v0.2.1`                              | Transcript viewer, speaker name removal                                                      |
 | `v0.2.1-app-polish`                   | Feed sort by latest episode, FeedKebab menu, cache invalidation fixes, pagination scroll fix |
 | `v0.2.2-timeout-transcript-delete`    | Added llm timeout and transcript delete capability                                           |
-| `v1.0.0`                              | (TBD) Shippable, documented, demo-ready                                                      |
+| `v1.0.0`                              | Shippable, documented, demo-ready.                            |

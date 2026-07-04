@@ -1,12 +1,13 @@
 # Podcast Knowledge Engine — Architecture Document
 
-> Version: 0.9
+> Version: 1.0
 > Status: In implementation
 > Author: Cameron Perry
-> Last Updated: 2026-06-14
-
+> Last Updated: 2026-07-04
 
 ---
+
+> **Public name:** This project is published as **Throughline**. Internal naming throughout this document uses the original working title (Podcast Knowledge Engine).
 
 ## 1. Project Overview
 
@@ -487,7 +488,7 @@ Swappable behind the `TranscriptionService` Protocol. See section 3.3 for interf
 TRANSCRIPTION_BACKEND=local          # local | remote
 TRANSCRIPTION_SERVICE_URL=http://localhost:8001
 HUGGINGFACE_TOKEN=hf_...
-WHISPER_MODEL_SIZE=medium
+WHISPER_MODEL=medium
 ```
 
 **Diarization:** Deferred to Future Scope 1.5. CPU/local diarization via Pyannote is impractical on non-CUDA hardware (2–4x real-time on CPU for long episodes). In v1, all transcript segments are written with `speaker_id = 'UNKNOWN'`. Speaker identity is resolved post-transcription by `SpeakerResolver` (see section 3.7). When diarization is introduced, it will be configured via `DIARIZATION_BACKEND=local|remote`, mirroring the existing transcription backend pattern.
@@ -1097,8 +1098,7 @@ EMBEDDING_DIMENSIONS=768
 TRANSCRIPTION_BACKEND=local             # local | remote
 TRANSCRIPTION_SERVICE_URL=http://localhost:8001
 WHISPER_BACKEND=faster_whisper          # faster_whisper | mlx_whisper
-WHISPER_MODEL_SIZE=medium               # tiny | base | small | medium | large-v3
-                                        # TODO: rename to WHISPER_MODEL (Future Scope 1.6)
+WHISPER_MODEL=medium               # tiny | base | small | medium | large-v3
 DIARIZATION_MODEL=                      # leave empty to skip; very slow on CPU and non-CUDA GPUs; Ignored when TRANSCRIPTION_BACKEND=remote (remote service owns diarization)
 
 # Speaker inference
@@ -1153,6 +1153,7 @@ GET    /api/v1/episodes/{episode_id}
 POST   /api/v1/episodes/{episode_id}/ingest   Body: { speaker_count_hint? }
 POST   /api/v1/episodes/{episode_id}/reingest
 GET    /api/v1/episodes/{episode_id}/transcript
+DELETE /api/v1/episodes/{episode_id}/transcript
 GET    /api/v1/episodes/{episode_id}/status         (polling)
 GET    /api/v1/episodes/{episode_id}/status/stream  (SSE)
 ```

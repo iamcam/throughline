@@ -3,6 +3,8 @@
 > Options for expanding capability after v1.0. Each section is independent.
 > Includes rationale, estimated effort, and interview story value.
 
+> **Public name:** This project is published as **Throughline**. Internal naming throughout this document uses the original working title (Podcast Knowledge Engine).
+
 ---
 
 ## Tier 1 — High Value, Manageable Scope
@@ -395,6 +397,11 @@ Same codebase, different entry point. The worker imports the same pipeline code,
 ---
 
 ### 2.6 LLM Request Timeout
+Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
+
+---
+
+### 2.7 Episode Transcript Delete
 Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
 
 ---

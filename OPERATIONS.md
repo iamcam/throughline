@@ -2,7 +2,11 @@
 
 > Covers: local development, demo hosting, environment configurations, auth, and monitoring.
 
+> **Public name:** This project is published as **Throughline**. Internal naming throughout this document uses the original working title (Podcast Knowledge Engine).
+
 ---
+
+
 
 ## Environments
 
@@ -495,10 +499,10 @@ CMD ["uv", "run", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", 
 ```dockerfile
 FROM node:20-alpine AS builder
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci
+COPY package.json yarn.lock ./
+RUN yarn install --frozen-lockfile
 COPY . .
-RUN npm run build
+RUN yarn build
 
 FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
@@ -556,23 +560,6 @@ The frontend was scaffolded with a `.gitignore` covering `node_modules`, `dist`,
 ---
 
 ## Known TODOs
-
-### Docker Integration Not Yet Validated (Phase 7 + 8)
-
-The frontend Docker build (`frontend/Dockerfile` and the `frontend` service in `docker-compose.yml`) has not been verified against the actual frontend stack. The scaffold `Dockerfile` uses a standard Node + nginx pattern, but the following need confirmation before demo deployment:
-
-- Tailwind v4 via `@tailwindcss/vite` plugin builds correctly in Docker (no postcss.config.js)
-- `yarn build` succeeds inside the Docker build context
-- The built `dist/` is served correctly by the nginx config inside the container
-- The Nginx reverse proxy correctly routes `/api/*` to the backend container
-
-**Recommended verification step:**
-```bash
-docker compose up --build frontend
-curl http://localhost:3000
-```
-
-Until this is verified, use local dev (`yarn dev`) for frontend and Docker only for the backend + DB.
 
 ### Frontend Bundle Size
 
