@@ -11,6 +11,7 @@
 ```bash
 uv init --no-workspace
 uv add pyannote.audio mlx-whisper "mlx-qwen3-asr[diarize]" mlx-audio modal
+uv add "git+https://github.com/narcotic-sh/senko.git"
 ```
 
 Requires `HF_TOKEN` in environment for pyannote experiments (gated model — accept terms at https://huggingface.co/pyannote/speaker-diarization-community-1).
@@ -29,6 +30,7 @@ uv run convert_audio.py input.m4a
 
 - `pyannote/speaker-diarization-community-1` — CPU (PyTorch) and CUDA (Modal GPU)
 - `mlx-community/diar_sortformer_4spk-v1-fp16` — MLX/Metal (NVIDIA NeMo Sortformer port via mlx-audio)
+- `senko` — CoreML/ANE on Apple Silicon, CPU on other platforms (MIT license, no HF token required)
 
 ### ASR
 
@@ -64,23 +66,53 @@ First run includes model download and MLX conversion overhead (30-60s). Subseque
 
 ### Diarization Benchmark
 
-| Backend              | Hardware              | Time/min      | 89min episode | Notes                                |
-| -------------------- | --------------------- | ------------- | ------------- | ------------------------------------ |
-| Sortformer MLX       | Apple Silicon (Metal) | 0.07s/min     | ~4 sec        | Crashes on full episodes (see below) |
-| pyannote community-1 | Local CPU             | 36.2s/min     | ~36 min       | Works, slow                          |
-| pyannote community-1 | Modal T4 (16GB)       | 3.14s/min     | ~279 sec      |                                      |
-| pyannote community-1 | Modal L4 (24GB)       | ~2s/min (est) | ~180 sec      |                                      |
-| pyannote community-1 | Modal A10 (24GB)      | 1.81s/min     | ~161 sec      |                                      |
-| pyannote community-1 | Modal L40S (48GB)     | 1.13s/min     | ~100 sec      |                                      |
+| Backend              | Hardware                   | Short clip (89s) | Full episode (89min) | Time/min      |
+| -------------------- | -------------------------- | ---------------- | -------------------- | ------------- |
+| Senko                | Apple Silicon (CoreML/ANE) | 0.11s            | 5.59s                | **0.06s/min** |
+| Sortformer MLX       | Apple Silicon (Metal)      | 0.11s            | 💥 crash              | —             |
+| pyannote community-1 | Local CPU                  | 53.7s            | ~2,700s              | 36.2s/min     |
+| pyannote community-1 | Modal T4 (16GB)            | —                | 279s                 | 3.14s/min     |
+| pyannote community-1 | Modal A10 (24GB)           | —                | 161s                 | 1.81s/min     |
+| pyannote community-1 | Modal L40S (48GB)          | —                | 100s                 | 1.13s/min     |
+
+### Senko Pipeline Breakdown (full episode)
+
+| Stage              | Time      |
+| ------------------ | --------- |
+| VAD                | 0.71s     |
+| Fbank features     | 0.91s     |
+| Speaker embeddings | 1.82s     |
+| Clustering         | 2.15s     |
+| **Total**          | **5.59s** |
+
+### Memory Profile (Senko, Apple Silicon)
+
+Measured via `psutil` RSS on full episode (89 min):
+
+| Stage              | RSS       | Delta    |
+| ------------------ | --------- | -------- |
+| Baseline           | 20.5 MB   | —        |
+| After model load   | 849.5 MB  | +829 MB  |
+| After inference    | 2622.8 MB | +1773 MB |
+| After gc.collect() | 2622.8 MB | +0 MB    |
+
+Inference memory is not released between runs — the library retains intermediate state. Peak RSS is ~2.6GB and is effectively fixed for the worker process lifetime regardless of episode count, since jobs run sequentially. Memory does not accumulate across episodes.
+
+**Implications for deployment:**
+
+- A machine with 8GB RAM handles this comfortably alongside the API process and Postgres
+- Running Whisper and Senko in the same worker process adds their footprints — plan for ~3-4GB total for the worker
+- Concurrent workers each hold their own ~2.6GB — relevant only if running parallel ingestion, which is not the default for personal use
+- The server-as-persistent-API pattern (multiple concurrent requests) is not recommended for Senko — use the ARQ worker queue instead, which bounds memory to a single sequential worker process
 
 ### Modal GPU Pricing (per episode, 89 min)
 
-| GPU  | $/sec     | Time  | Cost/episode |
-| ---- | --------- | ----- | ------------ |
-| T4   | $0.000164 | 283s  | ~$0.046      |
-| L4   | $0.000222 | ~220s | ~$0.049      |
-| A10  | $0.000306 | 167s  | ~$0.051      |
-| L40S | $0.000542 | 104s  | ~$0.056      |
+| GPU  | $/sec     | Wall time | Cost/episode |
+| ---- | --------- | --------- | ------------ |
+| T4   | $0.000164 | 279s      | ~$0.046      |
+| L4   | $0.000222 | ~220s     | ~$0.049      |
+| A10  | $0.000306 | 161s      | ~$0.051      |
+| L40S | $0.000542 | 100s      | ~$0.056      |
 
 All GPU options cost under $0.06 per episode. T4 is the recommended default.
 
@@ -88,29 +120,31 @@ All GPU options cost under $0.06 per episode. T4 is the recommended default.
 
 ## Key Findings
 
-### 1. ASR is solved on Apple Silicon
+### 1. Senko is the clear local diarization winner
 
-All tested models run via MLX/Metal at 3-5s/min. Whisper is preferred for API compatibility with OpenAI-format endpoints. `whisper-large-v3-turbo` is the recommended production model — best accuracy in the family at 5.2s/min.
+`senko` runs at 0.06s/min on Apple Silicon via CoreML/ANE — matching Sortformer MLX on short clips and completing a full 89-minute episode in 5.59 seconds. Unlike Sortformer, it handles full-length episodes without crashing. MIT license, no HF token required, `device='auto'` picks the right backend. Speaker count was correct on both test clips (3 and 4 speakers) without any manual clamping.
+
+Senko's internal pipeline is chunked by design — VAD segments the audio first, then embeddings and clustering run over those segments. This is why it handles long audio where Sortformer's single-allocation approach fails.
 
 ### 2. Sortformer MLX is fast but not production-ready
 
-`mlx-community/diar_sortformer_4spk-v1-fp16` runs at 0.07s/min on Metal — 500x faster than pyannote CPU. However it crashes on full-length episodes with a GPU memory page fault. The underlying issue is that the mlx-audio library processes the full feature tensor in a single allocation rather than chunking. The NeMo v2 model was trained on 90-second chunks and requires chunked streaming, but `mlx_audio.vad.Model.generate()` exposes no `chunk_size` parameter as of June 2026. The fix is known upstream but not yet shipped. Worth revisiting in a few months.
+`mlx-community/diar_sortformer_4spk-v1-fp16` runs at 0.07s/min on short clips but crashes on full-length episodes with a GPU memory page fault. The mlx-audio library processes the full feature tensor in a single allocation rather than chunking. The NeMo v2 model requires chunked streaming but `mlx_audio.vad.Model.generate()` exposes no `chunk_size` parameter as of June 2026. Worth revisiting when mlx-audio ships chunked streaming.
 
 ### 3. pyannote CPU is viable for infrequent ingestion
 
 At 36s/min a 90-minute episode takes ~36 minutes. Acceptable as an ARQ background job for personal use. Not suitable for bulk processing.
 
-### 4. pyannote on Modal GPU is the production path
+### 4. pyannote on Modal GPU is viable for remote deployment
 
-T4 completes a 90-minute episode in ~280 seconds at ~$0.046. Scales to zero when idle (no standing cost). Pipeline loads once per container startup and stays warm across requests. All GPU tiers work — T4 is the cost-optimal choice.
+T4 completes a 90-minute episode in ~280 seconds at ~$0.046. Scales to zero when idle. All GPU tiers work — T4 is cost-optimal. Useful if the host machine lacks the memory or performance for local diarization, or for bulk processing.
 
-### 5. mlx-qwen3-asr diarization offers no performance benefit
+### 5. ASR is solved on Apple Silicon
+
+All tested models run via MLX/Metal at 3-5s/min. Whisper is preferred for API compatibility with OpenAI-format endpoints. `whisper-large-v3-turbo` is the recommended production model.
+
+### 6. mlx-qwen3-asr diarization offers no performance benefit
 
 `mlx-qwen3-asr --diarize` calls the same pyannote CPU pipeline internally. MLX acceleration only applies to ASR. No wall-time advantage over running pyannote directly.
-
-### 6. Speaker count accuracy requires a hint
-
-Without `min_speakers`/`max_speakers` clamping, pyannote tends to over-count by one speaker, typically from overlapping speech or mic bleed. With clamping, speaker count was correct on both the short clip (3 speakers) and the full episode (4 speakers).
 
 ---
 
@@ -120,21 +154,26 @@ Without `min_speakers`/`max_speakers` clamping, pyannote tends to over-count by 
 
 `mlx-community/whisper-large-v3-turbo` on Apple Silicon. Falls back to `faster-whisper` on CUDA. Same pattern as current `WHISPER_BACKEND` config.
 
-### Diarization config (mirrors transcription pattern)
+### Diarization — local (recommended default)
+
+`senko` with `device='auto'`. No token required. 0.06s/min on Apple Silicon. Handles full-length episodes. MIT license.
+
+### Diarization — remote (optional)
+
+pyannote `community-1` behind a `POST /diarize` HTTP endpoint. Any provider works — Modal deploy, RunPod, local Docker. T4 is cost-optimal at ~$0.05/episode.
+
+### Config (mirrors transcription pattern)
 
 ```
-# Leave empty to disable diarization (all segments tagged UNKNOWN)
+# Leave empty to use local Senko
 DIARIZATION_SERVICE_URL=
 
-# Required for pyannote — usage tracking enforced by model license
+# Required only for pyannote (local or remote) — not needed for Senko
 HF_TOKEN=
 
-# Local pyannote config — ignored when DIARIZATION_SERVICE_URL is set
-DIARIZATION_MODEL=pyannote/speaker-diarization-community-1
+# Local config — ignored when DIARIZATION_SERVICE_URL is set
+DIARIZATION_MODEL=senko
 ```
-
-- **URL empty** — local pyannote on CPU, uses `DIARIZATION_MODEL` and `HF_TOKEN`
-- **URL set** — HTTP POST to that URL; works with Modal deploy, RunPod, local Docker, or any provider exposing the same contract
 
 ### HTTP contract (POST /diarize)
 
@@ -151,8 +190,8 @@ Response:
   "speaker_count": 2,
   "speakers": ["SPEAKER_00", "SPEAKER_01"],
   "duration": 5327.2,
-  "inference_time": 160.74,
-  "time_per_minute": 1.81
+  "inference_time": 5.59,
+  "time_per_minute": 0.06
 }
 ```
 
@@ -162,7 +201,7 @@ Response:
 
 ### Modal deployment
 
-Modal containers are one way to deploy pyannote services behind a fastapi endpoint.
+Modal containers are one way to deploy pyannote services behind a FastAPI endpoint.
 
 ```bash
 # one-time secret setup
@@ -184,10 +223,6 @@ SERVICE_SECRET_NAME=my-hf-secret modal deploy pyannote_service.py
 Modal prints the service URL after deploy — set it as `DIARIZATION_SERVICE_URL` in your app `.env`.
 
 Scaling note: `max_containers=1` is correct for personal use. Increase for concurrent episode ingestion — each container gets its own GPU and Modal routes requests automatically.
-
-**Transcription with Diarization + CUDA**
-
-If running the application on a CUDA platform, consider a unified tool like WhisperX, which combines faster-whisper with pyannote into a single pipeline. This is worth evaluating during the diarization implementation phase — though it only applies to CUDA deployments, so clients without CUDA GPU hardware would still need a separate diarization service or be satisfied with CPU diarization.
 
 ### Service authentication
 
@@ -212,14 +247,20 @@ The app sends it as a request header (`X-Api-Key`). The corresponding app config
 
 If `SERVICE_API_KEY` is not set the service runs unauthenticated — useful for local Docker or trusted network deployments.
 
+**Transcription with Diarization + CUDA**
+
+If running the application on a CUDA platform, consider a unified tool like WhisperX, which combines faster-whisper with pyannote into a single pipeline. This is worth evaluating during the diarization implementation phase — though it only applies to CUDA deployments, so clients without GPU hardware would still need a separate diarization service.
+
 ---
 
 ## Scripts
 
-| Script                        | Purpose                                         |
-| ----------------------------- | ----------------------------------------------- |
-| `convert_audio.py`            | Convert m4a to 16kHz mono WAV via ffmpeg        |
-| `bench_pyannote.py`           | pyannote CPU diarization benchmark              |
-| `bench_sortformer.py`         | Sortformer MLX diarization benchmark            |
-| `bench_mlx_whisper.py`        | mlx-whisper ASR benchmark                       |
-| `bench_modal_pyannote.py`     | pyannote on Modal GPU benchmark (ephemeral)     |
+| Script                        | Purpose                                     |
+| ----------------------------- | ------------------------------------------- |
+| `convert_audio.py`            | Convert m4a to 16kHz mono WAV via ffmpeg    |
+| `bench_pyannote.py`           | pyannote CPU diarization benchmark          |
+| `bench_sortformer.py`         | Sortformer MLX diarization benchmark        |
+| `bench_senko.py`              | Senko diarization benchmark ⭐               |
+| `bench_mlx_whisper.py`        | mlx-whisper ASR benchmark                   |
+| `bench_mlx_qwen3_asr_only.py` | mlx-qwen3-asr ASR-only benchmark            |
+| `bench_modal_pyannote.py`     | pyannote on Modal GPU benchmark (ephemeral) |

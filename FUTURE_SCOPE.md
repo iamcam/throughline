@@ -111,17 +111,16 @@ For a 1-hour episode: pyannote = ~36 min wall time; Sortformer MLX = ~4 seconds.
 
 **Alignment step (new):** Whisper outputs transcript segments with `start`/`end` timestamps. The diarization model outputs speaker turns with `start`/`end`. A post-processing alignment step assigns a `speaker_id` to each transcript segment by finding the speaker turn with maximum timestamp overlap. O(n×m) scan is sufficient for podcast-length audio.
 
-**Speaker label normalization:** Sortformer returns integer speaker IDs (`0, 1, 2`). Normalize to project convention on output:
-```python
-speaker_id = f"SPEAKER_{seg.speaker:02d}"
-```
+**Speaker label normalization:** Senko returns string IDs (`SPEAKER_01`, `SPEAKER_02`) already in the project convention. Sortformer returns integers (`0, 1, 2`) — normalize on output if used: `speaker_id = f"SPEAKER_{seg.speaker:02d}"`.
+
 
 **Implementation backends:**
 
-- **Local CPU (any machine):** `pyannote/speaker-diarization-community-1` via `pyannote.audio`. Requires `HF_TOKEN`. Slow on CPU (36s/min) but self-contained. Good for dev and infrequent personal ingestion via ARQ background job.
-- **Modal GPU (recommended remote path):** `modal deploy pyannote_service.py` turns the same pyannote pipeline into a persistent GPU-backed web service. T4 completes a 90-minute episode in ~280s at ~$0.046. Scales to zero when idle. No standing cost.
+- **Senko (recommended local path):** MIT license, no HF token required, `device='auto'` selects CoreML/ANE on Apple Silicon or CPU elsewhere. Processes a 90-minute episode in ~6 seconds locally. Handles full-length episodes correctly — chunked VAD pipeline avoids the memory issues that affect Sortformer MLX. Install: `uv add "git+https://github.com/narcotic-sh/senko.git"`.
+- **Local pyannote CPU (fallback):** `pyannote/speaker-diarization-community-1` via `pyannote.audio`. Requires `HF_TOKEN`. 36s/min on CPU — slow but self-contained. Acceptable as an ARQ background job for infrequent ingestion on non-Apple hardware.
+- **Modal GPU (remote path):** `modal deploy pyannote_service.py` turns the pyannote pipeline into a persistent GPU-backed web service. T4 completes a 90-minute episode in ~280s at ~$0.046. Scales to zero when idle. No standing cost. Useful for bulk processing or machines without sufficient local performance.
 - **Generic HTTP sidecar:** Any provider (RunPod, self-hosted Docker) exposing the same `POST /diarize` contract works as a drop-in. The app never knows which provider is behind the URL.
-- **Sortformer MLX (future):** `mlx-community/diar_sortformer_4spk-v1-fp16` via `mlx-audio` runs at 0.07s/min on Apple Silicon but crashes on full-length episodes due to missing chunk support in the library. Worth revisiting when `mlx-audio` ships chunked streaming.
+- **Sortformer MLX (future):** `mlx-community/diar_sortformer_4spk-v1-fp16` via `mlx-audio` runs at 0.07s/min on short clips but crashes on full-length episodes due to missing chunk support in the library. Worth revisiting when `mlx-audio` ships chunked streaming.
 
 **Configuration (mirrors transcription pattern):**
 
@@ -142,7 +141,7 @@ URL empty → local CPU. URL set → HTTP POST to any provider. Same pattern as 
 
 **Sequencing note:** Strong candidate to move ahead of the ARQ queue work. The pipeline change is self-contained (new `DiarizationService` Protocol + alignment step), performance is proven, and it unlocks the multi-speaker persona queries that are the most distinctive product feature. That said, the ARQ queue makes the local CPU path significantly more practical — local diarization as a blocking call is painful; as an ARQ background job it is fine. The two features are complementary.
 
-**Interview story:** "I benchmarked pyannote CPU vs GPU on Modal and found a 10x speedup at under $0.05 per episode — cheap enough to treat as effectively free. I designed the backend as a URL-based config so any provider fits without touching app code. I used `UNKNOWN` as an honest sentinel in v1 rather than `SPEAKER_00` — that distinction matters when re-ingesting old episodes after diarization lands."
+**Interview story:** "I ran a structured feasibility experiment across five diarization backends before writing any production code. pyannote CPU was 36s/min — too slow for interactive use. Sortformer MLX crashed on full-length episodes. Modal GPU worked at $0.05/episode but added a deployment dependency. Senko turned out to be the answer — MIT license, no token required, 0.06s/min on Apple Silicon via CoreML. I designed the backend as a URL-based config so any provider fits without touching application code. I used `UNKNOWN` as an honest sentinel in v1 rather than `SPEAKER_00` — that distinction matters when re-ingesting old episodes after diarization lands."
 
 ---
 
