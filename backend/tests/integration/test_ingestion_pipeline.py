@@ -209,6 +209,26 @@ async def test_error_stored_on_failure(episode, mock_services, db_session):
     assert "network failure" in episode.pipeline_error
 
 
+async def test_episode_response_includes_pipeline_error(client, db_session):
+    feed = Feed(id=uuid4(), rss_url="https://example.com/feed.rss", title="Test Feed")
+    ep = Episode(
+        id=uuid4(),
+        feed_id=feed.id,
+        guid="error-field-test-001",
+        title="Test Episode",
+        audio_url="https://example.com/episode.mp3",
+        pipeline_status="ERROR",
+        pipeline_error="network failure",
+    )
+    db_session.add(feed)
+    db_session.add(ep)
+    await db_session.commit()
+
+    response = await client.get(f"/api/v1/episodes/{ep.id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["pipeline_error"] == "network failure"
+
 def test_local_satisfies_protocol():
     svc = LocalTranscriptionService(
         huggingface_token="hf_fake",

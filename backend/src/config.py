@@ -9,13 +9,17 @@ class Settings(BaseSettings):
     # App
     log_level: str = "WARN"
     audio_storage_path: str = "./data/audio"
-    max_concurrent_ingestions: int = 2
+    max_concurrent_ingestions: int = 1  # in-process semaphore size, or streaQ concurrency when REDIS_URL is set
 
     huggingface_token: str | None = None
 
     # Database
     database_url: str
     cors_origins: str
+
+    # Queue
+    redis_url: str = ""  # empty = BackgroundTaskQueue; set = StreaqQueue
+    transcription_max_workers: int = 1  # ProcessPoolExecutor size for local Whisper
 
     # LLM
     llm_base_url: str
@@ -28,7 +32,6 @@ class Settings(BaseSettings):
     chunk_min_tokens: int = 20
     topic_similarity_threshold: float = 0.75
 
-
     # Embeddings
     embedding_base_url: str = ""
     embedding_api_key: str = "none"
@@ -36,11 +39,12 @@ class Settings(BaseSettings):
     embedding_dimensions: int = 768
 
     # Transcription
-    transcription_service_url: str = "" # TODO
+    transcription_service_url: str = ""
     transcription_api_key: str | None = None
 
     whisper_backend: str = "faster_whisper"
     whisper_model: str = "medium"
+    transcription_max_workers: int = 1  # ProcessPoolExecutor size for local Whisper
 
     diarization_model: str | None = None
     speaker_inference_window_ms: int = 900_000

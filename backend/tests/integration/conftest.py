@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from asgi_lifespan import LifespanManager
 
 from src.api.main import app
-from src.api.dependencies import get_db
+from src.shared.db import get_db
 from src.models.db import Base
 from src.config import get_settings
 from src.llm.base import LLMResponse, ToolCall

@@ -14,7 +14,15 @@ Examples use podman for container management, but docker will also work - just s
 
 ### 1. Environment
 
-Copy `.env.example` to `.env` and fill in the relevant settings.
+Copy `backend/.env.example` to `backend/.env` and fill in the relevant settings.
+
+**Running via Docker/Podman?**
+
+You can copy `backend/.env.example` straight to `backend/.env` and start the whole stack from the project root with `podman compose up -d` — no extra setup needed.
+
+If you'd rather keep native-dev and containerized settings separate (e.g. different `DATABASE_URL`/`REDIS_URL` hostnames), copy your Docker-specific settings into `backend/.env.docker` instead, then set `BACKEND_ENV_FILE=.env.docker` in the project root `.env`. Compose falls back to `backend/.env` if `BACKEND_ENV_FILE` isn't set.
+
+Either way, any service running on your host machine (Ollama, MLX, llama-server, etc.) needs to be reached via `host.docker.internal`, not `localhost`, from inside a container.
 
 ### 2. Virtual Environment
 
@@ -84,10 +92,10 @@ Pyannote requires a Hugging Face token and model access. Accept the terms at htt
 
 ### 4. Bootstrapping
 
-This project uses Postgres with pgvector for embeddings. If you don't already have a Postgres instance with pgvector, use the included `docker-compose.dev.yml`:
+This project uses Postgres with pgvector for embeddings. If you don't already have a Postgres instance with pgvector, use the included `docker-compose.db.yml`:
 
 ```bash
-podman compose -f docker-compose.dev.yml up -d
+podman compose -f docker-compose.db.yml up -d
 ```
 
 **Run migrations**
@@ -115,6 +123,23 @@ podman exec -it backend-db-1 psql -U <username> -d podcast_engine_test -c "CREAT
 The test database only needs to be created once.
 
 
+**Queue (optional)**
+
+By default, ingestion jobs run in-process (`BackgroundTaskQueue`) — no additional setup needed. To run them through a real queue instead (streaQ + Redis, closer to how the app runs in production), start Redis with the included `docker-compose.redis.yml`:
+
+```bash
+podman compose -f docker-compose.redis.yml up -d
+```
+
+Then set `REDIS_URL` in `.env`:
+
+```bash
+REDIS_URL=redis://localhost:6379
+```
+
+Leave it empty to keep using the in-process queue.
+
+
 ### 5. Run the Dev Server
 
 ```bash
@@ -123,6 +148,14 @@ uv run uvicorn src.api.main:app --reload --port 3001
 
 > API available at http://localhost:3001
 > API docs at http://localhost:3001/docs
+
+**If `REDIS_URL` is set**, ingestion jobs are enqueued to Redis but won't run until a worker picks them up. In a separate terminal:
+
+```bash
+uv run streaq run src.worker:worker
+```
+
+If `REDIS_URL` is empty, skip this — ingestion runs in-process instead.
 
 ## Observability
 
@@ -214,10 +247,10 @@ uv run alembic downgrade -1
 
 ```bash
 # Connect directly to the DB
-podman compose -f docker-compose.dev.yml exec db psql -U username -d podcast_engine
+podman compose -f docker-compose.db.yml exec db psql -U username -d podcast_engine
 
 # Wipe the database volume and start fresh
-podman compose -f docker-compose.dev.yml down -v
+podman compose -f docker-compose.db.yml down -v
 ```
 
 ### Testing

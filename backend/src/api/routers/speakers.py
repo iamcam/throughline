@@ -3,8 +3,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-
-from src.api.dependencies import get_db, get_speaker_store
+from src.api.dependencies import get_speaker_store
+from src.shared.db import get_db
 from src.ingestion.speaker_store import SpeakerStore
 from src.models.db import TranscriptSegment
 from src.models.schemas import SpeakerResponse, SpeakerPreviewResponse, UpdateSpeakerRequest

@@ -30,6 +30,7 @@ export interface Episode {
   pipeline_status: string;
   pipeline_stage: string | null;
   pipeline_progress: number | null;
+  pipeline_error: string | null;
   ingestion_job_id: string | null;
 }
 

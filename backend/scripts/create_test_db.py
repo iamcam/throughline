@@ -1,3 +1,4 @@
+# scripts/create_test_db.py
 import asyncio
 import asyncpg
 from src.config import get_settings

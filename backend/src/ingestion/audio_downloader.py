@@ -1,5 +1,6 @@
 # src/ingestion/audio_downloader.py
 import asyncio
+import logging
 from pathlib import Path
 from uuid import UUID
 
@@ -8,6 +9,8 @@ from opentelemetry import trace
 
 from src.config import get_settings
 from src.telemetry.tracer import tracer
+
+logger = logging.getLogger(__name__)
 
 
 class AudioDownloader:
@@ -70,3 +73,10 @@ class AudioDownloader:
                 raise
 
         return str(dest)
+
+    async def delete(self, path: str) -> None:
+        """Remove a downloaded audio file. Safe to call even if it's already gone."""
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning(f"Failed to delete audio file {path}: {e}")

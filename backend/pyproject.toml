@@ -1,6 +1,6 @@
 [project]
 name = "backend"
-version = "1.0.0"
+version = "1.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -27,6 +27,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "sqlalchemy[asyncio]>=2.0.50",
     "sse-starlette>=3.4.4",
+    "streaq>=7.1.0",
     "tiktoken>=0.13.0",
     "torch>=2.12.0",
     "torchaudio>=2.11.0",

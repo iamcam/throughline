@@ -30,7 +30,6 @@ The primary interface is a freeform chat that uses tool-calling to decide when r
 - Graph RAG (deferred upgrade path)
 - Persistent conversation history (ephemeral sessions only in v1)
 - Automated feed polling (manual ingestion trigger)
-- Persistent job queue (semaphore-backed in-memory queue sufficient for v1)
 - Speaker diarization (deferred — CPU/local diarization via Pyannote is impractical on non-CUDA hardware; see Future Scope section 1.5)
 - Mid-conversation scope changes (scope set once at session creation; V2 work — see Future Scope)
 
@@ -43,30 +42,34 @@ The primary interface is a freeform chat that uses tool-calling to decide when r
 │                        Frontend                          │
 │                    React.js (Vite)                       │
 │  Feed Mgmt │ Episode Mgmt │ Speaker UI │ Chat Interface  │
-└────────────────────────┬────────────────────────────────┘
+└────────────────────────┬─────────────────────────────────┘
                          │ HTTP / REST + SSE
-┌────────────────────────▼────────────────────────────────┐
+┌────────────────────────▼─────────────────────────────────┐
 │                    Backend API                           │
 │                  FastAPI + Python                        │
 │                                                          │
-│  /feeds   /episodes   /transcripts   /query   /health   │
+│  /feeds   /episodes   /transcripts   /query   /health    │
 │                                                          │
-│  IngestionQueue (semaphore-backed, Protocol-abstracted)  │
-└──────┬──────────────────────────────────────┬───────────┘
-       │                                      │
-┌──────▼──────────┐                ┌──────────▼──────────┐
-│ Ingestion        │                │   Query Engine       │
-│ Pipeline         │                │                      │
-│ (orchestrator)   │                │  engine.py           │
+│  IngestionQueue (Protocol-abstracted; Redis-backed via   │
+│  streaQ — enqueue only, no pipeline code runs here)      │
+└──────┬───────────────────────────────────────┬───────────┘
+       │                                       │
+┌──────▼───────────┐                ┌──────────▼──────────┐
+│ Ingestion Worker │                │   Query Engine       │
+│ (separate process│                │                      │
+│  — streaq run)   │                │  engine.py           │
 │                  │                │  (thin orchestrator) │
-│ AudioDownloader  │                │  ↕                   │
-│ TranscriptionSvc │                │  PromptBuilder       │
-│ SpeakerResolver  │                │  ToolDispatcher      │
-│ Chunker          │                │  SessionStore        │
-│ Embedder         │                │  ↕                   │
-│ PipelineStatus   │                │  VectorStore         │
-│   Service        │                │  ResultHydrator      │
-└──────┬──────────┘                └──────────┬──────────┘
+│ pipeline.py      │                │  ↕                   │
+│ (orchestrator)   │                │  PromptBuilder       │
+│  ↕               │                │  ToolDispatcher      │
+│ AudioDownloader  │                │  SessionStore        │
+│ TranscriptionSvc │                │  ↕                   │
+│ SpeakerResolver  │                │  VectorStore         │
+│ Chunker          │                │  ResultHydrator      │
+│ Embedder         │                │                      │
+│ PipelineStatus   │                │                      │
+│   Service        │                │                      │
+└──────┬───────────┘                └─────────┬────────────┘
        │                                      │
 ┌──────▼──────────────────────────────────────▼──────────┐
 │                     Data Layer                           │
@@ -131,7 +134,8 @@ def get_embedding_client() -> EmbeddingClient:
     # In tests: inject MockEmbeddingClient
 
 def get_ingestion_queue(request: Request) -> IngestionQueue:
-    # Returns BackgroundTaskQueue singleton from app.state
+    # Returns StreaqQueue singleton from app.state when REDIS_URL is set,
+    # else BackgroundTaskQueue (in-process fallback — see section 3.5)
 
 def get_transcription_service() -> TranscriptionService:
     # Returns LocalTranscriptionService or RemoteTranscriptionService
@@ -235,14 +239,31 @@ Implementations: `LocalTranscriptionService` (Whisper + Pyannote), `RemoteTransc
 class IngestionQueue(Protocol):
     async def enqueue(self, episode_id: UUID, job_args: dict) -> str: ...
     async def get_status(self, job_id: str) -> JobStatus: ...
-    async def get_position(self, job_id: str) -> int: ...
     async def cancel(self, job_id: str) -> bool: ...
 ```
 
-Implementations: `BackgroundTaskQueue` (v1, in-process), `ARQQueue` (post-v1, Redis-backed).
+Implementations: `StreaqQueue` (default, Redis-backed via streaQ, separate worker process), `BackgroundTaskQueue`
+(in-process fallback when `REDIS_URL` is unset).
 
-**Note:** `cancel()` returns `False` unconditionally in v1. Stuck jobs require a DB status update or uvicorn
-restart to clear. See tech debt note in section 3.5.
+The queue never generates or accepts a caller-supplied job id — `enqueue()` always returns an id the queue
+itself assigns. **Postgres, not the queue, is the sole authority for ingestion dedup**: `ingest` and `reingest`
+route handlers guard against duplicate/conflicting requests entirely via `episode.pipeline_status` checks. The queue layer offers no id-collision backstop by design — see section 3.5.
+
+`JobStatus` (`src/ingestion/queue.py`) is a five-value enum — `QUEUED`, `RUNNING`, `DONE`, `FAILED`, `CANCELLED`
+— that both implementations map their native states onto. `CANCELLED` is not a native state in either backend;
+it is inferred from the stored result being a cancellation-related exception. Three typed exceptions accompany
+the Protocol: `JobNotFoundError` (raised when no record of a job id exists — normal once a result's TTL has
+elapsed), `DuplicateJobError`, and `QueueConnectionError` (Redis unreachable — `StreaqQueue` only).
+
+**`get_status()` usage note:** callers should check `episode.pipeline_status` first — it durably answers
+"is this job done" with no TTL. `get_status()`/`cancel()` exist for the narrower case of inspecting or
+interrupting a job that Postgres still shows as in-flight.
+
+**`cancel()`** is a real operation in `StreaqQueue` (not a stub) — it can interrupt a job at any `await` point,
+which stops most pipeline stages immediately. The one exception: CPU-bound Whisper transcription runs inside a
+`ProcessPoolExecutor`, and cancelling the asyncio-level task does not kill the underlying OS subprocess. A
+cancelled job mid-transcription stops accepting the result, but the subprocess keeps running to completion in
+the background. See Future Scope for the subprocess-kill follow-up.
 
 #### VectorStore (`src/storage/vector_store.py`)
 
@@ -387,72 +408,91 @@ Each service has a single responsibility and is independently testable by inject
 
 Understanding the execution model is important for reasoning about frontend reconnects, page refreshes, and job durability.
 
+#### Why a separate worker process
+
+Ingestion involves CPU-bound transcription and can run for minutes. Running it in the same process as the API means a long ingestion job and API responsiveness compete for the same event loop's attention, and a crashed/restarted API process would silently kill any in-flight job with no record of how far it got. The queue is Redis-backed (via [streaQ](https://github.com/tastyware/streaq)) specifically to decouple these: the API process only ever enqueues; a dedicated worker process (`streaq run src.worker:worker`) is the only thing that executes pipeline code.
+
 #### Execution model
 
 ```
 POST /ingest (HTTP request)
   │
-  └─► BackgroundTaskQueue.enqueue()
+  └─► StreaqQueue.enqueue()
         │
-        ├─ Adds coroutine to asyncio event loop   ← runs independently of HTTP request
+        ├─ worker.enqueue_unsafe(INGEST_EPISODE_JOB, episode_id, job_args)
+        │    → serializes args, pushes to Redis, returns immediately
+        │    → API process never imports pipeline code — dispatch is by
+        │      function name string only (see below)
         ├─ Writes pipeline_status=QUEUED to DB    ← DB is source of truth
-        └─ Returns job_id immediately
+        └─ Returns job_id (streaQ-generated) immediately
 
              [HTTP request ends — frontend can close, refresh, disconnect]
 
-        Background coroutine continues running in uvicorn process:
+        Separate worker process (streaq run), own event loop:
           │
-          ├─ Acquires semaphore slot
+          ├─ Picks up the job (bounded by Worker(concurrency=N))
+          ├─ pipeline_runner.py builds PipelineServices — LLM/embedding
+          │    clients from Worker lifespan context (built once, reused
+          │    across jobs); AudioDownloader built fresh per job (cheap,
+          │    stateless, no persistent connection worth holding)
           ├─ Calls PipelineStatusService.set() at every stage transition
-          ├─ Delegates CPU-bound work to ProcessPoolExecutor (Whisper, Pyannote)
-          │    └─► asyncio event loop stays free — API remains responsive
+          ├─ Delegates CPU-bound work to ProcessPoolExecutor (Whisper)
+          │    └─► worker's event loop stays free for other jobs
           └─ Writes pipeline_status=READY (or ERROR) to DB when done
 
 GET /episodes/{id}/status/stream (SSE — separate connection)
   │
   └─► Reads pipeline_status from DB every 2 seconds
-        └─ Completely independent of the background coroutine
+        └─ Completely independent of the worker process
            Frontend can connect, disconnect, reconnect at any time
            Status is always current because DB is the source of truth
 ```
 
-**Key point:** The background coroutine and the SSE stream are fully decoupled. The pipeline writes to the DB via `PipelineStatusService`. SSE reads from the DB. A page refresh drops the SSE connection but has no effect on the running job.
+**Key point:** the worker process and the SSE stream are fully decoupled from the API process. The pipeline writes to the DB via `PipelineStatusService`. SSE reads from the DB. A page refresh, an API restart, or a worker restart has no effect on a running job — streaQ's pessimistic execution model keeps a job in Redis until it succeeds or fails, so a worker crash mid-job means the job is picked up again on restart, not lost.
 
-**Queue ordering:** Generally FIFO in practice — `asyncio.create_task()` schedules coroutines in order and the semaphore releases them in arrival order. Not a strict guarantee; two rapidly enqueued jobs could start in either order depending on event loop scheduling. For a single-user application this is acceptable.
+**Decoupled dispatch by name, not import:** `StreaqQueue` calls `worker.enqueue_unsafe(INGEST_EPISODE_JOB, ...)` — `INGEST_EPISODE_JOB` is a plain string constant (`src/ingestion/queue.py`), matched against the worker process's own `@worker.task`-decorated function of the same name (`src/worker.py`). The API process never imports pipeline code as a result.
 
-**Known tech debt — no job cancellation:** `cancel()` on `BackgroundTaskQueue` returns `False` unconditionally. A running coroutine cannot be interrupted. To clear a stuck job: update `pipeline_status` to `ERROR` in the DB directly, or restart uvicorn. Fix: store `asyncio.Task` handles and expose real cancellation. Post-v1 ARQ upgrade makes this moot.
+The `@worker.task` decorator is used only on the worker side. It's what builds the worker's task registry — the lookup table the worker consults when a job envelope arrives from Redis, to find the real function to call. `enqueue_unsafe()` does not consult any registry: it packages `fn_name` plus arguments into a task envelope and writes it to Redis, with no check that a function by that name actually exists anywhere. This is the literal meaning of "unsafe" in the method name — it's about the absence of this check, not about safety in a broader sense.
+
+Consequence: a mismatched name between `INGEST_EPISODE_JOB` and the worker's registered task name does not fail at enqueue time, or at import time — the job writes to Redis successfully and sits as `QUEUED` indefinitely. The mismatch only surfaces when a worker actually attempts to pick up the job and fails its registry lookup. Both sides must be kept in sync deliberately; there is no automated check that they are.
+
+**Queue ordering:** FIFO per Redis stream ordering; `Worker(concurrency=N)` bounds how many jobs run at once within one worker process. Not a strict cross-process guarantee if multiple worker processes are ever run — acceptable for a single-user, single-worker deployment.
+
+**Job dedup lives entirely in Postgres, not the queue:** streaQ always generates a fresh job id on enqueue — there is no supported way to request a specific id. `ingest_episode_handler` and `reingest_episode_handler` guard against duplicate/conflicting requests via `episode.pipeline_status` checks before ever calling `enqueue()`. The queue layer offers no id-collision backstop by design.
+
+**Cancellation:** `cancel()` is a real operation for both queued and in-progress jobs, via streaQ's `Task.abort()` / `Worker.abort_by_id()`. Known limitation: aborting a job blocked on Whisper transcription stops the job, but the underlying `ProcessPoolExecutor` subprocess runs to completion unobserved — actually killing that subprocess would require tracking its OS PID directly. See Future Scope.
 
 #### CPU-bound work must use ProcessPoolExecutor
 
-Whisper is CPU-bound and will block the asyncio event loop if called directly. Pyannote (diarization) has the same constraint but is not used in v1 — this pattern is documented here for when diarization is introduced:
+Whisper is CPU-bound and will block the worker's event loop if called directly. The executor lives at module scope in `src/transcription/local.py` (not per-instance) — it is created once per worker process, independent of how many `LocalTranscriptionService` instances are constructed:
 
 ```python
 # src/transcription/local.py
-class LocalTranscriptionService:
-    def __init__(self):
-        self._executor = ProcessPoolExecutor(max_workers=1)
+_executor = ProcessPoolExecutor(max_workers=settings.transcription_max_workers)
 
+class LocalTranscriptionService:
     async def transcribe(self, audio_path, speaker_count_hint=None, language="en"):
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
-            self._executor,
+            _executor,
             _run_transcription_sync,
             audio_path, speaker_count_hint, language
         )
         return result
 ```
 
+`transcription_max_workers` and the worker's `concurrency` are deliberately independent settings: `concurrency` bounds how many jobs the worker process runs concurrently (I/O-bound stages — downloads, LLM calls — genuinely run in parallel up to this limit); `transcription_max_workers` bounds how many of those concurrently-running jobs can be doing actual Whisper CPU work at the same literal instant, regardless of `concurrency`. A job whose transcription call arrives while all executor slots are full queues inside the executor, not in Redis. Both default to `1` for local-first, single-machine deployment; either can be raised independently once transcription or the LLM/embedding endpoints move off-box.
+
 #### What survives a frontend page refresh
 
-| Thing                  | Survives refresh?      | Reason                                                      |
-| ---------------------- | ---------------------- | ----------------------------------------------------------- |
-| Pipeline job execution | ✅ Yes                  | Background coroutine in uvicorn process, unaffected by HTTP |
-| Pipeline status        | ✅ Yes                  | Written to DB at every stage transition                     |
-| SSE stream             | ❌ No                   | HTTP connection dropped on refresh                          |
-| SSE reconnect          | ✅ Yes                  | Frontend re-opens stream; DB has current status             |
-| Queue position         | ✅ Yes                  | Derivable from in-memory registry on reconnect              |
-| Jobs in queue          | ⚠️ Process restart only | Lost if uvicorn restarts; survives browser refresh          |
-| Chat sessions          | ❌ No                   | InMemorySessionStore cleared on process restart             |
+| Thing                  | Survives refresh? | Reason                                                                |
+| ---------------------- | ----------------- | --------------------------------------------------------------------- |
+| Pipeline job execution | Yes               | Runs in a separate worker process, unaffected by HTTP or API restarts |
+| Pipeline status        | Yes               | Written to DB at every stage transition                               |
+| SSE stream             | No                | HTTP connection dropped on refresh                                    |
+| SSE reconnect          | Yes               | Frontend re-opens stream; DB has current status                       |
+| Jobs in queue          | Yes               | Persisted in Redis; survives API and worker process restarts          |
+| Chat sessions          | No                | InMemorySessionStore cleared on process restart                       |
 
 #### Frontend reconnect pattern
 
@@ -464,17 +504,13 @@ episodes
   .forEach(ep => connectSSE(ep.id))
 ```
 
-Note: `PENDING_NAMES` is not a terminal status in v1 — it is removed from the pipeline entirely until diarization is introduced.
-
-#### Post-v1 queue upgrade
-
-The `IngestionQueue` Protocol means `BackgroundTaskQueue` can be replaced with `ARQQueue` (Redis-backed, separate worker process) by implementing the Protocol and updating `dependencies.py`. No pipeline or route handler changes required.
+#### Configuration
 
 ```
-MAX_CONCURRENT_INGESTIONS=2
-# Future:
-# QUEUE_BACKEND=arq
-# REDIS_URL=redis://localhost:6379
+MAX_CONCURRENT_INGESTIONS=1          # streaQ Worker(concurrency=...)
+TRANSCRIPTION_MAX_WORKERS=1          # ProcessPoolExecutor size for local Whisper
+REDIS_URL=redis://redis:6379         # presence implies StreaqQueue; empty/unset falls
+# back to BackgroundTaskQueue (in-process, no Redis)
 ```
 
 ---
@@ -1243,7 +1279,8 @@ podcast-knowledge-engine/
 │   │   │   └── client.py            # OpenAICompatibleLLMClient + OpenAICompatibleEmbeddingClient
 │   │   ├── ingestion/
 │   │   │   ├── pipeline.py          # Thin orchestrator only
-│   │   │   ├── queue.py             # IngestionQueue Protocol + BackgroundTaskQueue
+│   │   │   ├── pipeline_runner.py   # Worker-side: builds PipelineServices, runs ingest_episode
+│   │   │   ├── queue.py             # IngestionQueue Protocol + StreaqQueue + BackgroundTaskQueue
 │   │   │   ├── rss_parser.py
 │   │   │   ├── audio_downloader.py
 │   │   │   ├── transcript_store.py  # Save/retrieve transcript_segments
@@ -1273,25 +1310,31 @@ podcast-knowledge-engine/
 │   │   │   ├── setup.py              # OTel provider, exporter, OpenAIInstrumentor
 │   │   │   └── tracer.py             # shared tracer singleton
 │   │   └── config.py
-│   ├── tests/
-│   │   ├── conftest.py              # MockLLMClient, MockVectorStore, MockHydrator, MockEmbeddingClient
-│   │   ├── unit/
-│   │   │   ├── test_chunker.py
-│   │   │   ├── test_rss_parser.py
-│   │   │   ├── test_speaker_resolver.py
-│   │   │   ├── test_prompt_builder.py
-│   │   │   ├── test_result_hydrator.py
-│   │   │   ├── test_retriever.py
-│   │   │   ├── test_session_store.py
-│   │   │   ├── test_tool_dispatcher.py
-│   │   │   └── test_engine.py
-│   │   ├── integration/
-│   │   │   ├── conftest.py          # DB engine, session, HTTP client fixtures
+│   │   ├── worker.py                # streaQ Worker + WorkerContext lifespan; entry point for `streaq run`
+│   ├── tests
+│   │   ├── conftest.py
+│   │   ├── fixtures
+│   │   │   ├── sample_feed.xml
+│   │   │   └── sample_transcript.json
+│   │   ├── integration
+│   │   │   ├── conftest.py
+│   │   │   ├── test_feeds.py
 │   │   │   ├── test_ingestion_pipeline.py
-│   │   │   └── test_chat_session.py
-│   │   └── fixtures/
-│   │       ├── sample_feed.xml
-│   │       └── sample_transcript.json
+│   │   │   ├── test_queue.py
+│   │   │   └── test_speakers.py
+│   │   └── unit
+│   │       ├── test_auth_middleware.py
+│   │       ├── test_background_queue.py
+│   │       ├── test_chunker.py
+│   │       ├── test_engine.py
+│   │       ├── test_itunes.py
+│   │       ├── test_prompt_builder.py
+│   │       ├── test_result_hydrator.py
+│   │       ├── test_retriever.py
+│   │       ├── test_rss_parser.py
+│   │       ├── test_schemas.py
+│   │       ├── test_speaker_resolver.py
+│   │       └── test_tool_dispatcher.py
 │   ├── pyproject.toml
 │   └── .env.example
 ├── frontend/
@@ -1340,7 +1383,7 @@ podcast-knowledge-engine/
 │   ├── pyproject.toml
 │   └── Dockerfile
 ├── docker-compose.yml
-├── docker-compose.dev.yml
+├── docker-compose.db.yml
 ├── .env.example
 ├── ARCHITECTURE.md
 ├── IMPLEMENTATION_PLAN.md
@@ -1354,56 +1397,85 @@ podcast-knowledge-engine/
 ## 7. Docker Compose
 
 ```yaml
+# docker-compose.yml
 services:
-  api:
-    build: ./backend
-    ports: ["8000:8000"]
-    env_file: .env
-    depends_on:
-      db:
-        condition: service_healthy
-    volumes:
-      - audio_data:/app/data/audio
-    restart: unless-stopped
-
-  frontend:
-    build: ./frontend
-    ports: ["3000:3000"]
-    depends_on: [api]
-    restart: unless-stopped
-
   db:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_DB: podcast_engine
+      POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
-    volumes: ["pgdata:/var/lib/postgresql/data"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d podcast_engine"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
+      timeout: 5s
       retries: 5
     restart: unless-stopped
 
-  transcription:
-    build: ./transcription-service
-    ports: ["8001:8001"]
-    env_file: .env
-    volumes:
-      - audio_data:/app/data/audio
-      - model_cache:/root/.cache
-    profiles: ["transcription"]
+  redis:
+    image: redis:7-alpine
+    # No persistence by default -- queued/in-flight jobs are lost if this
+    # container restarts. See FUTURE_SCOPE.md 2.1c for adding durability.
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
-  phoenix:
-    image: arizephoenix/phoenix:latest
-    ports: ["6006:6006", "4317:4317"]
-    profiles: ["observability"]
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: backend/${BACKEND_ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["./entrypoint.sh", "worker"]
+    env_file: backend/${BACKEND_ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - model_cache:/root/.cache/huggingface
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    env_file: frontend/.env
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
     restart: unless-stopped
 
 volumes:
   pgdata:
-  audio_data:
   model_cache:
 ```
 
@@ -1436,7 +1508,7 @@ volumes:
 
 **Contract tests** — verify all Protocol implementations:
 - `LocalTranscriptionService` and `RemoteTranscriptionService` satisfy `TranscriptionService`
-- `BackgroundTaskQueue` satisfies `IngestionQueue`
+- `StreaqQueue` and `BackgroundTaskQueue` both satisfy `IngestionQueue`
 - `PgvectorStore` satisfies `VectorStore`
 - `InMemorySessionStore` satisfies `SessionStore`
 - `OpenAICompatibleLLMClient` satisfies `LLMClient`
@@ -1457,7 +1529,8 @@ uv run pytest --cov=src --cov-report=term-missing
 | Graph RAG                | Post-chunking NER → entity/relationship tables; `search_graph` tool; new `GraphStore` Protocol                                                       |
 | Persistent conversations | Implement `DBSessionStore` satisfying `SessionStore` Protocol; swap in `dependencies.py`                                                             |
 | Query rewriting          | Pre-retrieval step in `engine.py`; `LLMClient.complete()` call; log original vs rewritten in telemetry                                               |
-| ARQ job queue            | Implement `IngestionQueue` Protocol for ARQ; add Redis to Docker Compose; swap in `dependencies.py`                                                  |
+| Subprocess-level cancel  | Kill the OS-level Whisper subprocess on `cancel()`, not just the asyncio task — requires tracking PID across the `ProcessPoolExecutor` boundary        |
+| Queue overview UI        | `queued_at`/`finished_at` columns on `Episode`; grouped-by-status read endpoint — pure Postgres, no `IngestionQueue` involvement                        |
 | Automatic feed polling   | APScheduler; calls existing `refresh_feed` + `queue.enqueue()`                                                                                       |
 | Alternative vector DBs   | Implement `VectorStore` Protocol for Qdrant/Pinecone; swap in `dependencies.py`; ~1 day                                                              |
 | Speaker diarization      | See Future Scope 1.5. Reinstates `PENDING_NAMES` pipeline status; `UNKNOWN` speaker_ids get real diarization labels; existing episodes re-ingestable |

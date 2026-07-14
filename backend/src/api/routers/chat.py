@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
-
-from src.api.dependencies import get_db, get_session_store, get_query_engine
+from src.shared.db import get_db
+from src.api.dependencies import get_session_store, get_query_engine
 from src.query.engine import QueryEngine, LLMTimeoutError
 from src.query.session_store import SessionStore, ChatSession
 

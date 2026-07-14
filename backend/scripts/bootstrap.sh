@@ -5,7 +5,7 @@ set -e
 export $(grep -v '^#' .env | grep -v '^\s*$' | sed 's/#.*//' | xargs)
 
 echo "Starting DB..."
-podman compose -f docker-compose.dev.yml up --wait
+podman compose -f docker-compose.db.yml up --wait
 
 echo "Running migrations..."
 uv run alembic upgrade head

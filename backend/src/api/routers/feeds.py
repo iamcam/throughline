@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
-from src.api.dependencies import get_db
+from src.shared.db import get_db
 from src.models.schemas import AddFeedRequest, FeedResponse, EpisodeResponse
 from src.ingestion import feed_service
 from src.ingestion.itunes import is_itunes_url, resolve_itunes_url

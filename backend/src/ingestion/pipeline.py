@@ -74,6 +74,7 @@ async def ingest_episode(
         span.set_attribute("episode.id", str(episode_id))
         span.set_attribute("episode.title", episode.title or "untitled")
         span.set_attribute("episode.has_transcript_url", bool(episode.transcript_url))
+        audio_path = None
 
         try:
 
@@ -148,6 +149,10 @@ async def ingest_episode(
             if not segments:
                 logger.warning("Episode %s: no segments found after transcription", episode_id)
                 await services.status.set(episode_id, "READY", db=db)
+
+                if audio_path:
+                    await services.downloader.delete(audio_path)
+
                 return
 
             segment_texts = [s.text for s in segments]
@@ -187,7 +192,11 @@ async def ingest_episode(
 
             await services.vector_store.upsert(chunks, db=db)
 
+            # ~~~~~~ Wrap Up ~~~~~~
+
             await services.status.set(episode_id, "READY", db=db)
+            if audio_path:
+                await services.downloader.delete(audio_path)
 
         except Exception as e:
             span.record_exception(e)

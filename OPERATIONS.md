@@ -10,11 +10,11 @@
 
 ## Environments
 
-| Environment | Purpose | Infrastructure |
-|-------------|---------|---------------|
-| `local-dev` | Daily development | Docker DB only, services run natively |
+| Environment  | Purpose | Infrastructure |
+|--------------|---------|---------------|
+| `local-dev`  | Daily development | Docker DB only, services run natively |
 | `local-full` | Full stack test | All services in Docker Compose |
-| `demo` | Hosted demo for interviews | Single VPS, all services in Docker Compose |
+| `demo`       | Hosted demo for preview | Single VPS, all services in Docker Compose |
 
 ---
 
@@ -23,11 +23,12 @@
 Fastest iteration loop: run the DB in Docker, everything else natively.
 
 ```bash
-# Start DB only
-docker compose -f docker-compose.dev.yml up -d
-
 # Backend
 cd backend
+
+# Start Redis (optional -- only needed if REDIS_URL is set)
+docker compose -f docker-compose.db.yml -f docker-compose.redis.yml ...
+
 cp .env.example .env
 # Edit .env — set DATABASE_URL, LLM_BASE_URL at minimum
 uv run alembic upgrade head
@@ -43,7 +44,7 @@ yarn build            # TypeScript check + Vite production build
 yarn lint             # ESLint
 
 # API docs
-open http://localhost:8000/docs
+open http://localhost:3001/docs
 ```
 
 **Frontend dev notes:**
@@ -114,105 +115,151 @@ Presence of `TRANSCRIPTION_SERVICE_URL` is what selects remote transcription —
 
 ## Full Stack Docker
 
+Runs everything in containers: Postgres, Redis, the API, a worker process, and the frontend.
+
 ```bash
 cp .env.example .env
-# Edit .env
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
+# Edit backend/.env — set LLM_BASE_URL, LLM_MODEL_NAME at minimum
 
-docker compose up           # api + frontend + db
-docker compose up -d        # detached
-
-# With optional services
-docker compose --profile transcription up          # + transcription sidecar
-docker compose --profile observability up          # + Phoenix
-docker compose --profile transcription \
-               --profile observability up          # everything
-
-# Logs
-docker compose logs -f api
-docker compose logs -f transcription
-
-# DB shell
-docker compose exec db psql -U $DB_USER -d podcast_engine
-
-# Migrations
-docker compose exec api uv run alembic upgrade head
+docker compose up --build     # first run, or after dependency/code changes
+docker compose up -d          # detached
 ```
+
+**Applying config changes:** editing `.env`/`backend/.env.docker` doesn't require a rebuild — just recreate the affected containers:
+
+```bash
+docker compose up -d --force-recreate backend worker
+```
+
+Rebuilds are only needed for dependency or code changes (neither service live-reloads inside the container):
+
+```bash
+docker compose up -d --build backend    # or: worker
+```
+
+**Logs**
+```bash
+docker compose logs -f backend
+docker compose logs -f worker
+```
+
+**DB shell**
+```bash
+docker compose exec db psql -U $DB_USER -d $DB_NAME
+```
+
+**Migrations** — run automatically on container start (`backend/entrypoint.sh`); to run manually:
+```bash
+docker compose exec backend uv run alembic upgrade head
+```
+
+**Services**
+
+| Service    | Purpose                                                                          |
+| ---------- | -------------------------------------------------------------------------------- |
+| `db`       | Postgres + pgvector                                                              |
+| `redis`    | Job queue backend for `worker`                                                   |
+| `backend`  | FastAPI app — enqueues ingestion jobs, never runs the pipeline directly          |
+| `worker`   | Runs ingestion jobs (streaQ) — same image as `backend`, different entrypoint arg |
+| `frontend` | Nginx-served React app                                                           |
+
+Bring your own Postgres or Redis instead of the containerized ones by pointing `DATABASE_URL`/`REDIS_URL` at your existing instance and removing the corresponding service (and its `depends_on` entry on `backend`/`worker`) from `docker-compose.yml`.
 
 ### docker-compose.yml (full)
 
 ```yaml
-version: "3.9"
-
+# docker-compose.yml
 services:
-  api:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db:5432/podcast_engine
-      TRANSCRIPTION_SERVICE_URL: http://transcription:8001
-    depends_on:
-      db:
-        condition: service_healthy
-    volumes:
-      - audio_data:/app/data/audio
-    restart: unless-stopped
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    depends_on:
-      - api
-    restart: unless-stopped
-
   db:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_DB: podcast_engine
+      POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"    # expose for local DB tools; remove in production
+      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d podcast_engine"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
       timeout: 5s
       retries: 5
     restart: unless-stopped
 
-  transcription:
-    build:
-      context: ./transcription-service
-      dockerfile: Dockerfile
-    ports:
-      - "8001:8001"
-    env_file: .env
-    volumes:
-      - audio_data:/app/data/audio  # shared with api
-      - model_cache:/root/.cache    # cache Whisper + Pyannote models
-    profiles: ["transcription"]
+  redis:
+    image: redis:7-alpine
+    # No persistence by default -- queued/in-flight jobs are lost if this
+    # container restarts. See FUTURE_SCOPE.md 2.1c for adding durability.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
-  phoenix:
-    image: arizephoenix/phoenix:latest
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: backend/${BACKEND_ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["./entrypoint.sh", "worker"]
+    env_file: backend/${BACKEND_ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - model_cache:/root/.cache/huggingface
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    env_file: frontend/.env
     ports:
-      - "6006:6006"   # Phoenix UI
-      - "4317:4317"   # OTLP gRPC collector
-    profiles: ["observability"]
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
     restart: unless-stopped
 
 volumes:
   pgdata:
-  audio_data:
   model_cache:
+```
+
+**Applying config changes:** editing `.env`/`backend/.env.docker` doesn't require a rebuild — just recreate the affected containers:
+
+```bash
+docker compose up -d --force-recreate backend worker
+```
+
+Rebuilds are only needed for dependency or code changes (neither service live-reloads inside the container):
+
+```bash
+docker compose up -d --build backend    # or: worker
 ```
 
 ---
@@ -223,20 +270,13 @@ volumes:
 
 | Workload | Recommended |
 |----------|------------|
-| API + frontend + DB only (remote transcription or pre-ingested) | 2 vCPU, 4GB RAM — ~$10/mo |
-| API + DB + CPU transcription | 4 vCPU, 8GB RAM — ~$20/mo |
-| API + DB + GPU transcription | GPU VPS — Hetzner CCX, Lambda, RunPod |
-
-For an interview demo, the pragmatic approach: pre-ingest your demo episodes locally, push the data to the hosted DB, and run only the API + frontend on the VPS. No transcription service needed on the server.
-
-**Recommended providers:**
-- Hetzner (EU/US) — best price/performance, CAX21 (4 vCPU ARM, 8GB) ~€6/mo
-- DigitalOcean — easy setup, slightly pricier
-- Fly.io — good for API + frontend as separate apps, free tier available
+| API + frontend + DB only (remote transcription or pre-ingested) | 2 vCPU, 4GB RAM |
+| API + DB + CPU transcription | 4 vCPU, 8GB RAM |
+| API + DB + GPU transcription | GPU VPS |
 
 ---
 
-### Deployment Steps (Hetzner example)
+### Deployment Steps (example)
 
 ```bash
 # 1. Provision server (Ubuntu 24.04)
@@ -250,19 +290,18 @@ cd /app
 
 # 4. Configure
 cp .env.example .env
-nano .env    # set all production values
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
+nano backend/.env    # set all production values
 
 # 5. Build and start
 docker compose up -d --build
 
-# 6. Run migrations
-docker compose exec api uv run alembic upgrade head
+# 6. Seed demo data
+docker compose exec backend uv run python scripts/seed_demo.py
 
-# 7. Seed demo data
-docker compose exec api uv run python scripts/seed_demo.py
-
-# 8. Verify
-curl http://your-server-ip:8000/api/v1/health/deep
+# 7. Verify
+curl http://your-server-ip/api/v1/health/deep
 ```
 
 ---
@@ -448,30 +487,7 @@ ssh -L 6006:localhost:6006 user@your-server
 open http://localhost:6006
 ```
 
----
 
-## Demo Runbook
-
-Steps to run before an interview demo:
-
-```bash
-# 1. Verify server is up
-curl https://your-domain.com/api/v1/health
-
-# 2. Verify demo data is loaded
-curl -u demo:password https://your-domain.com/api/v1/feeds
-
-# 3. Run a test query
-curl -u demo:password -X POST https://your-domain.com/api/v1/chat/sessions \
-  -H "Content-Type: application/json" \
-  -d '{"scope_feed_id": "your-feed-uuid"}'
-
-# 4. Open browser to https://your-domain.com
-# 5. Log in with demo credentials
-# 6. Navigate to Chat, confirm session starts
-```
-
-Prepare 3 demo queries in advance that you know produce good results. Know the timestamps. Practice the flow twice before the interview.
 
 ---
 
@@ -528,21 +544,6 @@ COPY main.py ./
 CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
 ```
 
----
-
-## Cost Estimate (Demo Setup)
-
-| Item | Option | Monthly Cost |
-|------|--------|-------------|
-| VPS (API + frontend) | Hetzner CX22 | ~€4 |
-| Database | Neon free tier | $0 |
-| LLM inference | Ollama on VPS or API key | $0–$5 |
-| SSL cert | Let's Encrypt | $0 |
-| Domain | Namecheap | ~$1 |
-| Uptime monitoring | UptimeRobot free | $0 |
-| **Total** | | **~$5–10/mo** |
-
-For interview purposes, you could also run everything locally and share your screen — no hosting required. The hosted demo is a nice-to-have, not a requirement.
 
 ---
 

@@ -8,7 +8,6 @@ from typing import Literal
 import os
 from src.transcription.base import TranscriptResult, TranscriptSegment
 from src.telemetry.tracer import tracer
-_executor = ProcessPoolExecutor(max_workers=1)
 
 logger = logging.getLogger(__name__)
 
@@ -211,26 +210,25 @@ def _make_wav_for_diarization(audio_path: str) -> str:
     return wav_path
 
 
-def shutdown_executor():
-    """
-    Performs a proper shutdown; cleans up any leaked semaphores.
-    """
-    _executor.shutdown(wait=True)
-
-
 class LocalTranscriptionService:
     def __init__(
         self,
         huggingface_token: str,
         whisper_backend: str,
         whisper_model: str,
-        diarization_model: str | None
+        diarization_model: str | None,
+        max_workers: int = 1,
+        executor: ProcessPoolExecutor | None = None,
     ):
         self._hf_token = huggingface_token
         self._whisper_backend = whisper_backend
         self._model_size = whisper_model
         self._diarization_model = diarization_model
+        self._executor = executor or ProcessPoolExecutor(max_workers=max_workers)
 
+    def shutdown(self):
+        """Performs a proper shutdown; cleans up any leaked semaphores."""
+        self._executor.shutdown(wait=True)
 
     async def transcribe(
         self,
@@ -247,10 +245,9 @@ class LocalTranscriptionService:
                 span.set_attribute("transcription.diarization_model", self._diarization_model)
 
             try:
-
                 loop = asyncio.get_running_loop()
                 result = await loop.run_in_executor(
-                    _executor,
+                    self._executor,
                     _transcribe_sync,
                     audio_path,
                     speaker_count_hint,
@@ -258,11 +255,10 @@ class LocalTranscriptionService:
                     self._hf_token,
                     self._whisper_backend,
                     self._model_size,
-                    self._diarization_model
+                    self._diarization_model,
                 )
 
                 span.set_attribute("transcription.segment_count", len(result.segments))
-
                 return result
 
             except Exception as e:
