@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 
 from streaq import Worker
 
+from src.telemetry.setup import setup_telemetry
 from src.config import get_settings
 from src.ingestion.pipeline_runner import (
     WorkerContext,
@@ -29,6 +30,7 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan() -> AsyncGenerator[WorkerContext, None]:
+    setup_telemetry(settings)
     clear_audio_storage(settings)
     transcription_service = build_transcription_service(settings)
     yield WorkerContext(

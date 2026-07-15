@@ -52,6 +52,8 @@ class QueryEngine:
         db: AsyncSession,
     ) -> ChatResponse:
         with tracer.start_as_current_span("chat") as span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+
             span.set_attribute("session.id", session_id)
 
             try:
@@ -142,6 +144,7 @@ class QueryEngine:
 
                 span.set_attribute("chat.tool_rounds_used", round_num + 1)
                 span.set_attribute("chat.citation_count", len(session.citations))
+                span.set_status(trace.StatusCode.OK)
 
                 return ChatResponse(
                     message=final_content,

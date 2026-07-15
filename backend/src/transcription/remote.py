@@ -24,6 +24,8 @@ class RemoteTranscriptionService:
         language: str = "en",
     ) -> TranscriptResult:
         with tracer.start_as_current_span("transcription") as span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+
             span.set_attribute("transcription.backend", "remote")
             span.set_attribute("transcription.service_url", self._service_url)
             span.set_attribute("transcription.language", language)
@@ -55,6 +57,7 @@ class RemoteTranscriptionService:
                     source="remote",
                 )
                 span.set_attribute("transcription.segment_count", len(result.segments))
+                span.set_status(trace.StatusCode.OK)
                 return result
 
             except Exception as e:

@@ -6,6 +6,8 @@ import json
 import logging
 from dataclasses import dataclass
 
+from opentelemetry import trace
+
 from src.llm.base import LLMClient
 from src.telemetry.tracer import tracer
 from src.transcription.base import TranscriptSegment
@@ -36,6 +38,7 @@ class SpeakerResolver:
         segments: list[TranscriptSegment],
     ) -> InferredSpeaker | None:
         with tracer.start_as_current_span("speaker_inference") as span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
 
             intro = [s for s in segments if s.start_ms < self._window_ms]
             span.set_attribute("speaker.intro_segment_count", len(intro))
@@ -43,7 +46,8 @@ class SpeakerResolver:
             if not intro:
                 logger.debug("No segments within inference window, skipping")
                 span.set_attribute("speaker.name_found", False)
-
+                # status OK even though no speaker found - not the fault of the inference
+                span.set_status(trace.StatusCode.OK)
                 return None
 
             transcript_text = "\n".join(f'"{s.text}"' for s in intro)
@@ -69,11 +73,23 @@ class SpeakerResolver:
                 if name and confidence in ("low", "medium", "high"):
                     span.set_attribute("speaker.name_found", True)
                     span.set_attribute("speaker.confidence", confidence)
+                    span.set_status(trace.StatusCode.OK)
                     return InferredSpeaker(name=name, confidence=confidence)
 
-                logger.debug("Inference response missing valid name or confidence: %s", data)
+                elif name == "":
+                    span.set_attribute("speaker_inference.result", "no_speaker_identified")
+                    span.set_attribute("speaker.name_found", False)
+                    span.set_status(trace.StatusCode.OK)
+                else:
+                    span.set_attribute("speaker_inference.result", "invalid_confidence")
+                    span.set_attribute("speaker.name_found", False)
+                    span.set_status(trace.StatusCode.ERROR, f"model returned unrecognized confidence value: {confidence}")
+
+                logger.debug(f"Inference response missing valid name or confidence: {data}")
             except (json.JSONDecodeError, AttributeError):
+                span.set_attribute("speaker_inference.result", "invalid_confidence")
+                span.set_status(trace.StatusCode.ERROR, "Failed to parse speaker inference response")
+                span.set_attribute("speaker.name_found", False)
                 logger.warning("Failed to parse speaker inference response")
 
-            span.set_attribute("speaker.name_found", False)
             return None

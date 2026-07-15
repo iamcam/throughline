@@ -237,6 +237,8 @@ class LocalTranscriptionService:
         language: str = "en",
     ) -> TranscriptResult:
         with tracer.start_as_current_span("transcription") as span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+
             span.set_attribute("transcription.backend", self._whisper_backend)
             span.set_attribute("transcription.model", self._model_size)
             span.set_attribute("transcription.language", language)
@@ -259,6 +261,8 @@ class LocalTranscriptionService:
                 )
 
                 span.set_attribute("transcription.segment_count", len(result.segments))
+                span.set_status(trace.StatusCode.OK)
+
                 return result
 
             except Exception as e:

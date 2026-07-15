@@ -35,6 +35,8 @@ class AudioDownloader:
             return str(dest)
 
         with tracer.start_as_current_span("audio_download") as span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+
             span.set_attribute("episode.id", str(episode_id))
             span.set_attribute("audio.url", audio_url)
 
@@ -66,7 +68,7 @@ class AudioDownloader:
                                 tmp.unlink()
                             raise
                 span.set_attribute("audio.bytes_received", received)
-
+                span.set_status(trace.StatusCode.OK)
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(trace.StatusCode.ERROR, str(e))

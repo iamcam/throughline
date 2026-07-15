@@ -38,6 +38,8 @@ class Embedder:
         leaves = [(i, chunk) for i, chunk in enumerate(chunks) if chunk.chunk_level == "leaf"]
 
         with tracer.start_as_current_span("embedding") as span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+
             span.set_attribute("embedding.leaf_count", len(leaves))
             span.set_attribute("embedding.batch_size", self._batch_size)
             span.set_attribute(

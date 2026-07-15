@@ -71,6 +71,8 @@ async def ingest_episode(
     episode_id = episode.id
 
     with tracer.start_as_current_span("ingest_episode") as span:
+        span.set_attribute("openinference.span.kind", "CHAIN")
+
         span.set_attribute("episode.id", str(episode_id))
         span.set_attribute("episode.title", episode.title or "untitled")
         span.set_attribute("episode.has_transcript_url", bool(episode.transcript_url))
@@ -193,6 +195,7 @@ async def ingest_episode(
             await services.vector_store.upsert(chunks, db=db)
 
             # ~~~~~~ Wrap Up ~~~~~~
+            span.set_status(trace.StatusCode.OK)
 
             await services.status.set(episode_id, "READY", db=db)
             if audio_path:

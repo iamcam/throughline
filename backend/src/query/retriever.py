@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from opentelemetry import trace
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.llm.base import EmbeddingClient
@@ -34,6 +35,7 @@ class Retriever:
         top_k: int = 5,
     ) -> list[ChunkResult]:
         with tracer.start_as_current_span("retrieval") as span:
+            span.set_attribute("openinference.span.kind", "RETRIEVER")
             span.set_attribute("retrieval.query", query)
             span.set_attribute("retrieval.top_k", top_k)
             span.set_attribute(
@@ -56,5 +58,7 @@ class Retriever:
                 span.set_attribute("retrieval.score_max", round(max(scores), 4))
                 span.set_attribute("retrieval.score_min", round(min(scores), 4))
                 span.set_attribute("retrieval.score_mean", round(sum(scores) / len(scores), 4))
+
+            span.set_status(trace.StatusCode.OK)
 
             return results
