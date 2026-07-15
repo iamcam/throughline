@@ -4,7 +4,7 @@ Throughline is a self-hosted knowledge engine for podcasts. Ask questions, get a
 
 ---
 
-![Screenshot of chat iterface](docs/images/chat-demo.jpg)
+![Screenshot of chat iterface](docs/images/chat-demo.png)
 
 Getting started is straightforward: simply paste a Podcast RSS feed or Apple Podcast URL into the text field, transcribe episodes that interest you, and you're ready to chat.
 
