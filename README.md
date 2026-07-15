@@ -30,9 +30,14 @@ The ingestion pipeline and retrieval flow are fairly straightforward from a high
 ```mermaid
 flowchart LR
 
-  subgraph Ingest
+  subgraph API Process
     direction TB
-    A([RSS / Audio]) --> B[Download &\nTranscribe]
+    A([RSS / Audio]) --> Q[Enqueue Job]
+  end
+
+  subgraph Worker Process
+    direction TB
+    Q --> B[Download &\nTranscribe]
     B --> C[Infer Speaker]
     C --> D[Chunk & Embed]
   end
@@ -44,21 +49,21 @@ flowchart LR
     J --> K([Chat + Citations])
   end
 
-  D --> Q[(pgvector)]
-  Q --> H
+  D --> Pg[(pgvector)]
+  Pg --> H
 ```
 
 
 ## Stack
 
-**Backend:** Python, FastAPI, PostgreSQL + pgvector, SSE, Whisper, OpenAI-compliant endpoints
+**Backend:** Python, FastAPI, PostgreSQL + pgvector, Redis, SSE, Whisper, OpenAI-compliant endpoints
 
 **Frontend:** Typescript, React + Vite, Axios, TanStack Query, React Router, TailwindCSS, shadcn/ui
 
 
 ## Architecture
 
-The core of the ingestion service relies on an orchestrator pipeline that delegates various responsibilities and business logic to well-defined components, none of which are tightly coupled or have knowledge of each other or the pipeline state. The backend is designed to make extending and changing services easier and with less risk.
+The core of the ingestion service relies on an orchestrator pipeline that delegates various responsibilities and business logic to well-defined components, none of which are tightly coupled or have knowledge of each other or the pipeline state. The backend is designed to make extending and changing services easier and with less risk. Ingestion runs in a separate worker process from the API, coordinated through a Redis-backed job queue (streaQ) — the API stays responsive during ingestion, and jobs survive an API restart. A single-process fallback keeps things simple for pure local dev when Redis isn't running.
 
 This project is intended to work local-first, using local compute through services such as faster_whisper/mlx_whisper, oMLX, Ollama, and llama-server, but capable of utilizing external APIs, interfacing with most OpenAI-compatible endpoints, including OpenAI, Anthropic, and various other cloud providers.
 
@@ -73,11 +78,12 @@ Two ways to run: local dev (recommended for development) or Docker/Podman (recom
 
 Both require external services for LLM inference and embeddings - local or cloud, your choice.
 
-| Service       | What it does             | Options                                                 |
-| ------------- | ------------------------ | ------------------------------------------------------- |
-| LLM           | Chat + speaker inference | Ollama, MLX, llama-server, OpenAI, Anthropic, etc.      |
-| Embeddings    | Semantic search          | Ollama, MLX, llama-server, OpenAI, Anthropic, etc.                 |
-| Transcription | Audio → text             | Whisper (local, default) or any compatible HTTP service |
+| Service       | What it does             | Options                                                          |
+| ------------- | ------------------------ | ---------------------------------------------------------------- |
+| LLM           | Chat + speaker inference | Ollama, MLX, llama-server, OpenAI, Anthropic, etc.               |
+| Embeddings    | Semantic search          | Ollama, MLX, llama-server, OpenAI, Anthropic, etc.               |
+| Transcription | Audio → text             | Whisper (local, default) or any compatible HTTP service          |
+| Job Queue     | Ingestion job execution  | Redis (recommended) or none — falls back to in-process execution |
 
 Any OpenAI-compatible endpoint works - set `LLM_BASE_URL`, `LLM_MODEL_NAME`, and `LLM_API_KEY` in `backend/.env`.
 
