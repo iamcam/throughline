@@ -120,7 +120,7 @@ export function ChatInterface({ scopeFeedIds, scopeEpisodeIds }: ChatInterfacePr
           id: `error-${Date.now()}`,
           role: 'assistant',
           content: status === 404
-            ? 'Session expired. Starting a new one...'
+            ? 'Session expired. Starting a new one by refreshing the page...'
             : 'Something went wrong. Please try again.',
         },
       ])

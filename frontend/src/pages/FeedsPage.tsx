@@ -101,7 +101,7 @@ export default function FeedsPage() {
                                 </Link>
                             )}
 
-                            <div className='space-y-2'>
+                            <div className='space-y-2 flex-1'>
                                 <CardTitle>
                                     <h1 className="text-2xl font-bold ">
                                         <Link to={`/feeds/${feed.id}/episodes`}
