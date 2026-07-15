@@ -96,11 +96,14 @@ cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env
 # Defaults work for local dev
 
-# Optional: Skip if you already have postgres db connection; update .env accordingly and run migrations manually - see backend/README.md for steps.
+# Optional: Skip if you already have Postgres and Redis running; update .env accordingly. See backend/README.md for manual migration steps.
 cd backend && ./scripts/bootstrap.sh
 
 # Backend
 uv run uvicorn src.api.main:app --reload --port 3001
+
+# If REDIS_URL is set in backend/.env, jobs need a worker to run them (separate terminal):
+# cd backend && uv run streaq run src.worker:worker
 
 # Frontend (separate terminal)
 cd frontend && yarn && yarn dev
