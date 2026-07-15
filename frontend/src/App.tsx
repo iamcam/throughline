@@ -12,7 +12,7 @@ const ChatPage = lazy(() => import('@/pages/ChatPage'))
 
 export default function App() {
   return (
-    <ThemeProvider defaultTheme="dark" storageKey="podkb-ui-theme">
+    <ThemeProvider defaultTheme="light" storageKey="podkb-ui-theme">
       <BrowserRouter>
         <ErrorBoundary>
           <Routes>

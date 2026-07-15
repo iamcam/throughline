@@ -155,7 +155,7 @@ export function ChatInterface({ scopeFeedIds, scopeEpisodeIds }: ChatInterfacePr
 
 
       {/* Messages */}
-      <div className="overflow-y-auto flex-1 px-2 py-6 ">
+      <div className="overflow-y-auto scrollbar-thin scrollbar-gutter-auto flex-1 px-2 py-6 ">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full  text-muted-foreground">
 

@@ -128,7 +128,7 @@ export default function EpisodesPage() {
     <ResizablePanelGroup orientation="horizontal" className="h-full">
       {/* Main content */}
       <ResizablePanel defaultSize="100%" minSize="50%">
-        <div ref={scrollContainerRef} className="space-y-6 overflow-y-auto h-full p-6 bg-page-background">
+        <div ref={scrollContainerRef} className="space-y-6 overflow-y-auto h-full p-6 bg-page-background scrollbar-thin scrollbar-gutter-auto ">
           {feed && (
             <div className="flex justify-between">
               <Button variant="link"

@@ -100,7 +100,7 @@ export default function EpisodeDetailPage() {
 
   if( status ) return (
     <ResizablePanelGroup orientation="horizontal" className="h-full">
-      <ResizablePanel defaultSize="100%" minSize="50%" className='scrollbar-thin scrollbar-gutter-auto bg-page-background scrollbar-thumb-muted-foreground'>
+      <ResizablePanel defaultSize="100%" minSize="50%" className='scrollbar-thin scrollbar-gutter-auto bg-page-background'>
         <div className="space-y-6 h-full p-6">
           {feed &&
             <Button variant="link" size="default"
