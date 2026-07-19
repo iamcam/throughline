@@ -55,18 +55,19 @@ class SpeakerResolver:
             prompt = (
                 "Who is the speaker in this podcast transcript and what is your "
                 "confidence on this answer from low, medium, or high? "
-                'Use the structured format: {"name": "[person name]", "confidence": "[low|medium|high]"}\n\n'
+                "Respond with ONLY a JSON object, no explanation, no markdown, no backticks. "
+                'Use exactly this format: {"name": "[person name]", "confidence": "[low|medium|high]"}\n\n'
                 f"Transcript:\n{transcript_text}"
             )
 
             response = await self._llm.complete(
                 messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
                 temperature=0.0,
             )
 
             try:
-                data = json.loads(response.content)
+                raw = response.content.strip().strip("```json").strip("```").strip()
+                data = json.loads(raw)
                 name = data.get("name", "").strip()
                 confidence = data.get("confidence", "").strip().lower()
                 # TODO - good place to track the success/fail metrics on the prompt/response
