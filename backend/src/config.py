@@ -9,9 +9,6 @@ class Settings(BaseSettings):
     # App
     log_level: str = "WARN"
     audio_storage_path: str = "./data/audio"
-    max_concurrent_ingestions: int = 1  # in-process semaphore size, or streaQ concurrency when REDIS_URL is set
-
-    huggingface_token: str | None = None
 
     # Database
     database_url: str
@@ -19,7 +16,9 @@ class Settings(BaseSettings):
 
     # Queue
     redis_url: str = ""  # empty = BackgroundTaskQueue; set = StreaqQueue
-    transcription_max_workers: int = 1  # ProcessPoolExecutor size for local Whisper
+    max_concurrent_ingestions: int = 1  # in-process semaphore size, or streaQ concurrency when REDIS_URL is set
+    pipeline_max_workers: int = 1  # ProcessPoolExecutor size, shared by local Whisper and local Senko
+
 
     # LLM
     llm_base_url: str
@@ -44,10 +43,8 @@ class Settings(BaseSettings):
 
     whisper_backend: str = "faster_whisper"
     whisper_model: str = "medium"
-    transcription_max_workers: int = 1  # ProcessPoolExecutor size for local Whisper
-
-    diarization_model: str | None = None
     speaker_inference_window_ms: int = 900_000
+    speaker_inference_padding_ms: int = 60_000  # look-back before a speaker's first utterance, to catch how they were introduced
 
     # Observability
     tracing_enabled: bool = False

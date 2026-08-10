@@ -30,7 +30,6 @@ The primary interface is a freeform chat that uses tool-calling to decide when r
 - Graph RAG (deferred upgrade path)
 - Persistent conversation history (ephemeral sessions only in v1)
 - Automated feed polling (manual ingestion trigger)
-- Speaker diarization (deferred — CPU/local diarization via Pyannote is impractical on non-CUDA hardware; see Future Scope section 1.5)
 - Mid-conversation scope changes (scope set once at session creation; V2 work — see Future Scope)
 
 ---
@@ -226,12 +225,34 @@ class TranscriptionService(Protocol):
     async def transcribe(
         self,
         audio_path: str,
-        speaker_count_hint: int | None = None,
         language: str = "en"
     ) -> TranscriptResult: ...
 ```
 
-Implementations: `LocalTranscriptionService` (Whisper + Pyannote), `RemoteTranscriptionService` (HTTP sidecar).
+Implementations: `LocalTranscriptionService` (Whisper), `RemoteTranscriptionService` (HTTP sidecar).
+
+#### DiarizationService (`src/diarization/base.py`)
+
+```python
+@dataclass
+class SpeakerTurn:
+    speaker_id: str    # e.g. "SPEAKER_00" - raw diarization label, not display name
+    start_ms: int
+    end_ms: int
+
+@dataclass
+class DiarizationResult:
+    turns: list[SpeakerTurn]
+    speaker_count: int   # merged/deduplicated count
+
+class DiarizationService(Protocol):
+    async def diarize(self, audio_path: str) -> DiarizationResult: ...
+```
+
+Implementations: `LocalDiarizationService` (Senko, MLX/Metal/CUDA/CPU auto-detected). No remote implementation exists yet — see Future Scope.
+
+No speaker-count hint on this Protocol: Senko does not accept one, and no diarization backend under consideration (self-hosted or otherwise) changes that calculus enough to justify carrying an unused parameter. `TranscriptionService.transcribe()` has no diarization-related parameters either, by the same reasoning applied consistently across both Protocols.
+
 
 #### IngestionQueue (`src/ingestion/queue.py`)
 
@@ -370,7 +391,7 @@ async def ingest_episode(
         raise
 ```
 
-**Note:** `PENDING_NAMES` status is removed from v1. The pipeline no longer pauses for user input. Speaker display names can be updated at any time via `PUT /speakers` — this is a metadata-only operation that updates `episode_speakers.display_name` with no effect on chunks or embeddings. When diarization is introduced (Future Scope 1.5), `PENDING_NAMES` will be reinstated as a pipeline pause point for multi-speaker episodes.
+**Note:** `PENDING_NAMES` was considered when diarization was introduced but deliberately not built. The pipeline never pauses for user input — diarization and per-speaker name inference both run unattended as part of the same continuous job. Speaker display names can be updated at any time via `PUT /speakers`, a metadata-only operation with no effect on chunks or embeddings, regardless of how many speakers an episode has.
 
 **`PipelineServices` dataclass** (`src/ingestion/pipeline.py`):
 ```python
@@ -380,6 +401,7 @@ class PipelineServices:
     downloader: AudioDownloader
     transcription: TranscriptionService
     transcript_store: TranscriptStore
+    diarization: DiarizationService
     speaker_resolver: SpeakerResolver
     speaker_store: SpeakerStore
     chunker: Chunker
@@ -395,8 +417,9 @@ Each service has a single responsibility and is independently testable by inject
 | ----------------------- | ------------------------------- | ------------------------------------------------- |
 | `AudioDownloader`       | `ingestion/audio_downloader.py` | httpx streaming download, stores to disk          |
 | `TranscriptionService`  | `transcription/base.py`         | Protocol; local or remote impl                    |
+| `DiarizationService`    | `diarization/base.py`           | Protocol; local (Senko) impl only                 |
 | `TranscriptStore`       | `ingestion/transcript_store.py` | Save/retrieve `transcript_segments` rows          |
-| `SpeakerResolver`       | `ingestion/speaker_resolver.py` | LLM inference of speaker names from intro         |
+| `SpeakerResolver`       | `ingestion/speaker_resolver.py` | LLM inference of one name per diarized speaker    |
 | `SpeakerStore`          | `ingestion/speaker_store.py`    | Read/write `episode_speakers` rows                |
 | `Chunker`               | `ingestion/chunker.py`          | Speaker-boundary + topic segmentation + hierarchy |
 | `Embedder`              | `ingestion/embedder.py`         | Batch embedding via `EmbeddingClient`             |
@@ -462,26 +485,51 @@ Consequence: a mismatched name between `INGEST_EPISODE_JOB` and the worker's reg
 
 **Cancellation:** `cancel()` is a real operation for both queued and in-progress jobs, via streaQ's `Task.abort()` / `Worker.abort_by_id()`. Known limitation: aborting a job blocked on Whisper transcription stops the job, but the underlying `ProcessPoolExecutor` subprocess runs to completion unobserved — actually killing that subprocess would require tracking its OS PID directly. See Future Scope.
 
-#### CPU-bound work must use ProcessPoolExecutor
+#### CPU/GPU-bound work must use ProcessPoolExecutor
 
-Whisper is CPU-bound and will block the worker's event loop if called directly. The executor lives at module scope in `src/transcription/local.py` (not per-instance) — it is created once per worker process, independent of how many `LocalTranscriptionService` instances are constructed:
+Whisper and Senko are both CPU/GPU-bound and will block the worker's event loop if called directly. Each service builds its own `ProcessPoolExecutor` in `__init__` — constructed once, in `pipeline_runner.py`'s `build_transcription_service`/`build_diarization_service`, at worker startup, and held for the life of the worker process via `WorkerContext`:
 
 ```python
 # src/transcription/local.py
-_executor = ProcessPoolExecutor(max_workers=settings.transcription_max_workers)
-
 class LocalTranscriptionService:
-    async def transcribe(self, audio_path, speaker_count_hint=None, language="en"):
+    def __init__(self, whisper_backend, whisper_model, max_workers=1, executor=None):
+        self._executor = executor or ProcessPoolExecutor(max_workers=max_workers)
+
+    async def transcribe(self, audio_path, language="en"):
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            _executor,
-            _run_transcription_sync,
-            audio_path, speaker_count_hint, language
+        return await loop.run_in_executor(
+            self._executor, _transcribe_sync, audio_path, language,
+            self._whisper_backend, self._model_size,
         )
-        return result
 ```
 
-`transcription_max_workers` and the worker's `concurrency` are deliberately independent settings: `concurrency` bounds how many jobs the worker process runs concurrently (I/O-bound stages — downloads, LLM calls — genuinely run in parallel up to this limit); `transcription_max_workers` bounds how many of those concurrently-running jobs can be doing actual Whisper CPU work at the same literal instant, regardless of `concurrency`. A job whose transcription call arrives while all executor slots are full queues inside the executor, not in Redis. Both default to `1` for local-first, single-machine deployment; either can be raised independently once transcription or the LLM/embedding endpoints move off-box.
+`LocalDiarizationService` follows the same shape but adds one thing Whisper's executor doesn't do: keeping the model warm across jobs. Senko's model load cost is non-trivial relative to its inference speed, so reloading it every call would erode most of the speed advantage. `ProcessPoolExecutor`'s `initializer` parameter runs once per subprocess, before any tasks arrive, loading the `Diarizer` into a module-level variable inside that subprocess — every subsequent `diarize()` call routed to that subprocess reuses it:
+
+```python
+# src/diarization/local.py
+_diarizer = None
+
+def _init_diarizer(device: str) -> None:
+    global _diarizer
+    import senko
+    _diarizer = senko.Diarizer(device=device, warmup=True)
+
+def _diarize_sync(audio_path: str) -> DiarizationResult:
+    result = _diarizer.diarize(_make_wav(audio_path))   # reuses the warm model
+    ...
+
+class LocalDiarizationService:
+    def __init__(self, device="auto", max_workers=1, executor=None):
+        self._executor = executor or ProcessPoolExecutor(
+            max_workers=max_workers, initializer=_init_diarizer, initargs=(device,),
+        )
+```
+
+Whisper's executor has no equivalent initializer — `WhisperModel(...)` is constructed fresh inside `_transcribe_sync` on every call, even though the subprocess itself is reused across calls. This is an accepted asymmetry, not an oversight: Whisper's load cost is smaller relative to its own inference time than Senko's, and unifying the two patterns is tracked as a possible future improvement, not a current requirement.
+
+`PIPELINE_MAX_WORKERS` and the worker's `concurrency` are deliberately independent settings: `concurrency` bounds how many jobs the worker process runs concurrently (I/O-bound stages — downloads, LLM calls — genuinely run in parallel up to this limit); `PIPELINE_MAX_WORKERS` bounds how many of those concurrently-running jobs can be doing actual Whisper/Senko compute at the same literal instant, regardless of `concurrency`. A job whose transcription or diarization call arrives while all executor slots are full queues inside that executor, not in Redis. Both default to `1` for local-first, single-machine deployment.
+
+**GPU sharing caveat:** on a single-GPU machine (Metal or CUDA), raising `PIPELINE_MAX_WORKERS` above `1` does not give the same clean parallelism CPU-only concurrency would - GPU compute is generally serialized per-device, and multiple subprocesses competing for one GPU risk memory contention rather than a speedup. It's also each Senko subprocess's own warm model held in memory for the life of the worker, so raising this setting multiplies both compute contention and memory footprint. Treat `PIPELINE_MAX_WORKERS > 1` as something to measure on real hardware, not a default to raise speculatively.
 
 #### What survives a frontend page refresh
 
@@ -508,9 +556,8 @@ episodes
 
 ```
 MAX_CONCURRENT_INGESTIONS=1          # streaQ Worker(concurrency=...)
-TRANSCRIPTION_MAX_WORKERS=1          # ProcessPoolExecutor size for local Whisper
-REDIS_URL=redis://redis:6379         # presence implies StreaqQueue; empty/unset falls
-# back to BackgroundTaskQueue (in-process, no Redis)
+PIPELINE_MAX_WORKERS=1               # ProcessPoolExecutor size, shared by local Whisper and local Senko
+REDIS_URL=redis://redis:6379         # presence implies StreaqQueue; empty/unset falls back to BackgroundTaskQueue (in-process, no Redis)
 ```
 
 ---
@@ -523,34 +570,58 @@ Swappable behind the `TranscriptionService` Protocol. See section 3.3 for interf
 ```
 TRANSCRIPTION_BACKEND=local          # local | remote
 TRANSCRIPTION_SERVICE_URL=http://localhost:8001
-HUGGINGFACE_TOKEN=hf_...
 WHISPER_MODEL=medium
 ```
 
-**Diarization:** Deferred to Future Scope 1.5. CPU/local diarization via Pyannote is impractical on non-CUDA hardware (2–4x real-time on CPU for long episodes). In v1, all transcript segments are written with `speaker_id = 'UNKNOWN'`. Speaker identity is resolved post-transcription by `SpeakerResolver` (see section 3.7). When diarization is introduced, it will be configured via `DIARIZATION_BACKEND=local|remote`, mirroring the existing transcription backend pattern.
+**Diarization:** Fully separate from transcription — see the new §3.6a below. Transcription's only remaining job is speech-to-text; every segment it produces is written with `speaker_id = 'UNKNOWN'` and relabeled afterward by the diarization + alignment stage.
 
-**Local implementation:** Whisper (faster-whisper or mlx-whisper). Must run in `ProcessPoolExecutor` — see section 3.5 for rationale. Pyannote is not invoked in v1.
+**Local implementation:** Whisper (faster-whisper or mlx-whisper). Must run in `ProcessPoolExecutor` — see section 3.5 for rationale.
 
-**Remote implementation:** HTTP POST to `TRANSCRIPTION_SERVICE_URL`. When a remote service performs both transcription and diarization (e.g. OpenAI Whisper API with speaker labels, or a custom GPU sidecar), `RemoteTranscriptionService` normalises the response into `TranscriptResult` — the pipeline sees no difference. Deferred to Future Scope 1.5.
+**Remote implementation:** HTTP POST to `TRANSCRIPTION_SERVICE_URL`. Current implementation (`src/transcription/remote.py`) targets a plain OpenAI-compatible `/audio/transcriptions` endpoint — no timestamps or speaker labels come back, so every segment gets placeholder `start_ms=0, end_ms=0`. **This makes `RemoteTranscriptionService` incompatible with diarization today** — alignment can't match real speech to a segment with no real timing. A future remote backend offering combined transcription+diarization (e.g. OpenAI's diarized transcription endpoint) would return pre-labeled segments directly and bypass `DiarizationService` entirely for that path — tracked in Future Scope, not yet built.
 
-**RSS shortcut:** If `transcript_url` is present in the RSS feed, download and parse directly. Set `speaker_id = 'UNKNOWN'` for all segments — diarization has not run. `SpeakerResolver` still runs on the intro window. User can override via reingest.
+---
+
+### 3.6a Diarization + Alignment
+
+Diarization runs as its own pipeline stage (`DIARIZING` status), between transcription and speaker inference. It answers "who was talking, and when" — completely independent of *what* was said. Its output (`DiarizationResult`) is a list of speaker turns with no text at all.
+
+**Alignment** (`src/diarization/alignment.py`) reconciles diarization's turns against transcription's already-finalized sentence segments, since the two are independently timestamped and produced by unrelated models. For each transcript segment, alignment finds the diarization turn it overlaps with the most (by raw millisecond overlap) and relabels that segment's `speaker_id` accordingly. A segment with zero overlapping turns is left as `UNKNOWN` rather than guessed — same "don't fabricate confidence" principle used throughout speaker inference.
+
+**Known precision limit:** alignment operates at segment granularity, not word granularity. Word-level timestamps are available from local Whisper transcription but are discarded after sentence-grouping; a word-level alignment pass was considered and rejected for Phase 13 — see Future Scope for the reasoning (bounded precision gain, given Senko itself reports only one dominant speaker per stretch and doesn't detect overlapping speech).
+
+**Configuration:**
+
+```
+SPEAKER_INFERENCE_PADDING_MS=60000 # see section 3.7 — unrelated to alignment itself, listed here for proximity
+```
+
+No diarization-specific settings beyond `PIPELINE_MAX_WORKERS` (section 3.5) — device selection (`device="auto"`) is hardcoded in `LocalDiarizationService`, matching how transcription decides its own device internally rather than exposing it as a setting.
 
 ---
 
 ### 3.7 Speaker Inference
 
-LLM-assisted name detection runs automatically after transcription. Uses `LLMClient` Protocol — not the OpenAI SDK directly. This is the primary speaker identity mechanism in v1, operating without diarization.
+LLM-assisted name detection runs automatically after diarization + alignment. Uses `LLMClient` Protocol — not the OpenAI SDK directly. One inference call happens per diarized speaker, not once per episode.
 
-**When it runs:** Immediately after transcription, as part of the single continuous pipeline job. No pipeline pause.
+**When it runs:** Immediately after diarization/alignment, as part of the single continuous pipeline job. No pipeline pause, regardless of how many speakers are found.
 
-**Prompt:**
-```
-Who is the speaker in this podcast transcript and what is your confidence on this answer
+**Per-speaker context window:** for each diarized speaker, the window spans from `padding_ms` before that speaker's first utterance through `window_ms` after it — long enough to catch an introduction spoken by someone else immediately preceding their first line ("my guest today is Marcus..."), not just their own words. All speakers' segments inside that window are included in the prompt, rendered as a labeled script:
+
+SPEAKER_00: "Welcome to the show. My guest today is Marcus Webb."
+SPEAKER_01: "Thanks for having me."
+
+
+**Prompt** (per target speaker):
+
+Below is a transcript excerpt from a podcast, labeled by speaker.
+Who is {speaker_id} (what is their name) and what is your confidence on this answer
 from low, medium, or high? Use the structured format:
-{"name": "[person name]", "confidence": "[low|medium|high]"}
-```
+
+`{"name": "[person name]", "confidence": "[low|medium|high]"}`
+
 
 **Return type:**
+
 ```python
 @dataclass
 class InferredSpeaker:
@@ -559,24 +630,22 @@ class InferredSpeaker:
 
 # src/ingestion/speaker_resolver.py
 class SpeakerResolver:
-    def __init__(self, llm_client: LLMClient, window_ms: int): ...
+    def __init__(self, llm_client: LLMClient, window_ms: int, padding_ms: int): ...
 
     async def infer(
         self,
         segments: list[TranscriptSegment],
-    ) -> InferredSpeaker | None:
-        # Filter to intro window (SPEAKER_INFERENCE_WINDOW_MS)
-        # Build prompt, call llm_client.complete()
-        # Return InferredSpeaker if confident, None if not found
-        # Never guess — return None rather than a low-quality result
+    ) -> dict[str, InferredSpeaker | None]:
+        # One entry per distinct non-UNKNOWN speaker_id present in segments
+        # Never guess — a speaker maps to None rather than a low-quality result
 ```
 
 **Post-inference logic in `SpeakerStore.save_inferred()`:**
 
-| Inference result                | Action                                                                                                                                       |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| One name found (any confidence) | Update `speaker_id` from `UNKNOWN` → `SPEAKER_00`; set `display_name=name`, `name_inferred=true`, `confidence=level`, `name_confirmed=false` |
-| None found                      | Leave `speaker_id = 'UNKNOWN'`, `display_name=NULL`. Pipeline continues to chunking.                                                         |
+| Inference result (per speaker) | Action                                                                                                                                       |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Name found (any confidence)    | Update that speaker's row: `display_name=name`, `name_inferred=true`, `confidence=level`, `name_confirmed=false`                             |
+| None found                     | Leave that speaker's row unchanged — `display_name=NULL`. Other speakers on the same episode are unaffected. Pipeline continues to chunking. |
 
 **User confirmation via `PUT /speakers`:**
 - If user saves without editing the name: `name_confirmed=true`, `name_inferred` unchanged
@@ -584,9 +653,13 @@ class SpeakerResolver:
 - Speaker display name can be updated at any time — it is pure metadata, no re-chunking required
 
 **Configuration:**
+
 ```
 SPEAKER_INFERENCE_WINDOW_MS=900000
+SPEAKER_INFERENCE_PADDING_MS=60000
 ```
+
+**Known limit:** the context window is time-bounded, not length-bounded. A chaotic multi-speaker episode (panel discussion, several speakers all talking within the same window) could produce a very long prompt with no current truncation strategy — not yet hit in practice, tracked in Future Scope if it becomes a problem.
 
 ---
 
@@ -594,20 +667,22 @@ SPEAKER_INFERENCE_WINDOW_MS=900000
 
 **Core principle:** `speaker_id` is a stable identifier linking segments and chunks to speaker metadata in `episode_speakers`. Display names are mutable metadata — a name change is a single row update with no effect on chunks or embeddings.
 
-**v1 constraint — no diarization:** All segments are written with `speaker_id = 'UNKNOWN'`. If `SpeakerResolver` infers exactly one speaker from the intro, that row is promoted to `speaker_id = 'SPEAKER_00'` with an inferred `display_name`. Multi-speaker episodes remain `UNKNOWN` until diarization is available (Future Scope 1.5).
+**Diarization-assigned identity:** Segments are written `UNKNOWN` by transcription, then relabeled to real `SPEAKER_00`, `SPEAKER_01`, ... by the diarization + alignment stage (§3.6a) before `SpeakerResolver` ever runs. A segment with no overlapping diarization turn stays `UNKNOWN` — alignment does not guess.
 
-**Why `UNKNOWN` not `SPEAKER_00`:** Using `SPEAKER_00` when diarization has not run would be semantically incorrect — it implies diarization ran and found one speaker. `UNKNOWN` is honest: it signals that speaker identity has not been determined. This distinction matters when diarization arrives, so old un-diarized episodes can be identified and re-ingested.
+**Why `UNKNOWN` not a guess:** `UNKNOWN` signals that speaker identity genuinely could not be determined for that segment — either diarization found no overlapping turn (alignment, §3.6a), or `SpeakerResolver` found no confident name for a real diarized speaker. It is never used as a stand-in for "diarization hasn't run" anymore — diarization always runs.
 
 **`SPEAKER_00` is episode-scoped, not global:** The same `SPEAKER_00` identifier in two different episodes refers to two different people. Speaker name resolution in `ToolDispatcher` is scoped to the session's feed IDs to prevent cross-feed collisions. Chunks ingested before multi-feed support was introduced may have ambiguous `speaker_id` values — re-ingestion resolves this.
 
-**Speaker states:**
+**Speaker states** (per speaker_id row in `episode_speakers`):
 
-| speaker_id   | name_inferred | name_confirmed | confidence            | Meaning                                  |
-| ------------ | ------------- | -------------- | --------------------- | ---------------------------------------- |
-| `UNKNOWN`    | false         | false          | NULL                  | No diarization; inference found nothing  |
-| `SPEAKER_00` | true          | false          | "high"/"medium"/"low" | LLM inferred one speaker, unconfirmed    |
-| `SPEAKER_00` | true          | true           | "high"/"medium"/"low" | Inferred, user confirmed without editing |
-| `SPEAKER_00` | false         | true           | NULL                  | User entered or edited name manually     |
+| name_inferred | name_confirmed | confidence            | Meaning                                  |
+| ------------- | -------------- | --------------------- | ---------------------------------------- |
+| false         | false          | NULL                  | Diarized, but inference found no name    |
+| true          | false          | "high"/"medium"/"low" | LLM inferred a name, unconfirmed         |
+| true          | true           | "high"/"medium"/"low" | Inferred, user confirmed without editing |
+| false         | true           | NULL                  | User entered or edited the name manually |
+
+A segment that never got a real diarized label at all (`speaker_id = 'UNKNOWN'`) has no corresponding `episode_speakers` row to look up — `ResultHydrator` falls back to a display placeholder for those, same as before.
 
 **Resolution at read time:** All reads join `episode_speakers` on `speaker_id`. `VectorStore.search()` returns `RawChunkResult` with `speaker_id`. `ResultHydrator` resolves to `display_name` (or `NULL` / "Unknown Speaker" fallback) before returning to callers. Speaker filter queries against `UNKNOWN` speaker_id return no results — expected behavior until diarization runs.
 
@@ -616,12 +691,12 @@ SPEAKER_INFERENCE_WINDOW_MS=900000
 ### 3.9 SSE Status Streaming
 
 ```
-GET /api/v1/episodes/{episode_id}/status/stream
-→ text/event-stream
+GET /api/v1/episodes/{episode_id}/status/stream → text/event-stream
 
 data: {"status": "QUEUED", "position": 3}
 data: {"status": "DOWNLOADING", "progress": 0.2}
 data: {"status": "TRANSCRIBING", "stage": "whisper", "progress": 0.4}
+data: {"status": "DIARIZING"}
 data: {"status": "INFERRING_SPEAKERS"}
 data: {"status": "CHUNKING", "progress": 0.5}
 data: {"status": "EMBEDDING", "progress": 0.8}
@@ -812,7 +887,7 @@ episodes (
   feed_id UUID REFERENCES feeds ON DELETE CASCADE,
   guid TEXT UNIQUE NOT NULL,
   title TEXT, description TEXT, published_at TIMESTAMPTZ,
-  audio_url TEXT, audio_local_path TEXT, transcript_url TEXT,
+  audio_url TEXT, audio_local_path TEXT,
   duration_seconds INT,
   pipeline_status TEXT NOT NULL DEFAULT 'PENDING',
   pipeline_stage TEXT,
@@ -825,7 +900,7 @@ episodes (
 episode_speakers (
   id UUID PRIMARY KEY,
   episode_id UUID REFERENCES episodes ON DELETE CASCADE,
-  speaker_id TEXT NOT NULL,        -- 'UNKNOWN' (no diarization) or 'SPEAKER_00', 'SPEAKER_01', etc.
+  speaker_id TEXT NOT NULL,        -- 'UNKNOWN' or a real diarized label: 'SPEAKER_00', 'SPEAKER_01', etc.
   display_name TEXT,               -- mutable; only location of display name
   name_inferred BOOLEAN DEFAULT false,
   name_confirmed BOOLEAN DEFAULT false,
@@ -836,7 +911,7 @@ episode_speakers (
 transcript_segments (
   id UUID PRIMARY KEY,
   episode_id UUID REFERENCES episodes ON DELETE CASCADE,
-  speaker_id TEXT NOT NULL,        -- 'UNKNOWN' in v1 (no diarization); join to episode_speakers for display_name
+  speaker_id TEXT NOT NULL,        -- 'UNKNOWN' or a real diarized label; join to episode_speakers for display_name
   text TEXT NOT NULL,
   start_ms INT NOT NULL, end_ms INT NOT NULL, sequence_order INT NOT NULL
 )
@@ -847,7 +922,7 @@ chunks (
   episode_id UUID REFERENCES episodes ON DELETE CASCADE,
   parent_id UUID REFERENCES chunks,
   chunk_level TEXT NOT NULL,       -- 'parent' | 'leaf'
-  speaker_id TEXT NOT NULL,        -- 'UNKNOWN' in v1 (no diarization); join to episode_speakers for display_name
+  speaker_id TEXT NOT NULL,        -- 'UNKNOWN' or a real diarized label; join to episode_speakers for display_name
   text TEXT NOT NULL,
   start_ms INT NOT NULL, end_ms INT NOT NULL,
   token_count INT,
@@ -941,11 +1016,12 @@ from src.telemetry.tracer import tracer
 
 | File                      | Span name                     | Key attributes                                                                                                                                             |
 | ------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pipeline.py`             | `ingest_episode`              | `episode.id`, `episode.title`, `episode.has_transcript_url`, chunk counts, `episode.inferred_speaker`                                                      |
+| `pipeline.py`             | `ingest_episode`              | `episode.id`, `episode.title`, `episode.speaker_count`, chunk counts                                                                                       |
 | `audio_downloader.py`     | `audio_download`              | `audio.url`, `audio.size_bytes`, `audio.bytes_received`                                                                                                    |
-| `transcription/local.py`  | `transcription`               | `transcription.backend`, `transcription.model`, `transcription.language`, `transcription.diarization_enabled`, `transcription.segment_count`               |
+| `transcription/local.py`  | `transcription`               | `transcription.backend`, `transcription.model`, `transcription.language`, `transcription.segment_count`                                                    |
 | `transcription/remote.py` | `transcription`               | `transcription.backend`, `transcription.service_url`, `transcription.language`, `transcription.segment_count`                                              |
-| `speaker_resolver.py`     | `speaker_inference`           | `speaker.intro_segment_count`, `speaker.name_found`, `speaker.confidence`                                                                                  |
+| `diarization/local.py`    | `diarization`                 | `diarization.turn_count`, `diarization.speaker_count`                                                                                                      |
+| `speaker_resolver.py`     | `speaker_inference`           | `speaker.target_id`, `speaker.window_segment_count`, `speaker.name_found`, `speaker.confidence` (one span per diarized speaker, not per episode)           |
 | `embedder.py`             | `embedding`                   | `embedding.leaf_count`, `embedding.batch_size`, `embedding.batch_count`                                                                                    |
 | `retriever.py`            | `retrieval`                   | `retrieval.query`, `retrieval.top_k`, `retrieval.feed_ids`, `retrieval.result_count`, `retrieval.score_max`, `retrieval.score_min`, `retrieval.score_mean` |
 | LLM calls                 | auto via `OpenAIInstrumentor` | tokens, model, prompt/response                                                                                                                             |
@@ -957,18 +1033,10 @@ except Exception as e:
     span.set_status(trace.StatusCode.ERROR, str(e))
     raise
 ```
-Use for unrecoverable failures only. Handled exceptions (e.g. RSS transcript
-fallback that recovers to audio download) should log only — do not mark the
-span ERROR if the pipeline continues successfully.
+Use for unrecoverable failures only. Log-only for handled, non-fatal exceptions that the pipeline recovers from without failing the job — do not mark the span ERROR if the pipeline continues successfully.
 
-**Why transcription spans wrap the executor await:**
-OTel context does not cross `ProcessPoolExecutor` subprocess boundaries. Spans
-started inside `_transcribe_sync` would appear as orphaned traces with no
-parent. The `transcription` span wraps `run_in_executor()` in the async layer
-instead — wall-clock duration covers the full subprocess call including model
-loading, inference, and diarization. Sub-span timing for Whisper vs Pyannote
-separately requires splitting `_transcribe_sync` into two executor calls —
-see Future Scope 1.6.
+**Why transcription and diarization spans each wrap their own executor await:**
+OTel context does not cross `ProcessPoolExecutor` subprocess boundaries. Spans started inside `_transcribe_sync` or `_diarize_sync` would appear as orphaned traces with no parent. Each service's span wraps its own `run_in_executor()` call in the async layer instead — wall-clock duration covers the full subprocess call including any model loading and inference. Because transcription and diarization are now fully separate pipeline stages with their own spans, per-stage timing is already visible without needing to split anything further — unlike the old combined Whisper+Pyannote design this replaced.
 
 **Backend switching:** Local Phoenix, hosted Arize, Langfuse, or any
 OTLP/HTTP collector — change `OTEL_ENDPOINT` in `.env`. No code changes
@@ -1293,6 +1361,10 @@ podcast-knowledge-engine/
 │   │   │   ├── base.py              # TranscriptionService Protocol + data types
 │   │   │   ├── local.py             # Whisper + Pyannote via ProcessPoolExecutor
 │   │   │   └── remote.py            # HTTP client
+│   │   ├── diarization/
+│   │   │   ├── base.py              # DiarizationService Protocol + data types
+│   │   │   ├── local.py             # Senko via ProcessPoolExecutor with warm-model initializer
+│   │   │   └── alignment.py         # Segment-to-turn overlap matching
 │   │   ├── storage/
 │   │   │   └── vector_store.py      # VectorStore Protocol + PgvectorStore; SearchFilters with feed_ids
 │   │   ├── query/
@@ -1323,6 +1395,7 @@ podcast-knowledge-engine/
 │   │   │   ├── test_queue.py
 │   │   │   └── test_speakers.py
 │   │   └── unit
+│   │       ├── test_alignment.py
 │   │       ├── test_auth_middleware.py
 │   │       ├── test_background_queue.py
 │   │       ├── test_chunker.py
@@ -1486,12 +1559,13 @@ volumes:
 **Unit tests** — pure logic, no I/O, inject mocks:
 - `Chunker` — boundaries, hierarchy, token limits, short segment merging
 - `RSSParser` — fixture XML, duration formats, transcript tag detection
-- `SpeakerResolver` — prompt construction, JSON parsing, null handling; inject `MockLLMClient`
+- `SpeakerResolver` — prompt construction, JSON parsing, null handling, per-speaker windowing/padding; inject `MockLLMClient`
 - `PromptBuilder` — message construction, scope application; no I/O
 - `ResultHydrator` — display name resolution, timestamp formatting, audio_url batching; mock DB
 - `ToolDispatcher` — correct tool routing, filter application, citation population, speaker resolution
 - `QueryEngine` — tool-calling loop, round limits, message ordering, citation passthrough
 - `SessionStore` — save/retrieve/delete, key correctness
+- Alignment (`tests/unit/test_alignment.py`) — overlap matching, tie-breaking, no-overlap fallback, non-mutation
 
 **Mock helpers** (`tests/conftest.py`) — plain classes, direct import in test files:
 - `MockLLMClient` — supports `response_content`, `tool_calls`, and `responses: list[LLMResponse]` sequence
@@ -1513,6 +1587,7 @@ volumes:
 - `InMemorySessionStore` satisfies `SessionStore`
 - `OpenAICompatibleLLMClient` satisfies `LLMClient`
 - `OpenAICompatibleEmbeddingClient` satisfies `EmbeddingClient`
+- `LocalDiarizationService` satisfies `DiarizationService`
 
 ```bash
 uv run pytest tests/unit             # fast, no services
@@ -1533,7 +1608,6 @@ uv run pytest --cov=src --cov-report=term-missing
 | Queue overview UI        | `queued_at`/`finished_at` columns on `Episode`; grouped-by-status read endpoint — pure Postgres, no `IngestionQueue` involvement                        |
 | Automatic feed polling   | APScheduler; calls existing `refresh_feed` + `queue.enqueue()`                                                                                       |
 | Alternative vector DBs   | Implement `VectorStore` Protocol for Qdrant/Pinecone; swap in `dependencies.py`; ~1 day                                                              |
-| Speaker diarization      | See Future Scope 1.5. Reinstates `PENDING_NAMES` pipeline status; `UNKNOWN` speaker_ids get real diarization labels; existing episodes re-ingestable |
 | Non-OpenAI LLM SDK       | Implement `LLMClient` Protocol; swap in `dependencies.py`; no business logic changes                                                                 |
 | Chat response streaming  | `LLMClient.stream()` async generator; chat endpoint returns `EventSourceResponse`; applies to final synthesis only — tool rounds still block         |
 | V2 chat scope filtering  | `GET /chat/{session_id}` returns full session object; `PATCH /chat/{session_id}` updates scope mid-conversation; frontend scope selector calls resetSession on change |

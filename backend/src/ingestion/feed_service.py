@@ -37,7 +37,6 @@ async def add_feed(rss_url: str, db: AsyncSession) -> Feed:
             published_at=ep.published_at,
             audio_url=ep.audio_url,
             duration_seconds=ep.duration_seconds,
-            transcript_url=ep.transcript_url,
             pipeline_status="PENDING",
         )
         db.add(episode)
@@ -73,7 +72,6 @@ async def refresh_feed(feed_id: UUID, db: AsyncSession) -> list[Episode]:
             published_at=ep.published_at,
             audio_url=ep.audio_url,
             duration_seconds=ep.duration_seconds,
-            transcript_url=ep.transcript_url,
             pipeline_status="PENDING",
         )
         db.add(episode)

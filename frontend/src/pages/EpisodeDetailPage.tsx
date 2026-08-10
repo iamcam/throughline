@@ -1,5 +1,5 @@
 // src/pages/EpisodeDetailPage.tsx
-import { deleteEpisodeTranscript, getEpisode, getFeed, ingestEpisode, isError404, listSpeakers, reingestEpisode } from '@/api/client'
+import { deleteEpisodeTranscript, getEpisode, getFeed, getSpeakerPreviews, ingestEpisode, isError404, listSpeakers, reingestEpisode } from '@/api/client'
 import { ChatInterface } from '@/components/ChatInterface'
 import EpisodeKebab from '@/components/EpisodeKebab'
 import { ExpandableDescription } from '@/components/ExpandableDescription'
@@ -20,7 +20,7 @@ import { ACTIVE_STATUSES } from '@/lib/episode'
 import { invalidateEpisode } from '@/lib/queryInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { LucideChevronLeft, LucideCircleAlert, LucideCloudDownload, LucideEllipsis, LucideLoaderCircle, LucideMessageCircleDashed, LucideX, LucideXCircle, Sparkles } from 'lucide-react'
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
 import { useNavigate, useParams } from 'react-router-dom'
 
@@ -56,6 +56,63 @@ export default function EpisodeDetailPage() {
     queryFn: () => getFeed(episode!.feed_id),
     enabled: !!episodeId && !!episode,
   })
+
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const [audioMounted, setAudioMounted] = useState(false)
+  const programmaticSeekRef = useRef(false)
+  const [activePreviewSpeakerId, setActivePreviewSpeakerId] = useState<string | null>(null)
+
+  const setAudioNode = useCallback((node: HTMLAudioElement | null) => {
+    audioRef.current = node
+    setAudioMounted(node !== null)
+  }, [])
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+
+    const clearActive = () => setActivePreviewSpeakerId(null)
+    const handleSeeked = () => {
+      if (programmaticSeekRef.current) {
+        programmaticSeekRef.current = false
+        return
+      }
+      clearActive()
+    }
+
+    audio.addEventListener('pause', clearActive)
+    audio.addEventListener('ended', clearActive)
+    audio.addEventListener('seeked', handleSeeked)
+
+    return () => {
+      audio.removeEventListener('pause', clearActive)
+      audio.removeEventListener('ended', clearActive)
+      audio.removeEventListener('seeked', handleSeeked)
+    }
+  }, [audioMounted])
+
+  const togglePreview = (speakerId: string, timestampMs: number) => {
+    const audio = audioRef.current
+    if (!audio) return
+
+    if (activePreviewSpeakerId === speakerId && !audio.paused) {
+      audio.pause()
+      return
+    }
+
+    programmaticSeekRef.current = true
+    audio.currentTime = timestampMs / 1000
+    audio.play()
+    setActivePreviewSpeakerId(speakerId)
+  }
+
+  const { data: previews } = useQuery({
+    queryKey: ['speakerPreviews', episodeId],
+    queryFn: () => getSpeakerPreviews(episodeId!),
+    enabled: !!episodeId && episode?.pipeline_status === 'READY',
+  })
+
+  const previewBySpeaker = new Map(previews?.map(p => [p.speaker_id, p]))
 
   const liveStatus = useEpisodeStatus(
     episode && ACTIVE_STATUSES.includes(episode.pipeline_status) ? episodeId! : null
@@ -132,6 +189,7 @@ export default function EpisodeDetailPage() {
               {episode && episode.audio_url && (
                 <div className=''>
                   <audio
+                    ref={setAudioNode}
                     src={episode.audio_url}
                     controls
                     className="mt-2 w-92 max-w-full h-8"
@@ -227,7 +285,10 @@ export default function EpisodeDetailPage() {
                   key={speaker.speaker_id}
                   speaker={speaker}
                   episodeId={episodeId}
-                />
+                  preview={previewBySpeaker.get(speaker.speaker_id)}
+                  isPreviewPlaying={activePreviewSpeakerId === speaker.speaker_id}
+                  onTogglePreview={togglePreview}
+              />
               ))}
                 {!speakersError && speakers && (
                   <div className='text-xs text-muted-foreground' >Speaker names are inferred and may contain mistakes. Please verify.</div>
@@ -235,6 +296,9 @@ export default function EpisodeDetailPage() {
             </div>
             <Separator />
             <h2 className="font-semibold">Transcript</h2>
+              {/* <p className='p-0 text-xs text-muted-foreground'>
+                Automated transcription may contain errors.
+            </p> */}
             <TranscriptViewer episodeId={episodeId} className='pb-6'/>
           </>
         )}

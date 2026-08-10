@@ -27,3 +27,11 @@ export function invalidateEpisode(
   queryClient.invalidateQueries({ queryKey: ["episode", episodeId] });
   queryClient.invalidateQueries({ queryKey: ["episodes", feedId] });
 }
+
+export function invalidateSpeakersAndTranscript(
+  queryClient: QueryClient,
+  episodeId: string
+) {
+  queryClient.invalidateQueries({ queryKey: ["speakers", episodeId] });
+  queryClient.invalidateQueries({ queryKey: ["transcript", episodeId] });
+}

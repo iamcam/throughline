@@ -1,5 +1,5 @@
 // src/components/SpeakerRow.tsx
-import type { Speaker } from '@/api/client'
+import type { Speaker, SpeakerPreview } from '@/api/client'
 import { updateSpeakers } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -7,14 +7,20 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { LucideBadgeCheck, LucideBadgeQuestionMark, LucideMinus, LucidePencil, LucideStar } from 'lucide-react'
+import { LucideBadgeCheck, LucideBadgeQuestionMark, LucideMinus, LucidePause, LucidePencil, LucidePlay, LucideStar } from 'lucide-react'
 import { useState, type ReactElement } from 'react'
+
+import { invalidateSpeakersAndTranscript } from '@/lib/queryInvalidation'
+
+
 
 interface SpeakerRowProps {
   speaker: Speaker
   episodeId: string
+  preview?: SpeakerPreview
+  isPreviewPlaying: boolean
+  onTogglePreview: (speakerId: string, timestampMs: number) => void
 }
-
 
 function ConfidenceRating({ confidence }: { confidence: string | null }) {
   const rating: Record<string, "Confident" | "Mildly Confident" | "Uncertain"> = {
@@ -42,7 +48,7 @@ function ConfidenceRating({ confidence }: { confidence: string | null }) {
 }
 
 
-export function SpeakerRow({ speaker, episodeId }: SpeakerRowProps) {
+export function SpeakerRow({ speaker, episodeId, preview, isPreviewPlaying, onTogglePreview }: SpeakerRowProps) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState(speaker.display_name ?? '')
   const queryClient = useQueryClient()
@@ -53,7 +59,7 @@ export function SpeakerRow({ speaker, episodeId }: SpeakerRowProps) {
       display_name: name.trim() || null,
     }]),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['speakers', episodeId] })
+      invalidateSpeakersAndTranscript(queryClient, episodeId)
       setOpen(false)
     },
   })
@@ -104,7 +110,19 @@ export function SpeakerRow({ speaker, episodeId }: SpeakerRowProps) {
           </PopoverContent>
         </Popover>
 
-        <span className="font-medium min-w-36 border-b">
+        {preview && (
+          <Button
+            variant="outline"
+            size="xs"
+            aria-label={`Play sample of ${speaker.display_name ?? speaker.speaker_id}: "${preview.sample_quote}"`}
+            title={preview.sample_quote}
+            onClick={() => onTogglePreview(speaker.speaker_id, preview.sample_timestamp_ms)}
+          >
+            {isPreviewPlaying ? <LucidePause /> : <LucidePlay />}
+          </Button>
+        )}
+
+        <span className="min-w-36 border-b">
           {speaker.display_name ?? <div className='text-sm italic text-muted-foreground' onClick={(e) => { e.stopPropagation(); setOpen(true)}}>Add name</div>}
         </span>
         {speaker.name_inferred && !speaker.name_confirmed ? (

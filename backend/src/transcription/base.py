@@ -16,14 +16,13 @@ class TranscriptSegment:
 class TranscriptResult:
     segments: list[TranscriptSegment]
     language: str
-    source: Literal["whisper_local", "remote", "rss_provided"]
+    source: Literal["whisper_local", "remote"]
 
 @runtime_checkable
 class TranscriptionService(Protocol):
     async def transcribe(
         self,
         audio_path: str,
-        speaker_count_hint: int | None = None,
         language: str = "en",
     ) -> TranscriptResult: ...
 

@@ -31,6 +31,7 @@ class EpisodeResponse(BaseModel):
     pipeline_status: str
     pipeline_stage: str | None
     pipeline_progress: float | None
+    pipeline_error: str | None
     audio_url: str | None
 
     model_config = {"from_attributes": True}
@@ -57,7 +58,8 @@ class PipelineStatusUpdate(BaseModel):
     error: str | None = None
 
 class IngestRequest(BaseModel):
-    speaker_count_hint: int | None = None
+    """Reserved for future per-job ingestion options"""
+    pass
 
 
 class SpeakerResponse(BaseModel):

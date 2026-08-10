@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from src.llm.base import LLMClient
 from src.llm.client import OpenAICompatibleEmbeddingClient
+from src.diarization.local import LocalDiarizationService
 from src.transcription.local import LocalTranscriptionService
 from src.transcription.remote import RemoteTranscriptionService
 
@@ -32,20 +33,21 @@ class WorkerContext:
     llm_client: LLMClient
     embedding_client: OpenAICompatibleEmbeddingClient
     transcription_service: LocalTranscriptionService | RemoteTranscriptionService
+    diarization_service: LocalDiarizationService
+
+def build_diarization_service(settings):
+    return LocalDiarizationService(max_workers=settings.pipeline_max_workers)
 
 def build_transcription_service(settings):
-    # Branching between Local and Remote transcription only needs to happen once, at startup, not per job.
     if settings.transcription_service_url:
         return RemoteTranscriptionService(
             service_url=settings.transcription_service_url,
             api_key=settings.transcription_api_key,
         )
     return LocalTranscriptionService(
-        huggingface_token=settings.huggingface_token,
         whisper_backend=settings.whisper_backend,
         whisper_model=settings.whisper_model,
-        diarization_model=settings.diarization_model,
-        max_workers=settings.transcription_max_workers,
+        max_workers=settings.pipeline_max_workers,
     )
 
 def build_pipeline_services(settings, worker_context) -> PipelineServices:
@@ -62,10 +64,12 @@ def build_pipeline_services(settings, worker_context) -> PipelineServices:
         downloader=AudioDownloader(storage_path=settings.audio_storage_path),
         transcription=worker_context.transcription_service,
         transcript_store=TranscriptStore(),
+        diarization=worker_context.diarization_service,
         speaker_store=SpeakerStore(),
         speaker_resolver=SpeakerResolver(
             llm_client=worker_context.llm_client,
             window_ms=settings.speaker_inference_window_ms,
+            padding_ms=settings.speaker_inference_padding_ms,
         ),
         chunker=Chunker(
             chunk_size_tokens=settings.chunk_size_tokens,

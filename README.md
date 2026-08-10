@@ -13,7 +13,7 @@ The application is built with local-first operation in mind, but expandable to u
 **Technical overview / approach:**
 
 * Ingests podcast audio and performs speech-to-text transcription with sentence-level timestamps using a Whisper family model.
-* Speaker name is inferred from the transcription content (multi-speaker diarization coming soon).
+* Speakers are diarized locally (Senko) and each speaker's name is inferred from surrounding transcript context via LLM.
 * Data is chunked and embedded into the vector database.
 * Serves chat interface for conversational RAG with source and speaker attribution.
 * SSE connections keep the episode frontend state consistent with pipeline progress.
@@ -38,7 +38,8 @@ flowchart LR
   subgraph Worker Process
     direction TB
     Q --> B[Download &\nTranscribe]
-    B --> C[Infer Speaker]
+    B --> B2[Diarize &\nAlign]
+    B2 --> C[Infer Speaker]
     C --> D[Chunk & Embed]
   end
 

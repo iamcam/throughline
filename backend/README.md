@@ -6,6 +6,7 @@ This is the backend for the Throughline project.
 
 - Python 3.13+
 - uv
+- ffmpeg (required for diarization's audio conversion step)
 - [Podman](https://podman-desktop.io) or Docker w/ compose
 
 Examples use podman for container management, but docker will also work - just swap `podman` for `docker`.
@@ -78,16 +79,11 @@ TRANSCRIPTION_API_KEY=your-key-here                  # required for OpenAI; leav
 When `TRANSCRIPTION_SERVICE_URL` is set, local Whisper config is ignored.
 
 
-**Speaker Diarization (optional)**
+**Speaker Diarization**
 
-Diarization is off by default — it is computationally intensive and requires a GPU for practical use. To enable it, set `DIARIZATION_MODEL` in `.env`:
+Diarization always runs as part of ingestion — there's no opt-in setting. Local diarization uses [Senko](https://github.com/narcotic-sh/senko) (MIT license, no Hugging Face token required), with device selection (`device="auto"`) handled automatically — Metal on Apple Silicon, CUDA on Nvidia GPUs, CPU fallback elsewhere. No diarization-specific configuration exists beyond `PIPELINE_MAX_WORKERS` (below), which sizes the worker pool shared with local Whisper transcription.
 
-```bash
-DIARIZATION_MODEL=pyannote/speaker-diarization-3.1
-HUGGINGFACE_TOKEN=hf_...
-```
-
-Pyannote requires a Hugging Face token and model access. Accept the terms at https://huggingface.co/pyannote/speaker-diarization-3.1 before setting the token.
+No remote diarization backend exists yet — every episode is diarized locally, regardless of whether transcription itself is local or remote.
 
 
 ### 4. Bootstrapping
@@ -194,10 +190,11 @@ Tracing is disabled by default (`TRACING_ENABLED=false`). The app runs normally 
 
 - All LLM calls — prompt, response, token counts (auto-instrumented via OpenAIInstrumentor)
 - Retrieval — query, result count, similarity score distribution
-- Ingestion pipeline — episode, chunk counts, inferred speaker
+- Ingestion pipeline — episode, chunk counts, speaker count
 - Audio download — file size, bytes received
 - Transcription — backend, model, segment count, wall-clock duration
-- Speaker inference — name found, confidence level
+- Diarization — turn count, speaker count
+- Speaker inference — one span per diarized speaker; name found, confidence level
 
 ## Usage
 
@@ -218,7 +215,7 @@ Once a feed is added, get the episode ID from the episodes list then trigger ing
 ```bash
 curl -X POST http://localhost:3001/api/v1/episodes/{episode_id}/ingest \
   -H "Content-Type: application/json" \
-  -d '{"speaker_count_hint": 2}'
+  -d '{}'
 ```
 
 Monitor progress via SSE stream or poll the status endpoint:
@@ -274,5 +271,6 @@ src/
   storage/       # Vector store abstraction
   llm/           # LLM and embedding client protocols
   telemetry/     # OpenTelemetry setup and tracer
-  transcription/ # TranscriptionService protocol, local (Whisper + Pyannote) and remote implementations
+  transcription/ # TranscriptionService protocol, local (Whisper) and remote implementations
+  diarization/   # DiarizationService protocol, local (Senko) implementation, segment alignment
 ```

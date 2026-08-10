@@ -38,14 +38,6 @@ def test_parse_duration_none():
     assert parse_duration(None) is None
 
 
-def test_parse_transcript_url_tag():
-    result = parse_feed(str(FIXTURE_PATH))
-    ep3 = next(ep for ep in result.episodes if ep.guid == "ep-003")
-    import pprint
-    pprint.pprint(ep3)
-    assert ep3.transcript_url == "https://example.com/ep3.vtt"
-
-
 def test_parse_audio_url_from_enclosure():
     result = parse_feed(str(FIXTURE_PATH))
     ep1 = next(ep for ep in result.episodes if ep.guid == "ep-001")

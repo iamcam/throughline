@@ -120,18 +120,14 @@ export const listEpisodes = (feedId: string) =>
 export const getEpisode = (episodeId: string) =>
   api.get<Episode>(`/episodes/${episodeId}`).then((r) => r.data);
 
-export const ingestEpisode = (episodeId: string, speakerCountHint?: number) =>
+export const ingestEpisode = (episodeId: string) =>
   api
-    .post(`/episodes/${episodeId}/ingest`, {
-      speaker_count_hint: speakerCountHint,
-    })
+    .post(`/episodes/${episodeId}/ingest`, { })
     .then((r) => r.data);
 
-export const reingestEpisode = (episodeId: string, speakerCountHint?: number) =>
+export const reingestEpisode = (episodeId: string) =>
   api
-    .post(`/episodes/${episodeId}/reingest`, {
-      speaker_count_hint: speakerCountHint,
-    })
+    .post(`/episodes/${episodeId}/reingest`, { })
     .then((r) => r.data);
 
 

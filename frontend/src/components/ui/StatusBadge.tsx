@@ -10,6 +10,7 @@ export default function StatusBadge({ status }: { status: string }) {
       'QUEUED': 'Queued',
       'DOWNLOADING': 'Downloading',
       'TRANSCRIBING': 'Transcribing',
+      'DIARIZING': 'Transcribing',
       'INFERRING_SPEAKERS': 'Inferring Speakers',
       'CHUNKING': 'Processing',
       'EMBEDDING': 'Saving',

@@ -42,7 +42,6 @@ class Episode(Base):
     published_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
     audio_url: Mapped[str | None] = mapped_column(Text)
     audio_local_path: Mapped[str | None] = mapped_column(Text)
-    transcript_url: Mapped[str | None] = mapped_column(Text)
     duration_seconds: Mapped[int | None] = mapped_column(Integer)
 
     # Pipeline state — DB is source of truth, SSE reads from here

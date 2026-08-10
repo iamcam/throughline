@@ -43,12 +43,14 @@ export function TranscriptViewer({ episodeId, collapsedSegments = COLLAPSED_SEGM
           <LucideChevronDown /> Show less
         </Button>
       )}
-      {visible.map((seg) => (
-        <div key={`${seg.sequence_order}`} className="text-sm">
-          {/* <span className="text-muted-foreground font-medium">
-            {seg.display_name ?? seg.speaker_id}
-          </span> */}
-          <p className="mt-0.5">{seg.text}</p>
+      {visible.map((seg, idx) => (
+        <div key={`${seg.sequence_order}`} className="text-sm grid grid-cols-4 sm:grid-cols-6 sm:gap-2">
+          {(visible[idx - 1]?.speaker_id === seg.speaker_id) ? <></> :
+            (
+                <div className='sm:text-end font-mono col-span-full sm:col-span-1 text-primary font-semibold wrap-anywhere'>{(seg.display_name ?? seg.speaker_id)}:</div>
+            )
+          }
+          <div className="block col-start-1 sm:col-start-2 col-span-full">{seg.text}</div>
         </div>
       ))}
       {canCollapse && (

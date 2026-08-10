@@ -80,96 +80,15 @@ Rewritten query: "Marcus Webb views on consciousness and AI"
 
 ### 1.5 Speaker Diarization + Full Speaker Identity
 
-**What it is:** Determine who is speaking at each moment in an episode, producing real `SPEAKER_00`, `SPEAKER_01`, etc. labels. This is the prerequisite for meaningful multi-speaker filtering in chat queries ("what does the guest think about X?").
+Shipped in Phase 13. See ARCHITECTURE.md sections 3.3, 3.6a, 3.7, 3.8 and IMPLEMENTATION_PLAN.md Phase 13.
 
-**Why it matters:** The persona-query angle is the most memorable part of this product. Debate mode — surfacing two hosts' contradicting views side by side with citations — is the most demonstrable version of this.
-
-**Why deferred from v1:** Diarization feasibility was unproven on local hardware at the time. v1 uses `UNKNOWN` as the speaker sentinel for all segments. `SpeakerResolver` attempts to infer a single host name from the intro, which covers single-host podcasts adequately. Multi-speaker attribution waits for this work.
-
-**Feasibility verdict (June 2026 experiment):** Local diarization on Apple Silicon is now fast enough to be the default path. Benchmarks on a 3-speaker sample (89s, 16kHz mono WAV):
-
-| Model                                      | Backend       | Time/min audio | Notes                          |
-| ------------------------------------------ | ------------- | -------------- | ------------------------------ |
-| pyannote/speaker-diarization-community-1   | CPU (PyTorch) | 36.2s/min      | Gated HF model, no Metal path  |
-| Senko                                      | MLX/Metal ✅   | 0.06s/min     | 540x faster, no token required |
-
-For a 1-hour episode: pyannote = ~36 min wall time; Senko = ~5 seconds. See `experiments/diarization/` for full benchmark scripts and findings.
-
-**What changes when this lands:**
-
-*Schema:* No changes — `speaker_id` column already exists in `transcript_segments` and `chunks`. The `UNKNOWN` → `SPEAKER_XX` promotion is a data migration for existing episodes, not a schema change.
-
-*Pipeline:* `PENDING_NAMES` status reinstated. After diarization assigns real speaker IDs, the pipeline pauses for user confirmation of speaker names. `SpeakerResolver` runs per diarized speaker rather than once for the whole episode.
-
-*`SpeakerResolver`:* Return type changes back to `dict[str, InferredSpeaker | None]` — one entry per diarized speaker. The single-speaker path from v1 becomes a special case.
-
-*Frontend:* Speaker naming page becomes a pipeline gate again for multi-speaker episodes.
-
-*Speaker name resolution in `ToolDispatcher`:* Already scoped to session feed IDs (implemented Phase 6). With real diarization, `speaker_id` values are episode-scoped — the same person across two episodes will have the same display name but different `speaker_id` values. The existing resolution query handles this correctly.
-
-**Alignment step (new):** Whisper outputs transcript segments with `start`/`end` timestamps. The diarization model outputs speaker turns with `start`/`end`. A post-processing alignment step assigns a `speaker_id` to each transcript segment by finding the speaker turn with maximum timestamp overlap. O(n×m) scan is sufficient for podcast-length audio.
-
-**Speaker label normalization:** Senko returns string IDs (`SPEAKER_01`, `SPEAKER_02`) already in the project convention. Sortformer returns integers (`0, 1, 2`) — normalize on output if used: `speaker_id = f"SPEAKER_{seg.speaker:02d}"`.
-
-
-**Implementation backends:**
-
-- **Senko (recommended local path):** MIT license, no HF token required, `device='auto'` selects CoreML/ANE on Apple Silicon or CPU elsewhere. Processes a 90-minute episode in ~6 seconds locally. Handles full-length episodes correctly — chunked VAD pipeline avoids the memory issues that affect Sortformer MLX. Install: `uv add "git+https://github.com/narcotic-sh/senko.git"`.
-- **Local pyannote CPU (fallback):** `pyannote/speaker-diarization-community-1` via `pyannote.audio`. Requires `HF_TOKEN`. 36s/min on CPU — slow but self-contained. Acceptable as an ARQ background job for infrequent ingestion on non-Apple hardware.
-- **Modal GPU (remote path):** `modal deploy pyannote_service.py` turns the pyannote pipeline into a persistent GPU-backed web service. T4 completes a 90-minute episode in ~280s at ~$0.046. Scales to zero when idle. No standing cost. Useful for bulk processing or machines without sufficient local performance.
-- **Generic HTTP sidecar:** Any provider (RunPod, self-hosted Docker) exposing the same `POST /diarize` contract works as a drop-in. The app never knows which provider is behind the URL.
-- **Sortformer MLX (future):** `mlx-community/diar_sortformer_4spk-v1-fp16` via `mlx-audio` runs at 0.07s/min on short clips but crashes on full-length episodes due to missing chunk support in the library. Worth revisiting when `mlx-audio` ships chunked streaming.
-
-**Configuration (mirrors transcription pattern):**
-
-```
-# Leave empty to disable diarization (all segments tagged UNKNOWN)
-DIARIZATION_SERVICE_URL=
-
-# Required for pyannote regardless of backend (usage tracking)
-HF_TOKEN=
-
-# Local config — ignored when DIARIZATION_SERVICE_URL is set
-DIARIZATION_MODEL=pyannote/speaker-diarization-community-1
-```
-
-URL empty → local CPU. URL set → HTTP POST to any provider. Same pattern as `TRANSCRIPTION_SERVICE_URL`.
-
-**Effort:** 1-2 weekends. Local CPU path is fastest to implement — no deployment required. Modal path adds a deploy script and `RemoteDiarizationService` HTTP client on top of that.
-
-**Sequencing note:** Strong candidate to move ahead of further worker-queue work. The pipeline change is self-contained (new `DiarizationService` Protocol + alignment step), performance is proven, and it unlocks the multi-speaker persona queries that are the most distinctive product feature. That said, the worker queue makes the local CPU path significantly more practical — local diarization as a blocking call is painful; as a background job on the worker it is fine. The two features are complementary.
+Local-only (Senko, MLX/Metal/CUDA/CPU auto-detected) — no remote diarization backend was built. Pyannote was evaluated and deliberately excluded entirely, not just deferred: Senko covers the same CUDA/GPU use case pyannote would have, without the `HF_TOKEN` requirement or the CPU slowness that originally motivated a remote path. See 2.2 below for the follow-up items that came out of this phase.
 
 ---
 
 ### 1.6 Transcription Service Refactor
 
-**What it is:** Split `_transcribe_sync` into discrete functions to enable
-per-stage OTel timing, fix config naming, and prepare the codebase for
-diarization work.
-
-**Why it matters for observability:** OTel context does not cross
-`ProcessPoolExecutor` subprocess boundaries. Currently the `transcription`
-span only captures wall-clock duration of the full executor call. Sub-span
-timing for Whisper vs Pyannote requires the split to happen in the async
-layer — each `run_in_executor` call can then be wrapped in its own child span.
-This makes model comparison in Phoenix meaningful: same episode, different
-models, timing visible side by side.
-
-**Tasks:**
-- Split `_transcribe_sync` into `_run_whisper(audio_path, backend, model, language) -> list[tuple]`
-  and `_run_diarization(audio_path, model, hf_token, speaker_count_hint) -> list[tuple]`
-- Each becomes a separate `run_in_executor` call in `transcribe()`, wrapped in
-  a child span: `transcription.whisper` and `transcription.diarization`
-- Add `whisper_seconds: float | None` and `diarization_seconds: float | None`
-  to `TranscriptResult` dataclass; populate with `time.perf_counter()` inside
-  each sync function; read back in `transcribe()` and set as span attributes
-- Rename `WHISPER_MODEL_SIZE` → `WHISPER_MODEL` in `local.py` constructor,
-  `_transcribe_sync` / split function signatures, and `dependencies.py` call
-  site (`config.py` already updated in Phase 9)
-- Pairs naturally with remote transcription implementation (Future Scope 1.5)
-
-**Effort:** Half a day for the refactor alone; more if implementing a new
-remote backend simultaneously.
+Superseded by Phase 13. The observability goal this item wanted (per-stage OTel timing instead of one opaque `transcription` span covering Whisper+Pyannote combined) was achieved differently than planned — by making diarization a fully separate `DiarizationService`/module with its own span, rather than splitting `_transcribe_sync` into two `run_in_executor` calls within the same service. See ARCHITECTURE.md section 3.12.
 
 ---
 
@@ -205,13 +124,13 @@ Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
 - `verbose_json` response format returns segments with timestamps — worth requesting where supported; flat `text` response requires reconstructing segments without timestamps
 - Diarization and transcription are natural companions — most providers that offer both return them together in a single response
 
-**Natural pairing with 1.5:** Remote transcription and diarization should be implemented together. Cloud providers (OpenAI, Deepgram, AssemblyAI) return transcript + speaker turns in one API call — splitting them into separate implementation phases adds unnecessary complexity. When implementing, choose one provider and validate the full pipeline: transcription → diarization → `TranscriptResult` with real `SPEAKER_XX` IDs.
+**Diarization is no longer a reason to pair this with a diarization phase** — local Senko (1.5, shipped) already covers diarization well, including on CUDA. The remaining motivation for a combined remote transcription+diarization provider is narrower than originally framed: it's specifically useful for offloading *compute* (e.g. running on a machine with no GPU at all) or for providers whose combined transcription+diarization quality/spelling exceeds the local Whisper+Senko pipeline — not for diarization capability itself, which is already solved locally. When implementing, choose one provider and validate the full pipeline: transcription → `TranscriptResult` with real `SPEAKER_XX` IDs already attached (bypasses `DiarizationService` and alignment entirely for that path, since the provider does both jobs in one response).
+
 
 **Candidate providers:**
 - **OpenAI** — works with current `remote.py`; diarization via `gpt-4o-transcribe`
 - **Deepgram / AssemblyAI** — hosted, competitive pricing, strong diarization; not OpenAI-compatible, needs provider-specific client
 - **FunASR** — self-hosted, OpenAI-compatible endpoints for both transcription and diarization ([github.com/modelscope/FunASR](https://github.com/modelscope/FunASR))
-- **Local Pyannote on CUDA** — already stubbed in `local.py`; practical on GPU, impractical on CPU
 
 **Effort:** 1 weekend per provider
 
@@ -219,16 +138,7 @@ Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
 
 ### 1.10 Audio Clip Playback for Speaker Verification
 
-**What it is:** When editing a speaker name in `SpeakerRow`, play a short audio clip from the inferred timestamp so the user can verify the name by ear rather than reading the transcript text.
-
-**Status:** Partially implemented. Citation cards in `CitationList` already support audio playback via the `#t=` URI fragment approach — the browser seeks to `start_ms - 3000ms` natively using the episode's `audio_url`. The same pattern can be applied to the `SpeakerRow` popover using the `sample_timestamp_ms` from `GET /episodes/{id}/speakers/preview`.
-
-**Implementation path (Option A — already proven):**
-- Use `speaker.sample_timestamp_ms` from the preview endpoint
-- `<audio src={episode.audio_url + '#t=' + seekTime} controls />` in the `SpeakerRow` popover
-- `episode.audio_url` needs to be available in the speaker context — either pass it as a prop or fetch the episode
-
-**Effort:** Half a day
+Shipped in Phase 13, alongside labeled speaker names in the transcript view (`TranscriptViewer`'s `display_name` rendering, previously scaffolded but commented out). Implementation differs from the originally planned `#t=` URI fragment approach: `SpeakerRow` now controls the single shared `<audio>` element already present on `EpisodeDetailPage` via a callback ref, with play/pause toggle state tracked per speaker (native `pause`/`ended`/`seeked` event listeners distinguish user-driven interaction from the sample button's own programmatic seeks). This was the better fit once a single shared player needed multiple, mutually-exclusive-feeling seek targets — `#t=` fragments work well for the one-shot citation-click case in `CitationList` but don't naturally support toggling between several named seek points on the same element.
 
 ---
 
@@ -268,6 +178,36 @@ Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
 - Frontend: add `image_url: string | null` to `Episode` type in `client.ts`; display in `EpisodeRow` and `EpisodeDetailPage` with fallback to feed `image_url`
 
 **Effort:** Half a day
+
+---
+
+### 1.13 Speaker Name Resolution Quality
+
+**What it is:** Improve the accuracy of `SpeakerResolver`'s inferred names — correct spelling in particular, plus better disambiguation when names are ambiguous or absent from the transcript text itself.
+
+**Why it matters:** Diarization (1.5) solved *who is speaking when*; it did not solve *is the inferred name actually right*. Verification tooling (1.10) helps a user catch a wrong name, but doesn't reduce how often names are wrong or misspelled in the first place. This is judged higher-impact than fixing ad-insertion timestamp drift (2.8e) — a wrong name undermines trust in every persona query the app's core pitch depends on; a seek-to-the-wrong-spot playback glitch is a lesser annoyance.
+
+**Implementation path:**
+- Feed `Feed.title`/`Feed.description` and `Episode.title`/`Episode.description` into `SpeakerResolver`'s prompt as additional context, alongside the labeled transcript window. Podcast show notes and episode descriptions often contain a guest's full, correctly-spelled name even when the transcript itself only has a phonetic Whisper transcription of it spoken aloud — this is expected to help spelling accuracy specifically, more than disambiguation.
+- Consider a longer or smarter context window than the current time-bounded `window_ms`/`padding_ms` approach (ARCHITECTURE.md 3.7's "known limit") for episodes where the identifying information appears outside the current window — e.g. a guest named only in the outro, not the intro.
+- Possible second pass: if initial inference confidence is "low", retry with a wider window or additional context before giving up and returning `None`.
+
+**Effort:** Half a day for the description-context addition (straightforward prompt/data plumbing); the context-window strategy work is more open-ended and worth scoping separately once the cheap win is measured.
+
+---
+
+### 1.14 Speaker-Labeled Retrieval Context
+
+**What it is:** Thread speaker identity through retrieval and prompt-building, not just storage. Two related but separable pieces:
+
+1. **Inline speaker labels in LLM context.** Whatever assembles the LLM's tool-result context (`QueryEngine`/`ToolDispatcher`/`Retriever` — not yet reviewed as of this writing) currently hands over raw `parent_text`/leaf text with no speaker framing at all, even for chunks that are correctly single-speaker. The LLM has no textual signal for who said what beyond whatever it infers from prose style alone. Fix: render retrieved chunk text the same "acting script" way the transcript view and `SpeakerResolver`'s own prompts already do (`SPEAKER_NAME: "text"`) before it becomes tool-result content the LLM reasons over.
+2. **Per-speaker query filtering, verified end-to-end.** A `speaker_name` filter parameter already exists on the `search_knowledge_base` tool definition (Phase 6). Whether it's correctly wired through `VectorStore.search`'s filters against real diarized `speaker_id`/`display_name` values — as opposed to the v1 always-`UNKNOWN` sentinel it was presumably built and tested against — hasn't been re-verified since diarization shipped.
+
+**Why it matters:** the product's core pitch is answering questions about what a specific speaker said or thinks. Unlabeled, or (per 2.9) occasionally actively mislabeled, retrieval context directly undermines that promise — a wrong attribution here is a worse failure mode than most retrieval quality issues, since it's not just "less relevant," it's "confidently wrong about who said it."
+
+**Scope note:** Tier 1 for the inline-labeling piece specifically — a contained formatting change at the context-assembly layer, once that layer is located. Filter verification is likely quick once `Retriever`/`ToolDispatcher` are reviewed. There's real room for this to grow beyond that first pass — cross-episode "what has this person said across many episodes" queries, citation UI changes to visually distinguish speaker turns within one retrieved passage, or revisiting `_segment_by_topic`'s single-speaker-per-parent guarantee if it's ever relaxed. Scope the first pass tightly to inline labeling + filter verification; treat anything past that as separate follow-up.
+
+**Effort:** Needs a look at `QueryEngine`/`ToolDispatcher`/`Retriever` before a real estimate — provisionally "manageable," pending that review.
 
 ---
 
@@ -325,6 +265,7 @@ Current contract tests (tests/integration/test_queue.py) cover Protocol conforma
 
 ### 2.1f — Extras-based PyTorch accelerator split.
 Currently torch/torchaudio are pinned unconditionally to PyTorch's CPU-only index (see pyproject.toml tool.uv.sources) so Docker/Linux doesn't pull CUDA by default. This means the NVIDIA-GPU local-dev path documented in backend/README.md (uv add torch torchaudio --index .../cu121) works but silently rewrites the same pyproject.toml/uv.lock -- committing after running it would flip Docker back to CUDA. A proper fix is Astral's documented extras-based split (uv sync --extra cpu vs. --extra cu121, coexisting permanently in one lockfile via [tool.uv] conflicts + [project.optional-dependencies]) so CPU and CUDA never collide regardless of who runs what locally. Deferred since this is effectively a single-developer project today -- worth doing if that changes, or before a CUDA machine is used again.
+
 ---
 
 ### 2.2 Automatic Feed Polling
@@ -395,6 +336,55 @@ Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
 ### 2.7 Episode Transcript Delete
 Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
 
+
+---
+
+### 2.8 Speaker Diarization
+
+Follow-up items from Phase 13 (see IMPLEMENTATION_PLAN.md Phase 13 and ARCHITECTURE.md sections 3.3, 3.6a–3.8). Parent item 1.5 above is shipped; these are what's left.
+
+### 2.8a RemoteTranscriptionService Incompatible with Diarization
+
+`RemoteTranscriptionService`'s current OpenAI-compatible `/audio/transcriptions` target returns no timestamps — every segment gets placeholder `start_ms=0, end_ms=0`. Alignment (3.6a) computes zero overlap for every segment against every diarization turn in this case, so every segment silently stays `UNKNOWN`. Not a bug introduced by Phase 13 — a pre-existing gap in `remote.py` that diarization work made newly relevant. Resolved properly by 1.9's remote-provider work (a provider returning real timestamps, or one that returns pre-labeled segments and bypasses diarization entirely).
+
+### 2.8b Word-Level Alignment (Considered, Rejected for Now)
+
+Alignment (`src/diarization/alignment.py`) operates at segment granularity, matching Whisper's already-finalized sentence segments against diarization turns by maximum overlap. A word-level alternative was considered: preserve Whisper's per-word timestamps (currently computed then discarded during sentence-grouping) through to alignment, and re-derive segments by walking word-by-word against diarization turns, breaking at either a sentence boundary or a speaker change — closer to what the old (now-removed) pyannote-in-transcription code did.
+
+Rejected for Phase 13 because the precision gain is structurally bounded, not because it's difficult: Senko itself reports only one dominant speaker per time range and does not detect overlapping speech (per its own documentation), so word-level alignment can't be more precise than the diarization signal it's aligning against — it shrinks the size of a misattribution at a speaker-change boundary, it doesn't eliminate the ambiguity. It also only benefits Whisper-transcribed episodes (RSS-provided transcripts, now removed entirely from the app, never had word-level data anyway; a remote transcription backend may not either). Worth revisiting only if segment-level misattribution proves to be a real, frequently-observed problem in practice — not before.
+
+### 2.8c SpeakerResolver Context Window Has No Length Cap
+
+The per-speaker inference window (`window_ms`/`padding_ms`) is time-bounded, not length-bounded. A genuinely chaotic multi-speaker episode (panel discussion, several speakers all talking within the same window) could produce a very long prompt with no current truncation strategy. Not yet hit in practice. If it becomes a problem, a token/character cap on the rendered script (e.g. truncate to the N most substantial lines per speaker) is the likely fix.
+
+### 2.8d Whisper Hallucination on Trailing Silence/Outro Audio
+
+Found via real-episode testing during Phase 13: Whisper can hallucinate fluent but entirely fabricated text during trailing silence or low-content outro music, and diarization can cluster that same stretch as a spurious extra "speaker" (quiet audio still registers as voice activity to a VAD). Confirmed on a real episode where a diarized third speaker's segment did not correspond to any real audio at that timestamp.
+
+Standard mitigation: `faster_whisper`'s `vad_filter` option pre-screens for actual speech before decoding, preventing the hallucination attempt entirely, rather than trying to catch a bad result after the fact via `no_speech_threshold`/`logprob_threshold`/`compression_ratio_threshold`. Not yet implemented — small, standalone change to `local.py`'s transcription call.
+
+### 2.8e Dynamic Ad Insertion Can Desync Playback Timestamps
+
+Discovered via real-episode testing: some podcast hosting platforms (confirmed: Simplecast's `injector.simplecastaudio.com`) serve ads dynamically at the same `audio_url`, varying episode duration and content between fetches — apparently session/request-tracked (a `listeningSessionID` parameter was observed in the redirect chain), likely to avoid repeating the same ad to the same listener. This means the audio actually transcribed at ingestion time is not guaranteed to match what a later playback request to the same URL returns — verified concretely: disabling `AudioDownloader`'s post-ingestion delete showed the originally-downloaded file was longer and contained a post-roll ad absent from a fresh `wget` of the same URL.
+
+**Impact:** primarily playback — a segment's `start_ms`/`end_ms` can point to the wrong moment in audio fetched later, most visible right after an ad boundary. Lower impact on RAG/retrieval, since chunk *text* and its association with the episode remain correct regardless of exact seek accuracy.
+
+**Proposed fix direction (not yet built):** capture the actual downloaded file's duration at ingestion time (ffprobe or similar — `ffmpeg` is already a dependency via the diarization WAV-conversion step). If a later duration check disagrees meaningfully, surface something like "playback timestamps may be approximate for this episode" rather than presenting confident-looking seek behavior that might be wrong. Deliberately not attempting to detect or evade the specific ad-insertion mechanism itself (fragile — depends on undocumented, changeable third-party behavior — and sits in an uncomfortable position relative to podcasters' ad revenue); duration-mismatch detection is robust to the *cause* changing over time, since it doesn't need to know why the audio differs, only that it does.
+
+**Not pursued this phase:** persisting the originally-ingested audio file instead of deleting it post-pipeline (`AudioDownloader.delete()`) would sidestep this entirely by serving playback from a stable local copy, but directly reverses a deliberate Phase 12 decision (`clear_audio_storage`'s design premise — nothing in that storage should be trusted to survive a restart) and has real disk-cost implications at scale. Worth a proper architectural discussion if this proves to be a frequent problem, not a default response to one bad episode.
+
+Deprioritized below 1.13 (name resolution quality) — see 1.13's rationale for why.
+
+---
+
+### 2.9 Chunker: Speaker Misattribution on Short-Segment Merge
+
+Bug found while reviewing `chunker.py` in the context of Phase 13's speaker-attribution work — a real correctness bug, not a design gap. `_segment_by_topic`'s cut-point logic guarantees every `TopicSegment` (and therefore every parent chunk's `parent_text`) is single-speaker by construction — a speaker change is always a cut point. `_merge_short_segments` breaks that guarantee after the fact: it merges any `TopicSegment` below `min_tokens` into its immediate predecessor with no check that they share a `speaker_id`. A short reactive line ("yeah, totally") immediately following a speaker change is a plausible, even common, trigger. When it fires, the merged chunk's `speaker_id` silently becomes the predecessor's only, and the absorbed segment's actual different speaker's words get appended into that chunk's text with no marker distinguishing who said what — a genuinely mislabeled chunk, not just an unlabeled one.
+
+**Fix direction:** `_merge_short_segments` should only merge a short segment into its predecessor when they share a `speaker_id`. A short segment from a different speaker should instead merge forward into its successor (if that matches), stand alone even under `min_tokens` (accepting an occasionally slightly-short leaf/parent), or get merged with an explicit inline speaker-boundary marker so the mix is visible rather than silent. Worth pairing with 1.14 (speaker-labeled retrieval context) — both address the same underlying "does the LLM know who actually said this" concern from different angles.
+
+**Also found in the same review, unrelated to this bug — general `chunker.py` cleanup candidates, not yet acted on:** the `blocks` parameter passed into `_segment_by_topic` is never referenced in its body; `_block_embedding_indices` is incomplete (its own comment admits the needed information was lost) and unused; `_blocks_to_topic_segment` is unused and its docstring references pre-diarization "v1 this is always UNKNOWN" reasoning; two `_average_embeddings` definitions exist, one a broken instance method missing `self`, neither actually called anywhere. Likely leftover scaffolding from an earlier chunking design this file's current cut-point approach superseded. No observed behavioral impact — pure hygiene — but worth a pass alongside the merge-bug fix above, since the same investigation surfaced both in the same file.
+
 ---
 
 ## Tier 3 — Research / Experimental
@@ -455,19 +445,17 @@ Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
 
 ## What to Build Next (Recommended Order)
 
-With the worker queue in place (Phase 12), this is the highest-value sequence for what's left:
+With the worker queue (Phase 12) and local speaker diarization (Phase 13) in place, this is the highest-value sequence for what's left:
 
-1. **Speaker diarization** — 1-2 weekends, self-contained Protocol + alignment step + one backend to start; unlocks multi-speaker persona queries; local CPU path works immediately as a background job now that the worker queue exists; Modal GPU path adds a deploy script
+1. **Speaker-labeled retrieval context + chunk speaker-boundary fix (1.14 / 2.9)** — scope TBD pending a look at `QueryEngine`/`ToolDispatcher`/`Retriever`, likely manageable for the inline-labeling piece; fixes a confirmed real-world bug where a short segment following a speaker change gets merged into the wrong speaker's chunk, producing citations that mix two people's words under one name
 2. **Query rewriting** — 1 day, directly improves retrieval quality on vague and follow-up queries; measurable before/after in Phoenix
 3. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models
 4. **Episode summarization** — 1 weekend, demonstrates a two-level LLM pipeline for handling transcripts that exceed context limits
-6. **Automatic feed polling** — 1 weekend, natural complement to the worker queue
-7. **Queue overview UI (2.1b)** — 1 weekend, visibility into what's queued/running/recently done across all episodes
-8.  **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
-9.  **Temporal reasoning** — unique angle, memorable demo
-10. **Graph RAG** — the "big" upgrade, strongest architectural story
-11. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
+5. **Automatic feed polling** — 1 weekend, natural complement to the worker queue
+6. **Queue overview UI (2.1b)** — 1 weekend, visibility into what's queued/running/recently done across all episodes
+7. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
+8. **Temporal reasoning** — unique angle, memorable demo
+9. **Graph RAG** — the "big" upgrade, strongest architectural story
+10. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
 
-**On sequencing:** local CPU diarization as a blocking pipeline call is painful at 36 min/episode; as a background job on the worker it is perfectly acceptable for personal use. If you plan to use Modal GPU diarization from day one, this constraint is less critical and you could reorder items 2 and 3.
-
-Graph RAG is deliberately near the end — you will understand your retrieval failure modes better after real use, which makes the graph design decisions more grounded rather than speculative.
+Graph RAG is deliberately near the end — retrieval failure modes will be better understood after real use, which makes the graph design decisions more grounded rather than speculative.

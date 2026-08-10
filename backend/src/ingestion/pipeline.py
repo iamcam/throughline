@@ -7,6 +7,8 @@ from opentelemetry import trace
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.diarization.alignment import align_segments
+from src.diarization.base import DiarizationService
 from src.ingestion.audio_downloader import AudioDownloader
 from src.ingestion.chunker import Chunker
 from src.ingestion.embedder import Embedder
@@ -17,7 +19,6 @@ from src.ingestion.status_service import PipelineStatusService
 from src.storage.vector_store import VectorStore
 from src.telemetry.tracer import tracer
 from src.transcription.base import TranscriptionService, TranscriptSegment
-from src.transcription.transcript_fetcher import fetch_transcript
 from src.models.db import Episode
 
 
@@ -29,6 +30,7 @@ class PipelineServices:
     status: PipelineStatusService
     downloader: AudioDownloader
     transcription: TranscriptionService
+    diarization: DiarizationService
     transcript_store: TranscriptStore
     speaker_store: SpeakerStore
     speaker_resolver: SpeakerResolver
@@ -51,6 +53,7 @@ class PipelineServices:
 #     stages = [
 #         # "DOWNLOADING",
 #         "TRANSCRIBING",
+#         "DIARIZING",
 #         "INFERRING_SPEAKERS",
 #         "CHUNKING",
 #         "EMBEDDING",
@@ -75,7 +78,6 @@ async def ingest_episode(
 
         span.set_attribute("episode.id", str(episode_id))
         span.set_attribute("episode.title", episode.title or "untitled")
-        span.set_attribute("episode.has_transcript_url", bool(episode.transcript_url))
         audio_path = None
 
         try:
@@ -84,60 +86,56 @@ async def ingest_episode(
 
             await services.status.set(episode_id, "DOWNLOADING", db=db)
 
-            transcript = None
-
-            if episode.transcript_url:
-                try:
-                    logger.info("Episode %s: using RSS transcript %s", episode_id, episode.transcript_url)
-                    transcript = await fetch_transcript(episode.transcript_url)
-                except Exception as e:
-                    logger.warning(
-                        "Episode %s: failed to parse RSS transcript (%s), "
-                        "falling back to audio transcription. Reason: %s",
-                        episode_id, episode.transcript_url, e
-                    )
-
-            if transcript is None:
-
-                # ~~~~~~ Audio Download ~~~~~~
-
-                async def on_progress(progress: float) -> None:
-                    await services.status.set(
-                        episode_id, "DOWNLOADING", progress=progress, db=db
-                    )
-
-                audio_path = await services.downloader.download(
-                    episode_id=episode_id,
-                    audio_url=episode.audio_url,
-                    on_progress=on_progress
+            async def on_progress(progress: float) -> None:
+                await services.status.set(
+                    episode_id, "DOWNLOADING", progress=progress, db=db
                 )
 
-                # ~~~~~~ Transcription ~~~~~~
+            audio_path = await services.downloader.download(
+                episode_id=episode_id,
+                audio_url=episode.audio_url,
+                on_progress=on_progress
+            )
 
-                await services.status.set(episode_id, "TRANSCRIBING", db=db)
-                transcript = await services.transcription.transcribe(
-                    audio_path,
-                    speaker_count_hint=job_args.get("speaker_count_hint")
-                )
+            # ~~~~~~ Transcription ~~~~~~
+
+            await services.status.set(episode_id, "TRANSCRIBING", db=db)
+            transcript = await services.transcription.transcribe(audio_path)
+
+            # ~~~~~~ Diarization ~~~~~~
+            # Assigns real speaker_id labels onto transcript.segments, replacing
+            # the UNKNOWN placeholders transcription left behind. See
+            # src/diarization/alignment.py for how segments get matched to turns.
+
+            await services.status.set(episode_id, "DIARIZING", db=db)
+            diarization = await services.diarization.diarize(audio_path)
+            transcript.segments = align_segments(transcript.segments, diarization)
+
+            span.set_attribute("episode.speaker_count", diarization.speaker_count)
 
             await services.transcript_store.save(episode_id, transcript, db=db)
             await services.speaker_store.initialize_from_transcript(episode_id, transcript, db=db)
 
             # ~~~~~~ Speaker Inference ~~~~~~
-            # Returns None if no name found - not an error, pipeline continues.
-            # UNKNOWN row stays as-is; promoted to SPEAKER_00 if name found.
+            # One inference pass per diarized speaker. A speaker mapped to None
+            # means inference found nothing - that row stays unnamed and the
+            # pipeline continues; the user can name it later via PUT /speakers.
 
             await services.status.set(episode_id, "INFERRING_SPEAKERS", db=db)
             inferred = await services.speaker_resolver.infer(transcript.segments)
             await services.speaker_store.save_inferred(episode_id, inferred, db=db)
 
-            if inferred:
-                logger.info(
-                    "Episode %s: inferred speaker '%s' with %s confidence",
-                    episode_id, inferred.name, inferred.confidence
-                )
-            else:
-                logger.info("Episode %s: no speaker inferred, continuing with UNKNOWN", episode_id)
+            for speaker_id, result in inferred.items():
+                if result:
+                    logger.info(
+                        "Episode %s: inferred %s as '%s' with %s confidence",
+                        episode_id, speaker_id, result.name, result.confidence
+                    )
+                else:
+                    logger.info(
+                        "Episode %s: no name inferred for %s, continuing unnamed",
+                        episode_id, speaker_id
+                    )
 
             # ~~~~~~ Chunking ~~~~~~
             # Two embedding calls happen here:

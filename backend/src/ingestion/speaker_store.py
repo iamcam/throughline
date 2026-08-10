@@ -43,27 +43,29 @@ class SpeakerStore:
     async def save_inferred(
             self,
             episode_id: UUID,
-            result: InferredSpeaker | None,
+            results: dict[str, InferredSpeaker | None],
             db: AsyncSession
     ) -> None:
         """
-        Update the SPEAKER_00 row ith the inferred name and confidence.
-        If result is None, inference found nothing - leave row unchanged and let the pipeline continue with display_name = NULL.
+        Update each diarized speaker's row with its inferred name and confidence.
+        A speaker_id mapped to None means inference found nothing for that speaker -
+        its row is left unchanged, display_name stays NULL, pipeline continues.
         """
-        if result is None:
-            return
+        for speaker_id, result in results.items():
+            if result is None:
+                continue
 
-        await db.execute(
-            update(EpisodeSpeaker)
-            .where(EpisodeSpeaker.episode_id == episode_id)
-            .where(EpisodeSpeaker.speaker_id == "UNKNOWN")
-            .values(
-                display_name=result.name,
-                name_inferred=True,
-                name_confirmed=False,
-                confidence=result.confidence,
+            await db.execute(
+                update(EpisodeSpeaker)
+                .where(EpisodeSpeaker.episode_id == episode_id)
+                .where(EpisodeSpeaker.speaker_id == speaker_id)
+                .values(
+                    display_name=result.name,
+                    name_inferred=True,
+                    name_confirmed=False,
+                    confidence=result.confidence,
+                )
             )
-        )
         await db.commit()
 
     async def confirm_names(

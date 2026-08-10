@@ -52,7 +52,7 @@ async def episode(db_session):
 @pytest.mark.asyncio
 async def test_save_inferred_sets_display_name_and_confidence(db_session, episode):
     store = SpeakerStore()
-    result = InferredSpeaker(name="Ada Sinclair", confidence="high")
+    result = {"UNKNOWN": InferredSpeaker(name="Ada Sinclair", confidence="high")}
     await store.save_inferred(episode.id, result, db_session)
 
     row = await db_session.scalar(
@@ -67,7 +67,7 @@ async def test_save_inferred_sets_display_name_and_confidence(db_session, episod
 @pytest.mark.asyncio
 async def test_save_inferred_none_leaves_row_unchanged(db_session, episode):
     store = SpeakerStore()
-    await store.save_inferred(episode.id, None, db_session)
+    await store.save_inferred(episode.id, {"UNKNOWN": None}, db_session)
 
     row = await db_session.scalar(
         select(EpisodeSpeaker).where(EpisodeSpeaker.episode_id == episode.id)
@@ -84,7 +84,7 @@ async def test_confirm_name_without_edit_preserves_name_inferred(db_session, epi
     store = SpeakerStore()
 
     # First infer a name
-    await store.save_inferred(episode.id, InferredSpeaker(name="Ada Sinclair", confidence="high"), db_session)
+    await store.save_inferred(episode.id, {"UNKNOWN": InferredSpeaker(name="Ada Sinclair", confidence="high")}, db_session)
 
     # User confirms without changing the name
     await store.confirm_names(
@@ -104,7 +104,7 @@ async def test_confirm_name_without_edit_preserves_name_inferred(db_session, epi
 async def test_confirm_name_with_edit_sets_name_inferred_false(db_session, episode):
     store = SpeakerStore()
 
-    await store.save_inferred(episode.id, InferredSpeaker(name="Ada Sinclair", confidence="high"), db_session)
+    await store.save_inferred(episode.id, {"UNKNOWN": InferredSpeaker(name="Ada Sinclair", confidence="high")}, db_session)
 
     # User corrects the name
     await store.confirm_names(

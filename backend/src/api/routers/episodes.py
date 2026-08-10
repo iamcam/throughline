@@ -122,7 +122,7 @@ async def stream_episode_status(
 @router.post("/{episode_id}/ingest")
 async def ingest_episode_handler(
     episode_id: UUID,
-    body: IngestRequest,
+    body: IngestRequest = IngestRequest(),
     db: AsyncSession = Depends(get_db),
     queue: IngestionQueue = Depends(get_ingestion_queue),
 ):
@@ -133,10 +133,10 @@ async def ingest_episode_handler(
     if episode.pipeline_status not in ("PENDING", "ERROR"):
         raise HTTPException(
             status_code=409,
-            detail=f"Episode is already {episode.pipeline_status}. Use /reingest to force.",
+            detail=f"Episode is already in-flight: {episode.pipeline_status}. Try /reingest when the pipeline is finished.",
         )
 
-    job_args = {"speaker_count_hint": body.speaker_count_hint}
+    job_args: dict = {}
     job_id = await queue.enqueue(episode_id=episode_id, job_args=job_args)
 
     await db.execute(
@@ -155,7 +155,7 @@ async def ingest_episode_handler(
 @router.post("/{episode_id}/reingest")
 async def reingest_episode_handler(
     episode_id: UUID,
-    body: IngestRequest,
+    body: IngestRequest = IngestRequest(),
     db: AsyncSession = Depends(get_db),
     queue: IngestionQueue = Depends(get_ingestion_queue),
 ):
@@ -163,7 +163,19 @@ async def reingest_episode_handler(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
 
-    job_args = {"speaker_count_hint": body.speaker_count_hint}
+    if episode.pipeline_status == "PENDING":
+        raise HTTPException(
+            status_code=409,
+            detail="Episode must be ingested first at /ingest.",
+        )
+
+    if episode.pipeline_status not in ("ERROR", "READY"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Episode is already in-flight: {episode.pipeline_status}. Try again when the pipeline is finished.",
+        )
+
+    job_args: dict = {}
     job_id = await queue.enqueue(episode_id=episode_id, job_args=job_args)
 
     await db.execute(delete(Chunk).where(Chunk.episode_id == episode_id))

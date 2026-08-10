@@ -1,5 +1,4 @@
 # src/ingestion/speaker_resolver.py
-
 from __future__ import annotations
 
 import json
@@ -17,44 +16,77 @@ logger = logging.getLogger(__name__)
 @dataclass
 class InferredSpeaker:
     """
-    Result of a successfu speaker inference pass.
+    Result of a successful speaker inference pass for one diarized speaker.
 
     confidence is the LLM's self-reported certainty: "high", "medium", or "low".
     Stored on episode_speakers.confidence and shown in the UI so users know whether to trust the pre-filled name.
 
-    None is returned instead of this dataclass when inferencing find nothing or the response is malformed.
-    This is not treated as an error and the pipelie will continue with speaker_id = "UNKNOWN"
+    None is returned instead of this dataclass when inferencing finds nothing or the response is malformed.
+    This is not treated as an error and the pipeline continues with that speaker's row left unnamed.
     """
     name: str
     confidence: str  # "high" | "medium" | "low"
 
 class SpeakerResolver:
-    def __init__(self, llm_client: LLMClient, window_ms: int = 900_000): # 15 min window
+    def __init__(
+        self,
+        llm_client: LLMClient,
+        window_ms: int = 900_000,  # 15 min window after a speaker's first utterance
+        padding_ms: int = 60_000,  # look-back before it, to catch "my guest today is X" style intros
+    ):
         self._llm = llm_client
         self._window_ms = window_ms
+        self._padding_ms = padding_ms
 
     async def infer(
         self,
         segments: list[TranscriptSegment],
+    ) -> dict[str, InferredSpeaker | None]:
+        speaker_ids = sorted({s.speaker_id for s in segments if s.speaker_id != "UNKNOWN"})
+
+        results: dict[str, InferredSpeaker | None] = {}
+        for speaker_id in speaker_ids:
+            results[speaker_id] = await self._infer_one(speaker_id, segments)
+
+        return results
+
+    async def _infer_one(
+        self,
+        speaker_id: str,
+        segments: list[TranscriptSegment],
     ) -> InferredSpeaker | None:
         with tracer.start_as_current_span("speaker_inference") as span:
             span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("speaker.target_id", speaker_id)
 
-            intro = [s for s in segments if s.start_ms < self._window_ms]
-            span.set_attribute("speaker.intro_segment_count", len(intro))
-
-            if not intro:
-                logger.debug("No segments within inference window, skipping")
+            speaker_segments = [s for s in segments if s.speaker_id == speaker_id]
+            if not speaker_segments:
                 span.set_attribute("speaker.name_found", False)
-                # status OK even though no speaker found - not the fault of the inference
                 span.set_status(trace.StatusCode.OK)
                 return None
 
-            transcript_text = "\n".join(f'"{s.text}"' for s in intro)
+            first_utterance_ms = min(s.start_ms for s in speaker_segments)
+            window_start = max(0, first_utterance_ms - self._padding_ms)
+            window_end = first_utterance_ms + self._window_ms
+
+            windowed = sorted(
+                (s for s in segments if window_start <= s.start_ms <= window_end),
+                key=lambda s: s.sequence_order,
+            )
+            span.set_attribute("speaker.window_segment_count", len(windowed))
+
+            if not windowed:
+                logger.debug("No segments in window for %s, skipping", speaker_id)
+                span.set_attribute("speaker.name_found", False)
+                span.set_status(trace.StatusCode.OK)
+                return None
+
+            transcript_text = "\n".join(f'{s.speaker_id}: "{s.text}"' for s in windowed)
 
             prompt = (
-                "Who is the speaker in this podcast transcript and what is your "
-                "confidence on this answer from low, medium, or high? "
+                f"Below is a transcript excerpt from a podcast, labeled by speaker. "
+                f"Who is {speaker_id} (what is their name) and what is your confidence on this answer "
+                "from low, medium, or high? "
                 "Respond with ONLY a JSON object, no explanation, no markdown, no backticks. "
                 'Use exactly this format: {"name": "[person name]", "confidence": "[low|medium|high]"}\n\n'
                 f"Transcript:\n{transcript_text}"

@@ -5,10 +5,12 @@ from uuid import uuid4
 from unittest.mock import AsyncMock
 from sqlalchemy import select
 
+from src.diarization.base import DiarizationService
+from src.diarization.local import LocalDiarizationService, SpeakerTurn, DiarizationResult
 from src.ingestion.chunker import Chunker
 from src.ingestion.embedder import Embedder
 from src.storage.vector_store import PgvectorStore
-from src.llm.base import EmbeddingClient
+from src.llm.base import LLMResponse
 from src.ingestion.pipeline import PipelineServices, ingest_episode
 from src.ingestion.transcript_store import TranscriptStore
 from src.ingestion.speaker_store import SpeakerStore
@@ -88,12 +90,20 @@ def mock_services(sample_transcript) -> PipelineServices:
     """
     PipelineServices with real storage services and mocked I/O.
     TranscriptionService returns sample_transcript directly - no Whisper.
+    DiarizationService returns one SPEAKER_00 turn spanning the whole
+    episode - no Senko subprocess, every segment aligns to SPEAKER_00.
     LLM returns a fixed inference result - no network call.
     EmbeddingClient returns zero vectors - no embedding endpoint call.
     VectorStore uses real PgvectorStore against the test DB.
     """
     mock_transcription = AsyncMock(spec=TranscriptionService)
     mock_transcription.transcribe.return_value = sample_transcript
+
+    mock_diarization = AsyncMock(spec=DiarizationService)
+    mock_diarization.diarize.return_value = DiarizationResult(
+        turns=[SpeakerTurn(speaker_id="SPEAKER_00", start_ms=0, end_ms=999_999)],
+        speaker_count=1,
+    )
 
     mock_downloader = AsyncMock()
     mock_downloader.download.return_value = "/tmp/fake_audio.mp3"
@@ -102,6 +112,7 @@ def mock_services(sample_transcript) -> PipelineServices:
         status=PipelineStatusService(),
         downloader=mock_downloader,
         transcription=mock_transcription,
+        diarization=mock_diarization,
         transcript_store=TranscriptStore(),
         speaker_store=SpeakerStore(),
         speaker_resolver=SpeakerResolver(llm_client=MockLLMClient(response_content='{"name": "Ada Sinclair", "confidence": "high"}')),
@@ -115,12 +126,94 @@ def mock_services(sample_transcript) -> PipelineServices:
         vector_store=PgvectorStore(),
     )
 
+@pytest.fixture
+def multi_speaker_transcript() -> TranscriptResult:
+    segments = [
+        TranscriptSegment(
+            speaker_id="UNKNOWN",
+            text="Welcome to Grid Signal. I'm Priya Desai, and today my guest is Tomás Rivera.",
+            start_ms=0, end_ms=5000, sequence_order=0,
+        ),
+        TranscriptSegment(
+            speaker_id="UNKNOWN",
+            text="Thanks for having me, Priya.",
+            start_ms=5200, end_ms=7000, sequence_order=1,
+        ),
+        TranscriptSegment(
+            speaker_id="UNKNOWN",
+            text="Let's dive right into decentralized power grids.",
+            start_ms=7200, end_ms=11000, sequence_order=2,
+        ),
+        TranscriptSegment(
+            speaker_id="UNKNOWN",
+            text="Sure, decentralized grids are becoming increasingly important.",
+            start_ms=11200, end_ms=15000, sequence_order=3,
+        ),
+    ]
+    return TranscriptResult(segments=segments, language="en", source="whisper_local")
+
+
+@pytest.fixture
+def mock_services_multi_speaker(multi_speaker_transcript) -> PipelineServices:
+    """
+    Two-speaker variant of mock_services. Diarization turns line up exactly
+    with each segment's timing, so alignment has an unambiguous answer for
+    every segment - this fixture exercises multi-speaker wiring, not overlap
+    math (that's covered in tests/unit/test_alignment.py).
+    """
+    mock_transcription = AsyncMock(spec=TranscriptionService)
+    mock_transcription.transcribe.return_value = multi_speaker_transcript
+
+    mock_diarization = AsyncMock(spec=DiarizationService)
+    mock_diarization.diarize.return_value = DiarizationResult(
+        turns=[
+            SpeakerTurn(speaker_id="SPEAKER_00", start_ms=0, end_ms=5000),
+            SpeakerTurn(speaker_id="SPEAKER_01", start_ms=5200, end_ms=7000),
+            SpeakerTurn(speaker_id="SPEAKER_00", start_ms=7200, end_ms=11000),
+            SpeakerTurn(speaker_id="SPEAKER_01", start_ms=11200, end_ms=15000),
+        ],
+        speaker_count=2,
+    )
+
+    mock_downloader = AsyncMock()
+    mock_downloader.download.return_value = "/tmp/fake_audio.mp3"
+
+    # infer() processes speaker_ids sorted alphabetically, so responses[0]
+    # answers for SPEAKER_00, responses[1] for SPEAKER_01.
+    mock_llm = MockLLMClient(responses=[
+        LLMResponse(content='{"name": "Priya Desai", "confidence": "high"}', tool_calls=[]),
+        LLMResponse(content='{"name": "Tomás Rivera", "confidence": "medium"}', tool_calls=[]),
+    ])
+
+    return PipelineServices(
+        status=PipelineStatusService(),
+        downloader=mock_downloader,
+        transcription=mock_transcription,
+        diarization=mock_diarization,
+        transcript_store=TranscriptStore(),
+        speaker_store=SpeakerStore(),
+        speaker_resolver=SpeakerResolver(llm_client=mock_llm),
+        chunker=Chunker(
+            chunk_size_tokens=256,
+            chunk_overlap_tokens=32,
+            min_tokens=20,
+            topic_similarity_threshold=0.75
+        ),
+        embedder=Embedder(embedding_client=MockEmbeddingClient()),
+        vector_store=PgvectorStore(),
+    )
 
 # --- tests ---
 
-async def test_ingest_stores_segments_with_unknown_speaker_id(
+
+async def test_ingest_stores_segments_with_diarized_speaker_id(
     episode, mock_services, db_session
 ):
+    """
+    mock_services' diarization mock returns one SPEAKER_00 turn spanning
+    the whole episode, so alignment should assign every segment to
+    SPEAKER_00 rather than leaving transcription's UNKNOWN placeholder.
+    """
     await ingest_episode(episode, {}, mock_services, db_session)
 
     result = await db_session.execute(
@@ -132,7 +225,7 @@ async def test_ingest_stores_segments_with_unknown_speaker_id(
 
     assert len(segments) > 0
     for seg in segments:
-        assert seg.speaker_id == "UNKNOWN"
+        assert seg.speaker_id == "SPEAKER_00"
 
 
 async def test_ingest_creates_episode_speakers_rows(
@@ -227,17 +320,19 @@ async def test_episode_response_includes_pipeline_error(client, db_session):
     response = await client.get(f"/api/v1/episodes/{ep.id}")
     assert response.status_code == 200
     data = response.json()
+
     assert data["pipeline_error"] == "network failure"
 
-def test_local_satisfies_protocol():
+def test_local_transcription_satisfies_protocol():
     svc = LocalTranscriptionService(
-        huggingface_token="hf_fake",
         whisper_backend="faster_whisper",
         whisper_model="tiny",
-        diarization_model=None,
     )
     assert isinstance(svc, TranscriptionService)
 
+def test_loal_diarizatoin_satisfies_protocol():
+    svc = LocalDiarizationService()
+    assert isinstance(svc, DiarizationService)
 
 def test_remote_satisfies_protocol():
     svc = RemoteTranscriptionService(service_url="http://localhost:8001")
@@ -301,6 +396,45 @@ async def test_ingest_chunks_carry_speaker_id(episode, mock_services, db_session
     for chunk in chunks:
         assert chunk.speaker_id in ("UNKNOWN", "SPEAKER_00")
         assert not hasattr(chunk, "display_name")
+
+
+async def test_ingest_multi_speaker_segments_get_correct_labels(
+    episode, mock_services_multi_speaker, db_session
+):
+    await ingest_episode(episode, {}, mock_services_multi_speaker, db_session)
+
+    result = await db_session.execute(
+        select(TranscriptSegmentModel)
+        .where(TranscriptSegmentModel.episode_id == episode.id)
+        .order_by(TranscriptSegmentModel.sequence_order)
+    )
+    segments = result.scalars().all()
+
+    assert [s.speaker_id for s in segments] == [
+        "SPEAKER_00", "SPEAKER_01", "SPEAKER_00", "SPEAKER_01",
+    ]
+
+
+async def test_ingest_multi_speaker_each_gets_own_inferred_name(
+    episode, mock_services_multi_speaker, db_session
+):
+    await ingest_episode(episode, {}, mock_services_multi_speaker, db_session)
+
+    result = await db_session.execute(
+        select(EpisodeSpeaker)
+        .where(EpisodeSpeaker.episode_id == episode.id)
+        .order_by(EpisodeSpeaker.speaker_id)
+    )
+    speakers = result.scalars().all()
+
+    assert len(speakers) == 2
+    assert speakers[0].speaker_id == "SPEAKER_00"
+    assert speakers[0].display_name == "Priya Desai"
+    assert speakers[0].confidence == "high"
+    assert speakers[1].speaker_id == "SPEAKER_01"
+    assert speakers[1].display_name == "Tomás Rivera"
+    assert speakers[1].confidence == "medium"
+
 
 async def test_ingest_produces_correct_parent_count(
     episode, mock_services, db_session

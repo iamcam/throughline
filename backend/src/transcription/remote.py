@@ -20,7 +20,6 @@ class RemoteTranscriptionService:
     async def transcribe(
         self,
         audio_path: str,
-        speaker_count_hint: int | None = None,
         language: str = "en",
     ) -> TranscriptResult:
         with tracer.start_as_current_span("transcription") as span:
