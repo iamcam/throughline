@@ -32,23 +32,23 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 
 ## Phase Overview
 
-| Phase | What You Build                                          | Runnable At End                                                          |
-| ----- | ------------------------------------------------------- | ------------------------------------------------------------------------ |
-| 0     | Project scaffold, tooling, DB ✅ Complete                | `GET /health` returns 200                                                |
-| 1     | RSS feed ingestion + IngestionQueue ✅ Complete          | Feed + episodes in DB; queue abstraction in place                        |
-| 2     | Audio download + transcription pipeline ✅ Complete      | Episode transcript in DB via SSE-tracked job                             |
-| 3     | Speaker inference + naming API ✅ Complete               | LLM infers host name with confidence; pipeline runs straight to chunking |
-| 4     | Chunking + embedding ✅ Complete                         | Chunks with vectors in pgvector; speaker_id linked                       |
-| 5     | Basic RAG query ✅ Complete                              | Single-turn Q&A over transcript content                                  |
-| 6     | Tool-calling query engine ✅ Complete                    | Multi-turn chat with conditional retrieval; multi-feed scope             |
-| 7     | Frontend — feeds + episodes + speaker naming ✅ Complete | Full ingestion flow in UI with SSE progress                              |
-| 8     | Frontend — chat interface ✅ Complete                    | Full product usable end-to-end; chat in three contexts                   |
-| 9     | Observability ✅ Complete                                | OTel traces on all LLM, retrieval, and pipeline calls via Phoenix        |
-| 10    | Polish, docs, demo prep ✅ Complete                      | Shippable                                                                |
-| 11    | Transcription timeout, episode deletion  ✅ Complete     | Transcription can timeout and abort. Delete episode transcription data   |
-| 12    | Decoupled worker queue (streaQ + Redis)                 | Ingestion runs in a separate worker process; API remains responsive during ingestion |
-
-
+| Phase | What You Build                                              | Runnable At End                                                                                  |
+| ----- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| 0     | Project scaffold, tooling, DB ✅ Complete                    | `GET /health` returns 200                                                                        |
+| 1     | RSS feed ingestion + IngestionQueue ✅ Complete              | Feed + episodes in DB; queue abstraction in place                                                |
+| 2     | Audio download + transcription pipeline ✅ Complete          | Episode transcript in DB via SSE-tracked job                                                     |
+| 3     | Speaker inference + naming API ✅ Complete                   | LLM infers host name with confidence; pipeline runs straight to chunking                         |
+| 4     | Chunking + embedding ✅ Complete                             | Chunks with vectors in pgvector; speaker_id linked                                               |
+| 5     | Basic RAG query ✅ Complete                                  | Single-turn Q&A over transcript content                                                          |
+| 6     | Tool-calling query engine ✅ Complete                        | Multi-turn chat with conditional retrieval; multi-feed scope                                     |
+| 7     | Frontend — feeds + episodes + speaker naming ✅ Complete     | Full ingestion flow in UI with SSE progress                                                      |
+| 8     | Frontend — chat interface ✅ Complete                        | Full product usable end-to-end; chat in three contexts                                           |
+| 9     | Observability ✅ Complete                                    | OTel traces on all LLM, retrieval, and pipeline calls via Phoenix                                |
+| 10    | Polish, docs, demo prep ✅ Complete                          | Shippable                                                                                        |
+| 11    | Transcription timeout, episode deletion  ✅ Complete         | Transcription can timeout and abort. Delete episode transcription data                           |
+| 12    | Decoupled worker queue (streaQ + Redis) ✅ Complete          | Ingestion runs in a separate worker process; API remains responsive during ingestion             |
+| 13    | Speaker diarization (Senko) + per-speaker naming ✅ Complete | Real per-speaker identity; labeled transcript view; speaker preview playback                     |
+| 14    | Speaker-labeled retrieval + chunker fix ✅ Complete          | Retrieval context carries speaker identity; short-segment merge no longer misattributes speakers |
 
 
 ---
@@ -2029,6 +2029,39 @@ Traced end-to-end and confirmed unused by every real consumer (`LocalTranscripti
 
 ---
 
+## Phase 14 — Speaker-Labeled Retrieval + Chunker Fix
+
+**Goal:** Ship Future Scope 1.14 (speaker-labeled retrieval) and 2.9 (chunker speaker-misattribution), both found during Phase 13 review, plus two real-world fixes from manual testing.
+
+### 14.1 Chunker fix (2.9)
+- `src/ingestion/chunker.py` — `_merge_short_segments` now speaker-aware (see FUTURE_SCOPE.md 2.9); dead code removed (`_block_embedding_indices`, `_blocks_to_topic_segment`, duplicate `_average_embeddings`, unused `blocks` param, `_group_by_speaker`/`SpeakerBlock`)
+- `tests/unit/test_chunker.py` — reworked for the above
+
+### 14.2 Speaker-labeled retrieval (1.14)
+- `src/query/tool_dispatcher.py` — `_label_for_llm()` inline speaker labeling; `speaker_pairs` episode-scoped filter fix (see FUTURE_SCOPE.md 1.14)
+- `src/storage/vector_store.py` — `SearchFilters.speaker_pairs` replaces `speaker_id`; `PgvectorStore.search()` uses `tuple_(...).in_(...)`
+- `tests/unit/test_tool_dispatcher.py` — reworked; new `_label_for_llm` and multi-episode-match tests
+- `tests/integration/test_vector_store.py` — new, 11 tests; surfaced an untrained-ivfflat-index test issue, worked around with a `SET enable_indexscan/enable_bitmapscan = off` autouse fixture local to the file
+
+### 14.3 Deleted-episode guard
+- `src/ingestion/pipeline_runner.py` — `run_ingest()` logs and returns cleanly if its episode was deleted before the worker picked up the job, instead of raising
+
+### 14.4 Logging config consistency
+- `src/ingestion/chunker.py` — removed `logging.basicConfig()` (a library module isn't the right place for it)
+- `src/worker.py` — added `logging.basicConfig()`, matching `main.py`'s entry-point pattern
+
+### Known issues / tech debt noted
+- `reingest_episode_handler` still has no `pipeline_status` guard against a mid-pipeline reingest (carried from Phase 13)
+- No guard against deleting a feed/episode while a job is queued/running for it — 14.3 handles the job side, not the delete side
+
+### Phase 14 Done When
+- Full test suite green (`uv run pytest`)
+- Git tag: `v1.3.0`
+
+
+---
+
+
 ## Milestone Summary
 
 | Tag                                   | What Works                                                                                   |
@@ -2049,3 +2082,4 @@ Traced end-to-end and confirmed unused by every real consumer (`LocalTranscripti
 | `v1.0.0`                              | Shippable, documented, demo-ready.                                                           |
 | `v1.1.0`                              | Decoupled worker queue (streaQ + Redis); ingestion survives API restarts; single-compose-file deploy |
 | `v1.2.0`                              | Local speaker diarization (Senko) + per-speaker name inference; labeled transcript view; speaker preview playback |
+| `v1.3.0`                              | Speaker-labeled retrieval context (inline LLM labels + episode-scoped speaker_pairs filter); chunker speaker-misattribution fix; deleted-episode job guard |

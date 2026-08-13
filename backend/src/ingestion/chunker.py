@@ -1,6 +1,7 @@
 # src/ingestion/chunker.py
 
 from __future__ import annotations
+import logging
 import math
 import uuid
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from typing import Callable
 import tiktoken
 from src.transcription.base import TranscriptSegment
 
+logger = logging.getLogger(__name__)
 
 # ~~~~~~ Tokenizer ~~~~~~
 
@@ -92,53 +94,8 @@ class Chunker:
         return self._build_chunks(episode_id, segments, segment_embeddings)
 
 
-    def _group_by_speaker(
-        self,
-        segments: list[TranscriptSegment],
-    ) -> list[SpeakerBlock]:
-        if not segments:
-            return []
-
-        blocks: list[SpeakerBlock] = []
-        current_segments: list[TranscriptSegment] = [segments[0]]
-        current_speaker = segments[0].speaker_id
-
-        for segment in segments[1:]:
-            if segment.speaker_id == current_speaker:
-                current_segments.append(segment)
-            else:
-                blocks.append(SpeakerBlock(
-                    speaker_id=current_speaker,
-                    text=" ".join(s.text for s in current_segments),
-                    start_ms=current_segments[0].start_ms,
-                    end_ms=current_segments[-1].end_ms,
-                ))
-                current_segments = [segment]
-                current_speaker = segment.speaker_id
-
-        blocks.append(SpeakerBlock(
-            speaker_id=current_speaker,
-            text=" ".join(s.text for s in current_segments),
-            start_ms=current_segments[0].start_ms,
-            end_ms=current_segments[-1].end_ms,
-        ))
-        return blocks
-
-
-    def _average_embeddings(embeddings: list[list[float]]) -> list[float]:
-        if not embeddings:
-            return []
-        dim = len(embeddings[0])
-        centroid = [0.0] * dim
-        for emb in embeddings:
-            for i, val in enumerate(emb):
-                centroid[i] += val
-        return [v / len(embeddings) for v in centroid]
-
-
     def _segment_by_topic(
         self,
-        blocks: list[SpeakerBlock],
         segment_embeddings: list[list[float]],
         segments: list[TranscriptSegment],
     ) -> list[TopicSegment]:
@@ -182,27 +139,6 @@ class Chunker:
         return topic_segments
 
 
-    def _block_embedding_indices(
-        self,
-        blocks: list[SpeakerBlock],
-    ) -> list[int]:
-        """
-        For each block, return the index of its first segment
-        in the flat segment list, for embedding lookup.
-        """
-        indices = []
-        cursor = 0
-        for block in blocks:
-            # Each block was built from segments — we need to know
-            # how many segments it consumed to advance the cursor.
-            # Since SpeakerBlock no longer holds segments, we derive
-            # the count from token approximation — but we've lost that info.
-            # See note below.
-            indices.append(cursor)
-            cursor += 1  # placeholder — see note
-        return indices
-
-
     # ~~~ Hierarchical chunk construction ~~~
 
 
@@ -212,8 +148,7 @@ class Chunker:
         segments: list[TranscriptSegment],
         segment_embeddings: list[list[float]],
     ) -> list[ChunkData]:
-        blocks = self._group_by_speaker(segments)
-        topic_segments = self._segment_by_topic(blocks, segment_embeddings, segments)
+        topic_segments = self._segment_by_topic(segment_embeddings, segments)
 
         chunks: list[ChunkData] = []
 
@@ -301,56 +236,62 @@ class Chunker:
 
 
     def _merge_short_segments(
-        self,
-        segments: list[TopicSegment]
-    ) -> list[TopicSegment]:
-        """
-        Merge any TopicSegment below min_tokens into its predecessor.
-        The first segment is merged forward into the next if it's short
-        and has no predecessor to absorb it.
-        """
-        if not segments:
-            return []
+            self,
+            segments: list[TopicSegment],
+        ) -> list[TopicSegment]:
+            """
+            Merge any TopicSegment below min_tokens into its predecessor,
+            but only when they share a speaker. A short segment next to a
+            different speaker is left standalone rather than risk folding
+            one speaker's words into a chunk labeled under another's.
+            """
+            if not segments:
+                return []
 
-        merged: list[TopicSegment] = []
-        for segment in segments:
-            if merged and self._tokenize(segment.text) < self._min_tokens:
-                prev = merged[-1]
-                merged[-1] = TopicSegment(
-                    speaker_id=prev.speaker_id,
-                    text=prev.text + " " + segment.text,
-                    start_ms=prev.start_ms,
-                    end_ms=segment.end_ms,
-                )
-            else:
-                merged.append(segment)
+            merged: list[TopicSegment] = []
+            for segment in segments:
+                is_short = self._tokenize(segment.text) < self._min_tokens
+                same_speaker_as_prev = merged and segment.speaker_id == merged[-1].speaker_id
 
-        # If first segment is short and got no predecessor, merge and forward into the second if one exists
-        if len(merged) >= 2 and self._tokenize(merged[0].text) < self._min_tokens:
-            merged[1] = TopicSegment(
-                speaker_id=merged[1].speaker_id,
-                text=merged[0].text + " " + merged[1].text,
-                start_ms=merged[0].start_ms,
-                end_ms=merged[1].end_ms,
-            )
-            merged = merged[1:]
+                if merged and is_short and same_speaker_as_prev:
+                    prev = merged[-1]
+                    merged[-1] = TopicSegment(
+                        speaker_id=prev.speaker_id,
+                        text=prev.text + " " + segment.text,
+                        start_ms=prev.start_ms,
+                        end_ms=segment.end_ms,
+                    )
+                else:
+                    if merged and is_short and not same_speaker_as_prev:
+                        logger.info(
+                            "Leaving short segment standalone (%d tokens): speaker=%s "
+                            "differs from predecessor speaker=%s",
+                            self._tokenize(segment.text), segment.speaker_id, merged[-1].speaker_id,
+                        )
+                    merged.append(segment)
 
-        return merged
+            # If first segment is short and has no predecessor, merge forward
+            # into the second, but only if they share a speaker.
+            if len(merged) >= 2 and self._tokenize(merged[0].text) < self._min_tokens:
+                if merged[0].speaker_id == merged[1].speaker_id:
+                    merged[1] = TopicSegment(
+                        speaker_id=merged[1].speaker_id,
+                        text=merged[0].text + " " + merged[1].text,
+                        start_ms=merged[0].start_ms,
+                        end_ms=merged[1].end_ms,
+                    )
+                    merged = merged[1:]
+                else:
+                    logger.info(
+                        "Leaving short leading segment standalone (%d tokens): speaker=%s "
+                        "differs from successor speaker=%s",
+                        self._tokenize(merged[0].text), merged[0].speaker_id, merged[1].speaker_id,
+                    )
+
+            return merged
 
 
 # ~~~~~~ Helpers ~~~~~~
-
-def _average_embeddings(embeddings: list[list[float]]) -> list[float]:
-    """Component-wise average (centroid) of a list of embeddings."""
-    if not embeddings:
-        return []
-    dim = len(embeddings[0])
-    centroid = [0.0] * dim
-    for emb in embeddings:
-        for i, val in enumerate(emb):
-            centroid[i] += val
-    return [v / len(embeddings) for v in centroid]
-
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))
@@ -360,23 +301,3 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
         return 0.0
     return dot / (mag_a * mag_b)
 
-
-def _blocks_to_topic_segment(blocks: list[SpeakerBlock]) -> TopicSegment:
-    """
-    Combines a list of speaker blocks into one topic segment.
-    Dominant speaker: whichever speaker_id appears most in the block list.
-    In v1 this is always UNKNOWN — logic is correct for diarized future.
-    """
-    text = " ".join(b.text for b in blocks)
-    start_ms = blocks[0].start_ms
-    end_ms = blocks[-1].end_ms
-    counts: dict[str, int] = {}
-    for block in blocks:
-        counts[block.speaker_id] = counts.get(block.speaker_id, 0) + 1
-    dominant_speaker = max(counts, key=lambda k: counts[k])
-    return TopicSegment(
-        speaker_id=dominant_speaker,
-        text=text,
-        start_ms=start_ms,
-        end_ms=end_ms,
-    )

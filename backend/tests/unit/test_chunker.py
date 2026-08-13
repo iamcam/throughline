@@ -3,7 +3,7 @@
 import math
 import uuid
 import pytest
-from src.ingestion.chunker import Chunker
+from src.ingestion.chunker import Chunker, TopicSegment
 from src.transcription.base import TranscriptSegment
 
 
@@ -60,68 +60,135 @@ def unit_vector(index: int, size: int = 8) -> list[float]:
 
 EPISODE_ID = uuid.uuid4()
 
-
 # ---------------------------------------------------------------------------
-# Speaker boundary grouping
+# Short segment merging (speaker-aware)
 # ---------------------------------------------------------------------------
 
-def test_single_speaker_produces_one_block():
-    """All UNKNOWN segments — v1 reality — group into a single block."""
+def make_topic_segment(
+    text: str,
+    start_ms: int,
+    end_ms: int,
+    speaker_id: str = "SPEAKER_00",
+) -> TopicSegment:
+    return TopicSegment(
+        speaker_id=speaker_id,
+        text=text,
+        start_ms=start_ms,
+        end_ms=end_ms,
+    )
+
+
+def test_short_segment_merges_into_same_speaker_predecessor():
+    long_text = " ".join(f"word{i}" for i in range(25))
     segments = [
-        make_segment("Hello world", 0, 1000),
-        make_segment("How are you", 1000, 2000),
-        make_segment("I am fine", 2000, 3000),
+        make_topic_segment(long_text, 0, 5000, speaker_id="SPEAKER_00"),
+        make_topic_segment("yes", 5000, 6000, speaker_id="SPEAKER_00"),
     ]
-    chunker = make_chunker()
-    blocks = chunker._group_by_speaker(segments)
-    assert len(blocks) == 1
+    chunker = make_chunker(min_tokens=20)
+    merged = chunker._merge_short_segments(segments)
+    assert len(merged) == 1
+    assert "yes" in merged[0].text
+    assert merged[0].end_ms == 6000
 
 
-def test_speaker_change_starts_new_block():
-    """Two speakers produce two blocks."""
+def test_short_segment_not_merged_across_speaker_change():
+    """The core regression test for the 2.9 bug: a short segment from a
+    different speaker must never get folded into its neighbor's chunk."""
+    long_text = " ".join(f"word{i}" for i in range(25))
     segments = [
-        make_segment("Hello I am the host", 0, 1000, speaker_id="SPEAKER_00"),
-        make_segment("Hello I am the guest", 1000, 2000, speaker_id="SPEAKER_01"),
+        make_topic_segment(long_text, 0, 5000, speaker_id="SPEAKER_00"),
+        make_topic_segment("yes", 5000, 6000, speaker_id="SPEAKER_01"),
     ]
-    chunker = make_chunker()
-    blocks = chunker._group_by_speaker(segments)
-    assert len(blocks) == 2
+    chunker = make_chunker(min_tokens=20)
+    merged = chunker._merge_short_segments(segments)
+    assert len(merged) == 2
+    assert "yes" not in merged[0].text
+    assert merged[1].speaker_id == "SPEAKER_01"
+    assert merged[1].text == "yes"
 
 
-def test_speaker_blocks_preserve_speaker_id():
+def test_short_segment_between_different_speakers_stays_standalone():
+    long_a = " ".join(f"a{i}" for i in range(25))
+    long_c = " ".join(f"c{i}" for i in range(25))
     segments = [
-        make_segment("Hello", 0, 1000, speaker_id="SPEAKER_00"),
-        make_segment("Hi there", 1000, 2000, speaker_id="SPEAKER_01"),
+        make_topic_segment(long_a, 0, 5000, speaker_id="SPEAKER_00"),
+        make_topic_segment("yes", 5000, 6000, speaker_id="SPEAKER_01"),
+        make_topic_segment(long_c, 6000, 11000, speaker_id="SPEAKER_02"),
     ]
-    chunker = make_chunker()
-    blocks = chunker._group_by_speaker(segments)
-    assert blocks[0].speaker_id == "SPEAKER_00"
-    assert blocks[1].speaker_id == "SPEAKER_01"
+    chunker = make_chunker(min_tokens=20)
+    merged = chunker._merge_short_segments(segments)
+    assert len(merged) == 3
+    assert merged[1].speaker_id == "SPEAKER_01"
+    assert merged[1].text == "yes"
 
 
-def test_speaker_blocks_preserve_timestamps():
+def test_consecutive_short_same_speaker_segments_chain_merge():
+    """Same-speaker short segments should still chain-merge across
+    multiple filler turns in a row, not just a single one."""
+    long_text = " ".join(f"word{i}" for i in range(25))
     segments = [
-        make_segment("First", 0, 1000, speaker_id="UNKNOWN"),
-        make_segment("Second", 1000, 2000, speaker_id="UNKNOWN"),
-        make_segment("Third", 2000, 3500, speaker_id="UNKNOWN"),
+        make_topic_segment(long_text, 0, 5000, speaker_id="SPEAKER_00"),
+        make_topic_segment("yes", 5000, 6000, speaker_id="SPEAKER_00"),
+        make_topic_segment("okay", 6000, 6500, speaker_id="SPEAKER_00"),
     ]
-    chunker = make_chunker()
-    blocks = chunker._group_by_speaker(segments)
-    assert blocks[0].start_ms == 0
-    assert blocks[0].end_ms == 3500
+    chunker = make_chunker(min_tokens=20)
+    merged = chunker._merge_short_segments(segments)
+    assert len(merged) == 1
+    assert "yes" in merged[0].text
+    assert "okay" in merged[0].text
+    assert merged[0].end_ms == 6500
 
 
-def test_alternating_speakers_produce_correct_block_count():
-    """A B A B should produce 4 blocks, not 2."""
+def test_leading_short_segment_merges_forward_same_speaker():
+    long_text = " ".join(f"word{i}" for i in range(25))
     segments = [
-        make_segment("A speaks", 0, 1000, speaker_id="SPEAKER_00"),
-        make_segment("B speaks", 1000, 2000, speaker_id="SPEAKER_01"),
-        make_segment("A again", 2000, 3000, speaker_id="SPEAKER_00"),
-        make_segment("B again", 3000, 4000, speaker_id="SPEAKER_01"),
+        make_topic_segment("yes", 0, 1000, speaker_id="SPEAKER_00"),
+        make_topic_segment(long_text, 1000, 6000, speaker_id="SPEAKER_00"),
     ]
-    chunker = make_chunker()
-    blocks = chunker._group_by_speaker(segments)
-    assert len(blocks) == 4
+    chunker = make_chunker(min_tokens=20)
+    merged = chunker._merge_short_segments(segments)
+    assert len(merged) == 1
+    assert "yes" in merged[0].text
+    assert merged[0].start_ms == 0
+    assert merged[0].end_ms == 6000
+
+
+def test_leading_short_segment_not_merged_forward_different_speaker():
+    long_text = " ".join(f"word{i}" for i in range(25))
+    segments = [
+        make_topic_segment("yes", 0, 1000, speaker_id="SPEAKER_00"),
+        make_topic_segment(long_text, 1000, 6000, speaker_id="SPEAKER_01"),
+    ]
+    chunker = make_chunker(min_tokens=20)
+    merged = chunker._merge_short_segments(segments)
+    assert len(merged) == 2
+    assert merged[0].text == "yes"
+    assert merged[1].speaker_id == "SPEAKER_01"
+
+
+def test_single_short_segment_returns_standalone():
+    segments = [make_topic_segment("yes", 0, 1000, speaker_id="SPEAKER_00")]
+    chunker = make_chunker(min_tokens=20)
+    merged = chunker._merge_short_segments(segments)
+    assert len(merged) == 1
+    assert merged[0].text == "yes"
+
+
+def test_merge_short_segments_empty_input_returns_empty():
+    chunker = make_chunker(min_tokens=20)
+    assert chunker._merge_short_segments([]) == []
+
+
+def test_cross_speaker_skip_is_logged(caplog):
+    long_text = " ".join(f"word{i}" for i in range(25))
+    segments = [
+        make_topic_segment(long_text, 0, 5000, speaker_id="SPEAKER_00"),
+        make_topic_segment("yes", 5000, 6000, speaker_id="SPEAKER_01"),
+    ]
+    chunker = make_chunker(min_tokens=20)
+    with caplog.at_level("INFO"):
+        chunker._merge_short_segments(segments)
+    assert "standalone" in caplog.text
 
 
 # ---------------------------------------------------------------------------
@@ -133,8 +200,7 @@ def test_identical_embeddings_produce_one_segment():
     segments = [make_segment(f"sentence {i}", i * 1000, (i + 1) * 1000) for i in range(4)]
     embeddings = [unit_vector(0)] * 4   # all identical → similarity 1.0 everywhere
     chunker = make_chunker(threshold=0.75)
-    blocks = chunker._group_by_speaker(segments)
-    topic_segments = chunker._segment_by_topic(blocks, embeddings, segments)
+    topic_segments = chunker._segment_by_topic(embeddings, segments)
     assert len(topic_segments) == 1
 
 
@@ -143,8 +209,7 @@ def test_dissimilar_embeddings_produce_multiple_segments():
     segments = [make_segment(f"sentence {i}", i * 1000, (i + 1) * 1000) for i in range(4)]
     embeddings = [unit_vector(i) for i in range(4)]  # all orthogonal → similarity 0.0
     chunker = make_chunker(threshold=0.75)
-    blocks = chunker._group_by_speaker(segments)
-    topic_segments = chunker._segment_by_topic(blocks, embeddings, segments)
+    topic_segments = chunker._segment_by_topic(embeddings, segments)
     assert len(topic_segments) > 1
 
 
@@ -158,8 +223,7 @@ def test_similarity_at_threshold_does_not_cut():
     v2 = [math.cos(angle), math.sin(angle)]
     embeddings = [v1, v2]
     chunker = make_chunker(threshold=threshold)
-    blocks = chunker._group_by_speaker(segments)
-    topic_segments = chunker._segment_by_topic(blocks, embeddings, segments)
+    topic_segments = chunker._segment_by_topic(embeddings, segments)
     assert len(topic_segments) == 1
 
 
@@ -167,8 +231,7 @@ def test_single_segment_produces_one_topic_segment():
     segments = [make_segment("Only one", 0, 1000)]
     embeddings = [unit_vector(0)]
     chunker = make_chunker()
-    blocks = chunker._group_by_speaker(segments)
-    topic_segments = chunker._segment_by_topic(blocks, embeddings, segments)
+    topic_segments = chunker._segment_by_topic(embeddings, segments)
     assert len(topic_segments) == 1
 
 
@@ -180,8 +243,7 @@ def test_topic_segments_preserve_timestamps():
     ]
     embeddings = [unit_vector(0), unit_vector(0), unit_vector(1)]  # cut before index 2
     chunker = make_chunker(threshold=0.75)
-    blocks = chunker._group_by_speaker(segments)
-    topic_segments = chunker._segment_by_topic(blocks, embeddings, segments)
+    topic_segments = chunker._segment_by_topic(embeddings, segments)
     assert topic_segments[0].start_ms == 0
     assert topic_segments[0].end_ms == 2000
     assert topic_segments[1].start_ms == 2000

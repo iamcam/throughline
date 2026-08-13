@@ -293,7 +293,7 @@ the background. See Future Scope for the subprocess-kill follow-up.
 class SearchFilters:
     feed_ids: list[UUID] | None = None    # supports multi-feed scope
     episode_ids: list[UUID] | None = None
-    speaker_id: str | None = None
+    speaker_pairs: list[tuple[UUID, str]] | None = None   # (episode_id, speaker_id) pairs — speaker_id is episode-scoped, so a display name can resolve to several different speaker_ids, one per episode
 
 @dataclass
 class RawChunkResult:
@@ -734,9 +734,9 @@ class ToolDispatcher:
         # Outer try/except returns JSON error string rather than raising
 ```
 
-Speaker name → `speaker_id` resolution in `_search_knowledge_base` is scoped to `session.scope_feed_ids`
-to prevent cross-feed `SPEAKER_00` collisions. Uses `.first()` — returns a row with `.speaker_id` attribute.
-If no match: proceeds with `speaker_id=None` (unfiltered) rather than returning an error.
+Speaker name → `(episode_id, speaker_id)` pair resolution in `_search_knowledge_base` is scoped to `session.scope_feed_ids` to prevent cross-feed `SPEAKER_00` collisions. Resolves via `.all()`, not `.first()` — a display name can legitimately match multiple `(episode_id, speaker_id)` pairs, since `speaker_id` is episode-scoped and the same diarized label means a different person in each episode. If no match: proceeds with `speaker_pairs=None` (unfiltered) rather than returning an error.
+
+`_label_for_llm(chunk)` prefixes the LLM-facing `results` list's `text`/`parent_text` with `f'{display_name or "Unknown Speaker"}: "{text}"'` before those chunks become tool-result content — the same labeled-script format the transcript view and `SpeakerResolver`'s own prompts already use, giving the LLM an explicit textual signal for who said what. `session.citations` (what the UI shows) keeps the original unprefixed text — the label is LLM-context-only, never stored or displayed.
 
 Citations are appended to `session.citations` after every successful `_search_knowledge_base` call and
 accumulate across all tool rounds in the session.

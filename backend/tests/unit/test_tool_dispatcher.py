@@ -28,8 +28,8 @@ def make_session(**kwargs) -> ChatSession:
     )
 
 
-def make_chunk_result() -> ChunkResult:
-    return ChunkResult(
+def make_chunk_result(**overrides) -> ChunkResult:
+    defaults = dict(
         chunk_id=str(uuid.uuid4()),
         text="Leaf text about consciousness.",
         parent_text="Broader discussion about consciousness and AI.",
@@ -42,6 +42,8 @@ def make_chunk_result() -> ChunkResult:
         end_ms=3_890_000,
         similarity_score=0.91,
     )
+    defaults.update(overrides)
+    return ChunkResult(**defaults)
 
 
 def make_mock_retriever(results=None):
@@ -52,23 +54,25 @@ def make_mock_retriever(results=None):
     return retriever
 
 
-def make_mock_db(scalar_result=None, scalars_result=None):
+
+def make_mock_db(speaker_pairs_result=None, scalars_result=None):
     """
     Minimal async DB mock.
-    scalar_result: what scalar_one_or_none() returns (speaker_id lookup)
-    scalars_result: what scalars().all() returns (segment/speaker queries)
+    speaker_pairs_result: list of (episode_id, speaker_id) tuples returned by
+        the speaker-name resolution query (mocked via .all(), matching the
+        real query's plain two-column select).
+    scalars_result: what scalars().all() returns (get_speaker_profile query).
     """
     execute_result = MagicMock()
-    execute_result.scalar_one_or_none.return_value = scalar_result
     execute_result.scalars.return_value.all.return_value = scalars_result or []
 
-    # Speaker resolution now uses .first() — mock a row object with .speaker_id
-    if scalar_result is not None:
-        mock_row = MagicMock()
-        mock_row.speaker_id = scalar_result
-        execute_result.first.return_value = mock_row
-    else:
-        execute_result.first.return_value = None
+    mock_rows = []
+    for episode_id, speaker_id in (speaker_pairs_result or []):
+        row = MagicMock()
+        row.episode_id = episode_id
+        row.speaker_id = speaker_id
+        mock_rows.append(row)
+    execute_result.all.return_value = mock_rows
 
     db = MagicMock()
     db.execute = AsyncMock(return_value=execute_result)
@@ -156,11 +160,10 @@ async def test_search_applies_session_feed_scope():
 
 
 @pytest.mark.asyncio
-async def test_search_resolves_speaker_name_to_id():
+async def test_search_resolves_speaker_name_to_episode_speaker_pairs():
     retriever = make_mock_retriever()
     dispatcher = ToolDispatcher(retriever=retriever)
-    # DB returns SPEAKER_00 for display name "Marcus Webb"
-    db = make_mock_db(scalar_result="SPEAKER_00")
+    db = make_mock_db(speaker_pairs_result=[(EPISODE_ID, "SPEAKER_00")])
 
     tool_call = ToolCall(
         id="tc5",
@@ -171,15 +174,43 @@ async def test_search_resolves_speaker_name_to_id():
     await dispatcher.dispatch(tool_call, make_session(), db)
 
     _, kwargs = retriever.search.call_args
-    assert kwargs["filters"].speaker_id == "SPEAKER_00"
+    assert kwargs["filters"].speaker_pairs == [(EPISODE_ID, "SPEAKER_00")]
+
+
+@pytest.mark.asyncio
+async def test_search_resolves_speaker_name_across_multiple_episodes():
+    """Regression test: diarization assigns speaker_id labels independently
+    per episode, so the same display name can map to a different speaker_id
+    in each one. The filter must carry every pair, not just the first match —
+    that's the bug this fix addresses."""
+    retriever = make_mock_retriever()
+    dispatcher = ToolDispatcher(retriever=retriever)
+    other_episode_id = uuid.uuid4()
+    db = make_mock_db(speaker_pairs_result=[
+        (EPISODE_ID, "SPEAKER_00"),
+        (other_episode_id, "SPEAKER_01"),
+    ])
+
+    tool_call = ToolCall(
+        id="tc5b",
+        name="search_knowledge_base",
+        arguments={"query": "consciousness", "speaker_name": "Marcus Webb"},
+    )
+
+    await dispatcher.dispatch(tool_call, make_session(), db)
+
+    _, kwargs = retriever.search.call_args
+    assert kwargs["filters"].speaker_pairs == [
+        (EPISODE_ID, "SPEAKER_00"),
+        (other_episode_id, "SPEAKER_01"),
+    ]
 
 
 @pytest.mark.asyncio
 async def test_search_proceeds_unfiltered_when_speaker_not_found():
     retriever = make_mock_retriever()
     dispatcher = ToolDispatcher(retriever=retriever)
-    # DB returns None — speaker name not found
-    db = make_mock_db(scalar_result=None)
+    db = make_mock_db(speaker_pairs_result=None)
 
     tool_call = ToolCall(
         id="tc6",
@@ -190,7 +221,7 @@ async def test_search_proceeds_unfiltered_when_speaker_not_found():
     await dispatcher.dispatch(tool_call, make_session(), db)
 
     _, kwargs = retriever.search.call_args
-    assert kwargs["filters"].speaker_id is None
+    assert kwargs["filters"].speaker_pairs is None
 
 
 @pytest.mark.asyncio
@@ -242,3 +273,58 @@ async def test_search_populates_session_citations():
     await dispatcher.dispatch(tool_call, session, make_mock_db())
     assert len(session.citations) == 1
     assert session.citations[0]["display_name"] == "Marcus Webb"
+
+def test_label_for_llm_prefixes_text_and_parent_text():
+    dispatcher = ToolDispatcher(retriever=make_mock_retriever())
+    chunk = make_chunk_result()
+
+    labeled = dispatcher._label_for_llm(chunk)
+
+    assert labeled["text"] == 'Marcus Webb: "Leaf text about consciousness."'
+    assert labeled["parent_text"] == 'Marcus Webb: "Broader discussion about consciousness and AI."'
+    # unrelated fields pass through untouched
+    assert labeled["chunk_id"] == chunk.chunk_id
+    assert labeled["similarity_score"] == 0.91
+
+
+def test_label_for_llm_uses_unknown_speaker_when_display_name_missing():
+    dispatcher = ToolDispatcher(retriever=make_mock_retriever())
+    chunk = make_chunk_result(display_name=None)
+
+    labeled = dispatcher._label_for_llm(chunk)
+
+    assert labeled["text"] == 'Unknown Speaker: "Leaf text about consciousness."'
+
+
+def test_label_for_llm_leaves_missing_parent_text_as_none():
+    dispatcher = ToolDispatcher(retriever=make_mock_retriever())
+    chunk = make_chunk_result(parent_text=None)
+
+    labeled = dispatcher._label_for_llm(chunk)
+
+    assert labeled["text"] == 'Marcus Webb: "Leaf text about consciousness."'
+    assert labeled["parent_text"] is None
+
+
+@pytest.mark.asyncio
+async def test_search_labels_results_but_leaves_citations_plain():
+    """Locks in the split from Piece 1: the LLM-facing 'results' get an
+    inline speaker label baked into text/parent_text so the model can
+    attribute quotes correctly across multiple speakers in one tool
+    response. session.citations -- what the UI shows the user -- keeps
+    the original, unmodified text."""
+    retriever = make_mock_retriever()
+    dispatcher = ToolDispatcher(retriever=retriever)
+    session = make_session()
+
+    tool_call = ToolCall(
+        id="tc9",
+        name="search_knowledge_base",
+        arguments={"query": "consciousness"},
+    )
+
+    result = await dispatcher.dispatch(tool_call, session, make_mock_db())
+    parsed = json.loads(result)
+
+    assert parsed["results"][0]["text"] == 'Marcus Webb: "Leaf text about consciousness."'
+    assert session.citations[0]["text"] == "Leaf text about consciousness."

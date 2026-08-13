@@ -8,6 +8,7 @@ module; the API process enqueues jobs by name only and never touches
 pipeline code directly.
 """
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 from src.llm.base import LLMClient
 from src.llm.client import OpenAICompatibleEmbeddingClient
@@ -27,6 +28,8 @@ from src.ingestion.status_service import PipelineStatusService
 from src.ingestion.chunker import Chunker
 from src.ingestion.embedder import Embedder
 from src.storage.vector_store import PgvectorStore
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class WorkerContext:
@@ -94,7 +97,13 @@ async def run_ingest(episode_id: UUID, job_args: dict, services: PipelineService
     async with AsyncSessionLocal() as db:
         episode = await feed_service.get_episode(episode_id, db)
         if not episode:
-            raise ValueError(f"Episode {episode_id} not found")
+            # The episode was deleted (directly, or via a cascading feed
+            # delete) after this job was already enqueued. No retry needed.
+            logger.warning(
+                "Episode %s not found - skipping ingest.",
+                episode_id,
+            )
+            return
 
     async with AsyncSessionLocal() as db:
         await ingest_episode(episode, job_args, services, db)

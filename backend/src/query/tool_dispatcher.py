@@ -6,8 +6,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.query.result_hydrator import ChunkResult
 from src.models.db import EpisodeSpeaker, TranscriptSegment, Episode
-from src.models.db import EpisodeSpeaker, TranscriptSegment
 from src.query.retriever import Retriever
 from src.query.session_store import ChatSession
 from src.storage.vector_store import SearchFilters
@@ -61,8 +61,11 @@ class ToolDispatcher:
         episode_id: str | None = None,
         top_k: int = 5,
     ) -> str:
-        # Resolve speaker display name → speaker_id if provided
-        speaker_id: str | None = None
+        # Resolve speaker display name -> every matching (episode_id, speaker_id)
+        # pair in scope. speaker_id is episode-scoped -- the same "SPEAKER_00"
+        # label means a different person in each episode -- so a name can
+        # legitimately resolve to several different speaker_ids, one per episode.
+        speaker_pairs: list[tuple[UUID, str]] | None = None
         if speaker_name:
             speaker_query = (
                 select(EpisodeSpeaker.speaker_id, EpisodeSpeaker.episode_id)
@@ -73,10 +76,10 @@ class ToolDispatcher:
                 speaker_query = speaker_query.where(
                     Episode.feed_id.in_(session.scope_feed_ids)
                 )
-            row = await db.execute(speaker_query.limit(1))
-            result = row.first()
-            if result:
-                speaker_id = result.speaker_id
+            rows = await db.execute(speaker_query)
+            matches = rows.all()
+            if matches:
+                speaker_pairs = [(row.episode_id, row.speaker_id) for row in matches]
             else:
                 logger.info(f"Speaker name '{speaker_name}' not found in episode_speakers")
 
@@ -86,7 +89,7 @@ class ToolDispatcher:
                 [UUID(episode_id)] if episode_id
                 else session.scope_episode_ids or None
             ),
-            speaker_id=speaker_id,
+            speaker_pairs=speaker_pairs,
         )
 
         chunks = await self._retriever.search(
@@ -102,7 +105,7 @@ class ToolDispatcher:
         session.citations.extend([c.to_dict() for c in chunks])
 
         return json.dumps({
-            "results": [c.to_dict() for c in chunks]
+            "results": [self._label_for_llm(c) for c in chunks]
         })
 
 
@@ -182,3 +185,11 @@ class ToolDispatcher:
             "appears_in_episodes": len(episodes),
             "episodes": episodes,
         })
+
+    def _label_for_llm(self, chunk: ChunkResult) -> dict:
+        speaker = chunk.display_name or "Unknown Speaker"
+        data = chunk.to_dict()
+        data["text"] = f'{speaker}: "{chunk.text}"'
+        if chunk.parent_text:
+            data["parent_text"] = f'{speaker}: "{chunk.parent_text}"'
+        return data

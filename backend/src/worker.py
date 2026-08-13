@@ -6,6 +6,7 @@ Builds the WorkerContext dependencies once at process startup and reuses
 them across every job -- the LLM/embedding clients and transcription
 service each wrap a real connection pool worth keeping warm.
 """
+import logging
 from typing import AsyncGenerator
 from uuid import UUID
 from contextlib import asynccontextmanager
@@ -29,6 +30,10 @@ from src.transcription.local import LocalTranscriptionService
 
 settings = get_settings()
 
+logging.basicConfig(
+    level=settings.log_level,
+    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+)
 
 @asynccontextmanager
 async def lifespan() -> AsyncGenerator[WorkerContext, None]:

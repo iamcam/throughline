@@ -198,16 +198,12 @@ Shipped in Phase 13, alongside labeled speaker names in the transcript view (`Tr
 
 ### 1.14 Speaker-Labeled Retrieval Context
 
-**What it is:** Thread speaker identity through retrieval and prompt-building, not just storage. Two related but separable pieces:
+Shipped in Phase 14. See ARCHITECTURE.md sections 3.3 and 3.10, and IMPLEMENTATION_PLAN.md Phase 14.
 
-1. **Inline speaker labels in LLM context.** Whatever assembles the LLM's tool-result context (`QueryEngine`/`ToolDispatcher`/`Retriever` — not yet reviewed as of this writing) currently hands over raw `parent_text`/leaf text with no speaker framing at all, even for chunks that are correctly single-speaker. The LLM has no textual signal for who said what beyond whatever it infers from prose style alone. Fix: render retrieved chunk text the same "acting script" way the transcript view and `SpeakerResolver`'s own prompts already do (`SPEAKER_NAME: "text"`) before it becomes tool-result content the LLM reasons over.
-2. **Per-speaker query filtering, verified end-to-end.** A `speaker_name` filter parameter already exists on the `search_knowledge_base` tool definition (Phase 6). Whether it's correctly wired through `VectorStore.search`'s filters against real diarized `speaker_id`/`display_name` values — as opposed to the v1 always-`UNKNOWN` sentinel it was presumably built and tested against — hasn't been re-verified since diarization shipped.
+Both pieces landed. Inline labeling: `ToolDispatcher._label_for_llm()` prefixes the LLM-facing `text`/`parent_text` of each `search_knowledge_base` result with the speaker's display name (`SPEAKER_NAME: "..."`, matching the format already used by the transcript view and `SpeakerResolver`'s own prompts) before it becomes tool-result content; `session.citations` keeps the original unlabeled text. Filter verification: `speaker_name` now resolves to every matching `(episode_id, speaker_id)` pair in scope (`SearchFilters.speaker_pairs`), not just the first — `speaker_id` is episode-scoped, so a name can legitimately match a different diarized speaker in each episode it appears in.
 
-**Why it matters:** the product's core pitch is answering questions about what a specific speaker said or thinks. Unlabeled, or (per 2.9) occasionally actively mislabeled, retrieval context directly undermines that promise — a wrong attribution here is a worse failure mode than most retrieval quality issues, since it's not just "less relevant," it's "confidently wrong about who said it."
+Fuzzy/partial name matching was considered during this work and deliberately deferred — see 2.10.
 
-**Scope note:** Tier 1 for the inline-labeling piece specifically — a contained formatting change at the context-assembly layer, once that layer is located. Filter verification is likely quick once `Retriever`/`ToolDispatcher` are reviewed. There's real room for this to grow beyond that first pass — cross-episode "what has this person said across many episodes" queries, citation UI changes to visually distinguish speaker turns within one retrieved passage, or revisiting `_segment_by_topic`'s single-speaker-per-parent guarantee if it's ever relaxed. Scope the first pass tightly to inline labeling + filter verification; treat anything past that as separate follow-up.
-
-**Effort:** Needs a look at `QueryEngine`/`ToolDispatcher`/`Retriever` before a real estimate — provisionally "manageable," pending that review.
 
 ---
 
@@ -379,11 +375,19 @@ Deprioritized below 1.13 (name resolution quality) — see 1.13's rationale for 
 
 ### 2.9 Chunker: Speaker Misattribution on Short-Segment Merge
 
-Bug found while reviewing `chunker.py` in the context of Phase 13's speaker-attribution work — a real correctness bug, not a design gap. `_segment_by_topic`'s cut-point logic guarantees every `TopicSegment` (and therefore every parent chunk's `parent_text`) is single-speaker by construction — a speaker change is always a cut point. `_merge_short_segments` breaks that guarantee after the fact: it merges any `TopicSegment` below `min_tokens` into its immediate predecessor with no check that they share a `speaker_id`. A short reactive line ("yeah, totally") immediately following a speaker change is a plausible, even common, trigger. When it fires, the merged chunk's `speaker_id` silently becomes the predecessor's only, and the absorbed segment's actual different speaker's words get appended into that chunk's text with no marker distinguishing who said what — a genuinely mislabeled chunk, not just an unlabeled one.
+Shipped in Phase 14. See IMPLEMENTATION_PLAN.md Phase 14.
 
-**Fix direction:** `_merge_short_segments` should only merge a short segment into its predecessor when they share a `speaker_id`. A short segment from a different speaker should instead merge forward into its successor (if that matches), stand alone even under `min_tokens` (accepting an occasionally slightly-short leaf/parent), or get merged with an explicit inline speaker-boundary marker so the mix is visible rather than silent. Worth pairing with 1.14 (speaker-labeled retrieval context) — both address the same underlying "does the LLM know who actually said this" concern from different angles.
+`_merge_short_segments` now only merges a short `TopicSegment` into a predecessor sharing its `speaker_id`; a short segment from a different speaker merges forward into a same-speaker successor instead, or stands alone under `min_tokens` (logged) rather than silently absorbing another speaker's words into the wrong chunk. The general cleanup noted below also shipped alongside the fix: `_block_embedding_indices`, `_blocks_to_topic_segment`, the duplicate broken `_average_embeddings`, the unused `blocks` parameter, and `_group_by_speaker`/`SpeakerBlock` were all removed as dead code.
 
-**Also found in the same review, unrelated to this bug — general `chunker.py` cleanup candidates, not yet acted on:** the `blocks` parameter passed into `_segment_by_topic` is never referenced in its body; `_block_embedding_indices` is incomplete (its own comment admits the needed information was lost) and unused; `_blocks_to_topic_segment` is unused and its docstring references pre-diarization "v1 this is always UNKNOWN" reasoning; two `_average_embeddings` definitions exist, one a broken instance method missing `self`, neither actually called anywhere. Likely leftover scaffolding from an earlier chunking design this file's current cut-point approach superseded. No observed behavioral impact — pure hygiene — but worth a pass alongside the merge-bug fix above, since the same investigation surfaced both in the same file.
+---
+
+### 2.10 Fuzzy / Partial Speaker Name Matching
+
+**What it is:** `speaker_name` filtering (1.14) requires an exact match against `episode_speakers.display_name`. Misspellings ("Erin" vs "Aaron") or partial names ("Robert" vs "Robert Smith") don't resolve — the filter silently falls through to an unfiltered search rather than matching the speaker the user meant.
+
+**Why deferred:** Raised and considered during Phase 14 alongside the `speaker_pairs` fix. Deliberately not built — no real usage data yet on how often this actually causes a missed match in practice, and the right fix (substring/`ILIKE` fallback, fuzzy string matching, LLM-assisted resolution) depends heavily on which failure mode turns out to be common. Revisit once it's a real, observed problem rather than a hypothetical one.
+
+**Effort:** TBD, pending a real case to design against.
 
 ---
 
@@ -445,17 +449,16 @@ Bug found while reviewing `chunker.py` in the context of Phase 13's speaker-attr
 
 ## What to Build Next (Recommended Order)
 
-With the worker queue (Phase 12) and local speaker diarization (Phase 13) in place, this is the highest-value sequence for what's left:
+With the worker queue (Phase 12), local speaker diarization (Phase 13), and speaker-labeled retrieval (Phase 14) in place, this is the highest-value sequence for what's left:
 
-1. **Speaker-labeled retrieval context + chunk speaker-boundary fix (1.14 / 2.9)** — scope TBD pending a look at `QueryEngine`/`ToolDispatcher`/`Retriever`, likely manageable for the inline-labeling piece; fixes a confirmed real-world bug where a short segment following a speaker change gets merged into the wrong speaker's chunk, producing citations that mix two people's words under one name
-2. **Query rewriting** — 1 day, directly improves retrieval quality on vague and follow-up queries; measurable before/after in Phoenix
-3. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models
-4. **Episode summarization** — 1 weekend, demonstrates a two-level LLM pipeline for handling transcripts that exceed context limits
-5. **Automatic feed polling** — 1 weekend, natural complement to the worker queue
-6. **Queue overview UI (2.1b)** — 1 weekend, visibility into what's queued/running/recently done across all episodes
-7. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
-8. **Temporal reasoning** — unique angle, memorable demo
-9. **Graph RAG** — the "big" upgrade, strongest architectural story
-10. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
+1. **Query rewriting** — 1 day, directly improves retrieval quality on vague and follow-up queries; measurable before/after in Phoenix
+2. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models
+3. **Episode summarization** — 1 weekend, demonstrates a two-level LLM pipeline for handling transcripts that exceed context limits
+4. **Automatic feed polling** — 1 weekend, natural complement to the worker queue
+5. **Queue overview UI (2.1b)** — 1 weekend, visibility into what's queued/running/recently done across all episodes
+6. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
+7. **Temporal reasoning** — unique angle, memorable demo
+8. **Graph RAG** — the "big" upgrade, strongest architectural story
+9. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
 
 Graph RAG is deliberately near the end — retrieval failure modes will be better understood after real use, which makes the graph design decisions more grounded rather than speculative.

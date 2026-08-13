@@ -6,10 +6,10 @@ import uuid
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, tuple_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.db import Chunk
+from src.models.db import Chunk, Episode
 from src.ingestion.chunker import ChunkData
 
 
@@ -20,11 +20,15 @@ class SearchFilters:
     """
     All fields optional. Unset fields are not applied as WHERE clauses.
     feed_id requires a join to episodes — handled in PgvectorStore.search().
+    speaker_pairs constrains to specific (episode_id, speaker_id) combinations —
+    speaker_id alone is episode-scoped (the same SPEAKER_00 label means a
+    different person in each episode), so a name-based filter has to carry
+    each pair's episode_id alongside it rather than applying one speaker_id
+    globally across every episode in scope.
     """
     feed_ids: list[uuid.UUID] | None = None
     episode_ids: list[uuid.UUID] | None = None
-    speaker_id: str | None = None
-
+    speaker_pairs: list[tuple[uuid.UUID, str]] | None = None
 
 # ---------------------------------------------------------------------------
 # Raw result — speaker_id only, no display_name
@@ -80,8 +84,6 @@ class PgvectorStore:
         top_k: int = 5,
         db: AsyncSession = None,
     ) -> list[RawChunkResult]:
-        from sqlalchemy import and_
-        from src.models.db import Episode
 
         conditions = [
             Chunk.chunk_level == "leaf",
@@ -91,8 +93,10 @@ class PgvectorStore:
         if filters.episode_ids:
             conditions.append(Chunk.episode_id.in_(filters.episode_ids))
 
-        if filters.speaker_id:
-            conditions.append(Chunk.speaker_id == filters.speaker_id)
+        if filters.speaker_pairs:
+            conditions.append(
+                tuple_(Chunk.episode_id, Chunk.speaker_id).in_(filters.speaker_pairs)
+            )
 
         stmt = (
             select(
