@@ -24,16 +24,40 @@ def make_mock_dispatcher():
     return dispatcher
 
 
-def make_engine(llm, session_store=None, dispatcher=None, max_tool_rounds=3) -> QueryEngine:
+class PassthroughQueryRewriter:
+    """Stub QueryRewriter that returns the user message unchanged. Used by
+    tests that aren't exercising rewrite behavior itself, so they don't
+    depend on -- or consume response slots from -- a real rewrite call."""
+    async def rewrite(self, session, user_message):
+        return user_message
+
+
+class StubQueryRewriter:
+    """Configurable QueryRewriter stub for tests that ARE exercising rewrite
+    behavior. Records the session's message history as it existed at call
+    time (a snapshot, since session.messages is mutated in place afterward)
+    so tests can assert on call ordering."""
+    def __init__(self, rewritten: str):
+        self._rewritten = rewritten
+        self.captured_history = None
+        self.captured_user_message = None
+
+    async def rewrite(self, session, user_message):
+        self.captured_history = list(session.messages)
+        self.captured_user_message = user_message
+        return self._rewritten
+
+
+def make_engine(llm, session_store=None, dispatcher=None, rewriter=None, max_tool_rounds=3) -> QueryEngine:
     store = session_store or InMemorySessionStore()
     return QueryEngine(
         llm_client=llm,
         session_store=store,
         prompt_builder=PromptBuilder(),
         tool_dispatcher=dispatcher or make_mock_dispatcher(),
+        query_rewriter=rewriter or PassthroughQueryRewriter(),
         max_tool_rounds=max_tool_rounds,
     )
-
 
 class MockDb:
     pass
@@ -185,3 +209,73 @@ async def test_citations_returned_in_response():
     response = await engine.chat("test-session", "What does Marcus think?", MockDb())
 
     assert len(response.citations) > 0
+
+
+# ~~~~~~ Query rewriting ~~~~~~
+
+@pytest.mark.asyncio
+async def test_round_zero_llm_call_uses_rewritten_query():
+    llm = MockLLMClient(response_content="Marcus has said he's skeptical of near-term AGI.")
+    rewriter = StubQueryRewriter(rewritten="Marcus Webb views on AGI timelines")
+    store = InMemorySessionStore()
+    session = make_session()
+    await store.save(session)
+
+    engine = make_engine(llm, session_store=store, rewriter=rewriter)
+    await engine.chat("test-session", "what does he think about that?", MockDb())
+
+    assert llm.last_messages[-1]["content"] == "Marcus Webb views on AGI timelines"
+
+
+@pytest.mark.asyncio
+async def test_original_user_message_persisted_not_rewritten():
+    llm = MockLLMClient(response_content="Marcus has said he's skeptical of near-term AGI.")
+    rewriter = StubQueryRewriter(rewritten="Marcus Webb views on AGI timelines")
+    store = InMemorySessionStore()
+    session = make_session()
+    await store.save(session)
+
+    engine = make_engine(llm, session_store=store, rewriter=rewriter)
+    await engine.chat("test-session", "what does he think about that?", MockDb())
+
+    saved = await store.get("test-session")
+    assert saved.messages[0]["content"] == "what does he think about that?"
+
+
+@pytest.mark.asyncio
+async def test_rewriter_called_before_current_turn_appended_to_history():
+    llm = MockLLMClient(response_content="anything")
+    rewriter = StubQueryRewriter(rewritten="anything")
+    store = InMemorySessionStore()
+    session = make_session()
+    await store.save(session)
+
+    engine = make_engine(llm, session_store=store, rewriter=rewriter)
+    await engine.chat("test-session", "first message", MockDb())
+
+    # rewrite() should have seen an empty history -- the current turn hadn't
+    # been appended to session.messages yet when it was called
+    assert rewriter.captured_history == []
+    assert rewriter.captured_user_message == "first message"
+
+
+@pytest.mark.asyncio
+async def test_rewrite_not_reapplied_on_later_tool_rounds():
+    llm = MockLLMClient(responses=[
+        LLMResponse(tool_calls=[
+            ToolCall(id="tc1", name="search_knowledge_base", arguments={"query": "test"})
+        ]),
+        LLMResponse(content="Here is my answer."),
+    ])
+    rewriter = StubQueryRewriter(rewritten="rewritten text that should not leak into round 1")
+    dispatcher = make_mock_dispatcher()
+    store = InMemorySessionStore()
+    session = make_session()
+    await store.save(session)
+
+    engine = make_engine(llm, session_store=store, dispatcher=dispatcher, rewriter=rewriter, max_tool_rounds=2)
+    await engine.chat("test-session", "search for something", MockDb())
+
+    # round 1's messages should end with the tool result, not a
+    # re-substituted rewritten query
+    assert llm.last_messages[-1]["role"] == "tool"

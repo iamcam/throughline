@@ -768,6 +768,15 @@ Uses `chunk.parent_text or chunk.text` for the LLM context block. The leaf `text
 
 See Protocol definition in section 3.3. v1 implementation is `InMemorySessionStore` — dict on `app.state`. Sessions are ephemeral — cleared on process restart. `DBSessionStore` (post-v1) satisfies the same Protocol.
 
+**`QueryRewriter` (`src/query/query_rewriter.py`)**
+```python
+class QueryRewriter:
+    def __init__(self, llm_client: LLMClient, timeout_seconds: float = QUERY_REWRITE_TIMEOUT_SECONDS): ...
+
+    async def rewrite(self, session: ChatSession, user_message: str) -> str: ...
+```
+Runs once per `chat()` call, before the tool-calling loop starts and before `user_message` is appended to `session.messages` — so its own conversation-history prompt only ever sees prior turns, never the current one. Resolves conversation-dependent queries (pronouns, implicit topic references) into a self-contained phrase; the prompt instructs passthrough (return unchanged) when the message is already self-contained, so this runs unconditionally on every turn rather than reactively after a low-similarity search — deliberate, not a default: the failure mode being fixed is query *formulation*, not corpus coverage, and no similarity-score signal currently reaches `engine.py` to gate on. The rewritten text is substituted into the LLM-facing message list for round 0 only — a transient swap done by constructing a new dict, never a mutation of the dict stored in `session.messages` (which `PromptBuilder.build_messages()` returns by reference, not by copy). `session.messages` therefore always retains the user's literal original wording; the rewrite has no persisted effect and cannot compound across turns. Never raises — a dedicated, constructor-configurable timeout (`QUERY_REWRITE_TIMEOUT_SECONDS`, default 15s, independent of the main `LLM_REQUEST_TIMEOUT_SECONDS`) and defensive JSON parsing both fall back to the original message on any failure, so this optimization can never block a chat turn.
+
 #### Engine orchestration (`src/query/engine.py`)
 
 ```python
@@ -778,6 +787,7 @@ class QueryEngine:
         session_store: SessionStore,
         prompt_builder: PromptBuilder,
         tool_dispatcher: ToolDispatcher,
+        query_rewriter: QueryRewriter,
         max_tool_rounds: int = 3,
     ): ...
 
@@ -786,10 +796,17 @@ class QueryEngine:
         if session is None:
             raise ValueError(f"Session not found: {session_id}")
 
+        # Rewrite before appending -- _format_history should only see turns prior to this one
+        rewritten_query = await self.query_rewriter.rewrite(session, user_message)
+
         session.messages.append({"role": "user", "content": user_message})
 
         for round_num in range(self.max_tool_rounds):
             messages = self.prompt_builder.build_messages(session)
+            if round_num == 0:
+                # New dict, not a mutation -- messages[-1] is the same object as
+                # session.messages[-1]
+                messages[-1] = {**messages[-1], "content": rewritten_query}
             response = await self.llm_client.complete(messages, tools=TOOLS)
 
             if not response.tool_calls:
@@ -1025,6 +1042,7 @@ from src.telemetry.tracer import tracer
 | `embedder.py`             | `embedding`                   | `embedding.leaf_count`, `embedding.batch_size`, `embedding.batch_count`                                                                                    |
 | `retriever.py`            | `retrieval`                   | `retrieval.query`, `retrieval.top_k`, `retrieval.feed_ids`, `retrieval.result_count`, `retrieval.score_max`, `retrieval.score_min`, `retrieval.score_mean` |
 | LLM calls                 | auto via `OpenAIInstrumentor` | tokens, model, prompt/response                                                                                                                             |
+| `engine.py`               | `chat`                         | `session.id`, `chat.tool_rounds_used`, `chat.citation_count`, `chat.original_query`, `chat.rewritten_query`                                                 |
 
 **Error recording pattern:**
 ```python
@@ -1370,6 +1388,7 @@ podcast-knowledge-engine/
 │   │   ├── query/
 │   │   │   ├── engine.py            # Thin orchestrator; tool-calling loop; for/else synthesis
 │   │   │   ├── prompt_builder.py    # Pure logic, no I/O; scope-aware system prompt
+│   │   │   ├── query_rewriter.py    # Pre-retrieval conversational query rewriting; passthrough by default
 │   │   │   ├── tool_dispatcher.py   # Routes tool calls; speaker resolution; citation collection
 │   │   │   ├── tools.py             # Tool definitions (OpenAI function format)
 │   │   │   ├── retriever.py         # Composes EmbeddingClient + VectorStore + ResultHydrator
@@ -1402,6 +1421,7 @@ podcast-knowledge-engine/
 │   │       ├── test_engine.py
 │   │       ├── test_itunes.py
 │   │       ├── test_prompt_builder.py
+│   │       ├── test_query_rewriter.py
 │   │       ├── test_result_hydrator.py
 │   │       ├── test_retriever.py
 │   │       ├── test_rss_parser.py
@@ -1603,7 +1623,6 @@ uv run pytest --cov=src --cov-report=term-missing
 | ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Graph RAG                | Post-chunking NER → entity/relationship tables; `search_graph` tool; new `GraphStore` Protocol                                                       |
 | Persistent conversations | Implement `DBSessionStore` satisfying `SessionStore` Protocol; swap in `dependencies.py`                                                             |
-| Query rewriting          | Pre-retrieval step in `engine.py`; `LLMClient.complete()` call; log original vs rewritten in telemetry                                               |
 | Subprocess-level cancel  | Kill the OS-level Whisper subprocess on `cancel()`, not just the asyncio task — requires tracking PID across the `ProcessPoolExecutor` boundary        |
 | Queue overview UI        | `queued_at`/`finished_at` columns on `Episode`; grouped-by-status read endpoint — pure Postgres, no `IngestionQueue` involvement                        |
 | Automatic feed polling   | APScheduler; calls existing `refresh_feed` + `queue.enqueue()`                                                                                       |

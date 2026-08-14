@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 from opentelemetry import trace
 
-from src.llm.base import LLMClient, ToolCall
+from src.llm.base import LLMClient
 from src.query.prompt_builder import PromptBuilder
+from src.query.query_rewriter import QueryRewriter
 from src.query.session_store import SessionStore, ChatSession
 from src.query.tool_dispatcher import ToolDispatcher
 from src.query.tools import TOOLS
@@ -37,12 +38,14 @@ class QueryEngine:
         session_store: SessionStore,
         prompt_builder: PromptBuilder,
         tool_dispatcher: ToolDispatcher,
+        query_rewriter: QueryRewriter,
         max_tool_rounds: int = 3,
     ):
         self._llm = llm_client
         self._session_store = session_store
         self._prompt_builder = prompt_builder
         self._dispatcher = tool_dispatcher
+        self._rewriter = query_rewriter
         self._max_tool_rounds = max_tool_rounds
 
     async def chat(
@@ -61,10 +64,22 @@ class QueryEngine:
                 if session is None:
                     raise ValueError(f"Session not found: {session_id}")
 
+                # Rewrite before appending: _format_history should only see turns prior to this one.
+                rewritten_query = await self._rewriter.rewrite(session, user_message)
+                span.set_attribute("chat.original_query", user_message)
+                span.set_attribute("chat.rewritten_query", rewritten_query)
+
+
                 session.messages.append({"role": "user", "content": user_message})
 
                 for round_num in range(self._max_tool_rounds):
                     messages = self._prompt_builder.build_messages(session)
+                    if round_num == 0:
+                        # Substitute the rewritten query for the LLM call only --
+                        # build a new dict rather than mutating messages[-1] in
+                        # place, since it's the same object as session.messages[-1].
+                        messages[-1] = {**messages[-1], "content": rewritten_query}
+
                     try:
                         response = await asyncio.wait_for(
                             self._llm.complete(messages, tools=TOOLS),

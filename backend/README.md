@@ -195,6 +195,8 @@ Tracing is disabled by default (`TRACING_ENABLED=false`). The app runs normally 
 - Transcription — backend, model, segment count, wall-clock duration
 - Diarization — turn count, speaker count
 - Speaker inference — one span per diarized speaker; name found, confidence level
+- Chat orchestration — tool rounds used, citation count, original vs. rewritten query
+
 
 ## Usage
 
@@ -267,7 +269,7 @@ src/
   api/           # FastAPI app, routers, middleware, dependencies
   models/        # SQLAlchemy models and Pydantic schemas
   ingestion/     # RSS parsing, audio download, transcription pipeline
-  query/         # RAG query engine, tool-calling, session management
+  query/         # RAG query engine, tool-calling, session management, query rewriting
   storage/       # Vector store abstraction
   llm/           # LLM and embedding client protocols
   telemetry/     # OpenTelemetry setup and tracer

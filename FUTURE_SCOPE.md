@@ -43,22 +43,9 @@
 
 ### 1.3 Query Rewriting
 
-**What it is:** Before retrieval, have the LLM rewrite the user's query using conversation context to make it more retrievable.
+Shipped in Phase 15. See ARCHITECTURE.md sections 3.3 and 3.10, and IMPLEMENTATION_PLAN.md Phase 15.
 
-**Example:**
-User: "What does he think about that?"
-Context: last message was about Marcus discussing consciousness
-Rewritten query: "Marcus Webb views on consciousness and AI"
-
-**Why it matters:** Pronoun resolution and context-dependent queries are a known RAG failure mode. Observed in practice: vague queries like "what does the host think about technology?" trigger multi-round tool calling with low-similarity results rather than a clean answer. This is the correct fix.
-
-**Implementation path:**
-- Pre-retrieval step in `engine.py` before tool dispatch
-- LLM call: "Given this conversation, rewrite the user's query for semantic search"
-- Use rewritten query for retrieval, original for response
-- Log both in telemetry — makes the improvement measurable
-
-**Effort:** 1 day
+`QueryRewriter` (`src/query/query_rewriter.py`) runs on every chat turn — not reactively after a low-similarity search, per the design discussion at handoff — but is prompted to pass through messages that are already self-contained, so most turns are a no-op beyond the extra LLM round trip. The rewritten text is substituted into the tool-calling LLM's prompt for round 0 only, transiently — `session.messages` always retains the user's literal original wording, so conversation history is never altered and future turns' rewrite context is never built on a prior rewrite's mistake. Original and rewritten queries are both logged as `chat.original_query`/`chat.rewritten_query` attributes on the existing `chat` span, making before/after retrieval quality directly comparable in Phoenix. Never blocks a chat turn on failure: a dedicated, configurable timeout (separate from the main `LLM_REQUEST_TIMEOUT_SECONDS`) and defensive JSON parsing both fall back to the original message rather than raising.
 
 ---
 
@@ -449,16 +436,15 @@ Shipped in Phase 14. See IMPLEMENTATION_PLAN.md Phase 14.
 
 ## What to Build Next (Recommended Order)
 
-With the worker queue (Phase 12), local speaker diarization (Phase 13), and speaker-labeled retrieval (Phase 14) in place, this is the highest-value sequence for what's left:
+With the worker queue (Phase 12), local speaker diarization (Phase 13), speaker-labeled retrieval (Phase 14), and query rewriting (Phase 15) in place, this is the highest-value sequence for what's left:
 
-1. **Query rewriting** — 1 day, directly improves retrieval quality on vague and follow-up queries; measurable before/after in Phoenix
-2. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models
-3. **Episode summarization** — 1 weekend, demonstrates a two-level LLM pipeline for handling transcripts that exceed context limits
-4. **Automatic feed polling** — 1 weekend, natural complement to the worker queue
-5. **Queue overview UI (2.1b)** — 1 weekend, visibility into what's queued/running/recently done across all episodes
-6. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
-7. **Temporal reasoning** — unique angle, memorable demo
-8. **Graph RAG** — the "big" upgrade, strongest architectural story
-9. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
+1. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models
+2. **Episode summarization** — 1 weekend, demonstrates a two-level LLM pipeline for handling transcripts that exceed context limits
+3. **Automatic feed polling** — 1 weekend, natural complement to the worker queue
+4. **Queue overview UI (2.1b)** — 1 weekend, visibility into what's queued/running/recently done across all episodes
+5. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
+6. **Temporal reasoning** — unique angle, memorable demo
+7. **Graph RAG** — the "big" upgrade, strongest architectural story
+8. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
 
 Graph RAG is deliberately near the end — retrieval failure modes will be better understood after real use, which makes the graph design decisions more grounded rather than speculative.

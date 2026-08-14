@@ -16,6 +16,7 @@ The application is built with local-first operation in mind, but expandable to u
 * Speakers are diarized locally (Senko) and each speaker's name is inferred from surrounding transcript context via LLM.
 * Data is chunked and embedded into the vector database.
 * Serves chat interface for conversational RAG with source and speaker attribution.
+* Vague or context-dependent follow-ups ("what does he think about that?") are rewritten into self-contained queries before retrieval, using conversation history.
 * SSE connections keep the episode frontend state consistent with pipeline progress.
 * Tracing and telemetry data are available through any OpenTelemetry OTEL/HTTP connector.
 

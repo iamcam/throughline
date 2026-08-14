@@ -10,6 +10,7 @@ from src.ingestion.speaker_store import SpeakerStore
 from src.llm.base import LLMClient
 from src.query.engine import QueryEngine
 from src.query.prompt_builder import PromptBuilder
+from src.query.query_rewriter import QueryRewriter
 from src.query.retriever import Retriever
 from src.query.result_hydrator import ResultHydrator
 from src.query.session_store import SessionStore
@@ -57,6 +58,9 @@ def get_vector_store() -> VectorStore:
 def get_prompt_builder() -> PromptBuilder:
     return PromptBuilder()
 
+def get_query_rewriter() -> QueryRewriter:
+    return QueryRewriter(llm_client=get_llm_client())
+
 def get_tool_dispatcher(
     retriever: Retriever = Depends(get_retriever),
 ) -> ToolDispatcher:
@@ -67,12 +71,15 @@ def get_query_engine(
     session_store: SessionStore = Depends(get_session_store),
     prompt_builder: PromptBuilder = Depends(get_prompt_builder),
     tool_dispatcher: ToolDispatcher = Depends(get_tool_dispatcher),
+    query_rewriter: QueryRewriter = Depends(get_query_rewriter),
+
 ) -> QueryEngine:
     return QueryEngine(
         llm_client=llm,
         session_store=session_store,
         prompt_builder=prompt_builder,
         tool_dispatcher=tool_dispatcher,
+        query_rewriter=query_rewriter,
     )
 
 
