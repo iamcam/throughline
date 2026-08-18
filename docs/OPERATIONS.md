@@ -20,39 +20,11 @@
 
 ## Local Development
 
-Fastest iteration loop: run the DB in Docker, everything else natively.
+Fastest iteration loop: run Postgres (and optionally Redis) in Docker, everything else natively.
 
-```bash
-# Backend
-cd backend
+Full setup steps, environment configuration, and useful commands (migrations, testing, etc.): `../backend/README.md` and `../frontend/README.md`.
 
-# Start Redis (optional -- only needed if REDIS_URL is set)
-docker compose -f docker-compose.db.yml -f docker-compose.redis.yml ...
-
-cp .env.example .env
-# Edit .env — set DATABASE_URL, LLM_BASE_URL at minimum
-uv run alembic upgrade head
-uv run uvicorn src.api.main:app --reload --port 8000
-
-# Frontend (separate terminal)
-cd frontend
-yarn                  # install dependencies (yarn, not npm)
-yarn dev              # http://localhost:3000
-
-# Frontend build and lint
-yarn build            # TypeScript check + Vite production build
-yarn lint             # ESLint
-
-# API docs
-open http://localhost:3001/docs
-```
-
-**Frontend dev notes:**
-- Package manager is Yarn — do not use `npm install` in the frontend directory
-- Tailwind v4 via `@tailwindcss/vite` plugin — no `postcss.config.js` needed
-- The Vite dev server proxies `/api/*` requests to `http://localhost:8000`. In production, Nginx handles the same routing (see `docker-compose.yml` and Nginx config below).
-- Path alias `@/*` → `src/*` — use `@/components/Foo` not `../../components/Foo`
-- shadcn components are in `src/components/ui/`; add new ones with `yarn dlx shadcn add <component>`
+Summary: backend needs Python 3.13+ / uv, a running Postgres+pgvector (`docker-compose.db.yml`), and `alembic upgrade head` before `uv run uvicorn src.api.main:app --reload --port 3001`. Frontend needs Node 20+ / Yarn (`yarn && yarn dev` — http://localhost:3000, proxying `/api/*` to `http://localhost:3001`). Redis is optional — set `REDIS_URL` to route ingestion jobs through a real streaQ worker instead of the in-process fallback.
 
 ### Local LLM options
 
@@ -89,27 +61,9 @@ LLM_API_KEY=sk-...
 LLM_MODEL_NAME=claude-sonnet-4-20250514     # or gpt-4o
 ```
 
-### Transcription options
+### Transcription and diarization options
 
-**Local (pyannote + Whisper):**
-```bash
-# .env
-HUGGINGFACE_TOKEN=hf_...
-WHISPER_MODEL=medium   # tiny/base/small/medium/large, or a Hugging Face repo for mlx_whisper
-```
-
-Accept that diarization is slow on CPU. For dev, use the `sample_transcript.json` fixture to skip transcription entirely.
-
-**Transcription sidecar (Docker):**
-```bash
-docker compose --profile transcription up transcription
-
-# .env
-TRANSCRIPTION_SERVICE_URL=http://localhost:8001
-TRANSCRIPTION_API_KEY=...   # if required by the remote service
-```
-
-Presence of `TRANSCRIPTION_SERVICE_URL` is what selects remote transcription — absence means local. Don't set it if you want local Whisper.
+Full detail (local Whisper backends, remote transcription, Senko diarization — always-on, no opt-in setting): `../backend/README.md`.
 
 ---
 
@@ -163,7 +117,7 @@ docker compose exec backend uv run alembic upgrade head
 | `redis`    | Job queue backend for `worker`                                                   |
 | `backend`  | FastAPI app — enqueues ingestion jobs, never runs the pipeline directly          |
 | `worker`   | Runs ingestion jobs (streaQ) — same image as `backend`, different entrypoint arg |
-| `frontend` | Nginx-served React app                                                           |
+| `frontend` | Caddy-served React app                                                           |
 
 Bring your own Postgres or Redis instead of the containerized ones by pointing `DATABASE_URL`/`REDIS_URL` at your existing instance and removing the corresponding service (and its `depends_on` entry on `backend`/`worker`) from `docker-compose.yml`.
 
@@ -193,6 +147,8 @@ services:
     image: redis:7-alpine
     # No persistence by default -- queued/in-flight jobs are lost if this
     # container restarts. See FUTURE_SCOPE.md 2.1c for adding durability.
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -306,47 +262,37 @@ curl http://your-server-ip/api/v1/health/deep
 
 ---
 
-### Nginx Reverse Proxy (recommended)
+### Reverse Proxy and HTTPS
 
-Run Nginx on the VPS to terminate HTTPS and route traffic.
+The `frontend` container already includes a reverse proxy — `frontend/Dockerfile`'s final stage is `caddy:2-alpine`, configured via `infra/Caddyfile`. It serves the built frontend as static files and reverse-proxies `/api/*` to the `backend` service on port 3001, all inside the container on port 80. This is what `docker compose up` already gives you — no separate host-level proxy needed to get the app running, which is the whole point of the root `docker-compose.yml`: minimal setup effort for anyone downloading the repo.
 
-```nginx
-# /etc/nginx/sites-available/podcast-engine
+For a real domain with automatic HTTPS when self-hosting externally, the one change needed is in `infra/Caddyfile` — swap the `:80` block header for your domain:
 
-server {
-    listen 80;
-    server_name your-domain.com;
-    return 301 https://$host$request_uri;
+```caddy
+{
+    admin off
 }
 
-server {
-    listen 443 ssl;
-    server_name your-domain.com;
-
-    ssl_certificate     /etc/letsencrypt/live/your-domain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
-
-    # Frontend
-    location / {
-        proxy_pass http://localhost:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+your-domain.com {
+    handle /api/* {
+        reverse_proxy backend:3001
     }
 
-    # API
-    location /api/ {
-        proxy_pass http://localhost:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
+    handle {
+        root /srv
+        try_files {path} /index.html
+        file_server
     }
 }
 ```
+
+Caddy provisions and renews the certificate automatically — no certbot, no manual renewal, no separate cert volume to manage. Rebuild the frontend image after editing the Caddyfile:
 
 ```bash
-# SSL via Let's Encrypt
-apt install certbot python3-certbot-nginx
-certbot --nginx -d your-domain.com
+docker compose up -d --build frontend
 ```
+
+If you're fronting this with your own existing reverse proxy or TLS termination instead of the container's built-in one, terminate TLS there and forward to the frontend container's port 80 — the container itself doesn't need to change for that.
 
 ---
 
@@ -481,7 +427,7 @@ docker compose logs -f api  # tail logs
 ```
 
 ### Phoenix (if running)
-Accessible at port 6006 — not exposed via Nginx on the demo server by default. Use SSH tunnel to view:
+Accessible at port 6006 — not exposed by the reverse proxy on the demo server by default. Use SSH tunnel to view:
 ```bash
 ssh -L 6006:localhost:6006 user@your-server
 open http://localhost:6006
@@ -493,40 +439,14 @@ open http://localhost:6006
 
 ## Dockerfile Reference
 
-### Backend
+The backend and frontend Dockerfiles are real, actively maintained files — `backend/Dockerfile` and `frontend/Dockerfile` — rather than being duplicated here, where a copy would silently drift out of sync with the real thing (as the previous version of this section had).
 
-```dockerfile
-FROM python:3.12-slim
+- **Backend** (`backend/Dockerfile`): Python 3.13-slim, installs `ffmpeg` (required for audio conversion ahead of transcription/diarization), installs the CPU-only PyTorch build, and runs via `entrypoint.sh` — which applies Alembic migrations before starting uvicorn on port 3001. The same image is reused for the `worker` service in `docker-compose.yml`, just with a different entrypoint argument.
+- **Frontend** (`frontend/Dockerfile`): builds the Vite app, then serves it from a `caddy:2-alpine` final stage using `infra/Caddyfile` — see "Reverse Proxy and HTTPS" above.
 
-WORKDIR /app
+### Transcription sidecar (illustrative only — not yet built)
 
-RUN pip install uv
-
-COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
-
-COPY src/ ./src/
-
-CMD ["uv", "run", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-### Frontend
-
-```dockerfile
-FROM node:20-alpine AS builder
-WORKDIR /app
-COPY package.json yarn.lock ./
-RUN yarn install --frozen-lockfile
-COPY . .
-RUN yarn build
-
-FROM nginx:alpine
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 3000
-```
-
-### Transcription sidecar
+`transcription-service/` exists as a placeholder directory but is currently empty. No remote transcription sidecar has actually been implemented. The shape below is what a service satisfying `RemoteTranscriptionService`'s HTTP contract would need to look like — a starting point if you build one, not a description of something that exists today.
 
 ```dockerfile
 FROM python:3.12-slim

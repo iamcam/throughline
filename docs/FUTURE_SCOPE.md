@@ -43,9 +43,7 @@
 
 ### 1.3 Query Rewriting
 
-Shipped in Phase 15. See ARCHITECTURE.md sections 3.3 and 3.10, and IMPLEMENTATION_PLAN.md Phase 15.
-
-`QueryRewriter` (`src/query/query_rewriter.py`) runs on every chat turn — not reactively after a low-similarity search, per the design discussion at handoff — but is prompted to pass through messages that are already self-contained, so most turns are a no-op beyond the extra LLM round trip. The rewritten text is substituted into the tool-calling LLM's prompt for round 0 only, transiently — `session.messages` always retains the user's literal original wording, so conversation history is never altered and future turns' rewrite context is never built on a prior rewrite's mistake. Original and rewritten queries are both logged as `chat.original_query`/`chat.rewritten_query` attributes on the existing `chat` span, making before/after retrieval quality directly comparable in Phoenix. Never blocks a chat turn on failure: a dedicated, configurable timeout (separate from the main `LLM_REQUEST_TIMEOUT_SECONDS`) and defensive JSON parsing both fall back to the original message rather than raising.
+Shipped in Phase 15. See ARCHITECTURE.md sections 3.3 and 3.6, and `docs/reference/phases/phase-15-query-rewriting.md`.
 
 ---
 
@@ -67,15 +65,13 @@ Shipped in Phase 15. See ARCHITECTURE.md sections 3.3 and 3.10, and IMPLEMENTATI
 
 ### 1.5 Speaker Diarization + Full Speaker Identity
 
-Shipped in Phase 13. See ARCHITECTURE.md sections 3.3, 3.6a, 3.7, 3.8 and IMPLEMENTATION_PLAN.md Phase 13.
-
-Local-only (Senko, MLX/Metal/CUDA/CPU auto-detected) — no remote diarization backend was built. Pyannote was evaluated and deliberately excluded entirely, not just deferred: Senko covers the same CUDA/GPU use case pyannote would have, without the `HF_TOKEN` requirement or the CPU slowness that originally motivated a remote path. See 2.2 below for the follow-up items that came out of this phase.
+Shipped in Phase 13. See ARCHITECTURE.md sections 3.3–3.5 and `docs/reference/phases/phase-13-speaker-diarization.md`. See 2.8 below for the follow-up items that came out of this phase.
 
 ---
 
 ### 1.6 Transcription Service Refactor
 
-Superseded by Phase 13. The observability goal this item wanted (per-stage OTel timing instead of one opaque `transcription` span covering Whisper+Pyannote combined) was achieved differently than planned — by making diarization a fully separate `DiarizationService`/module with its own span, rather than splitting `_transcribe_sync` into two `run_in_executor` calls within the same service. See ARCHITECTURE.md section 3.12.
+Superseded by Phase 13. The observability goal this item wanted (per-stage OTel timing instead of one opaque `transcription` span covering Whisper+Pyannote combined) was achieved differently than planned — by making diarization a fully separate `DiarizationService`/module with its own span, rather than splitting `_transcribe_sync` into two `run_in_executor` calls within the same service. See ARCHITECTURE.md section 3.8.
 
 ---
 
@@ -125,7 +121,7 @@ Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
 
 ### 1.10 Audio Clip Playback for Speaker Verification
 
-Shipped in Phase 13, alongside labeled speaker names in the transcript view (`TranscriptViewer`'s `display_name` rendering, previously scaffolded but commented out). Implementation differs from the originally planned `#t=` URI fragment approach: `SpeakerRow` now controls the single shared `<audio>` element already present on `EpisodeDetailPage` via a callback ref, with play/pause toggle state tracked per speaker (native `pause`/`ended`/`seeked` event listeners distinguish user-driven interaction from the sample button's own programmatic seeks). This was the better fit once a single shared player needed multiple, mutually-exclusive-feeling seek targets — `#t=` fragments work well for the one-shot citation-click case in `CitationList` but don't naturally support toggling between several named seek points on the same element.
+Shipped in Phase 13. See `docs/reference/phases/phase-13-speaker-diarization.md` (section 13.9, frontend speaker verification UX).
 
 ---
 
@@ -176,7 +172,7 @@ Shipped in Phase 13, alongside labeled speaker names in the transcript view (`Tr
 
 **Implementation path:**
 - Feed `Feed.title`/`Feed.description` and `Episode.title`/`Episode.description` into `SpeakerResolver`'s prompt as additional context, alongside the labeled transcript window. Podcast show notes and episode descriptions often contain a guest's full, correctly-spelled name even when the transcript itself only has a phonetic Whisper transcription of it spoken aloud — this is expected to help spelling accuracy specifically, more than disambiguation.
-- Consider a longer or smarter context window than the current time-bounded `window_ms`/`padding_ms` approach (ARCHITECTURE.md 3.7's "known limit") for episodes where the identifying information appears outside the current window — e.g. a guest named only in the outro, not the intro.
+- Consider a longer or smarter context window than the current time-bounded `window_ms`/`padding_ms` approach (see docs/reference/architecture/speaker-identity.md's "known limit") for episodes where the identifying information appears outside the current window — e.g. a guest named only in the outro, not the intro.
 - Possible second pass: if initial inference confidence is "low", retry with a wider window or additional context before giving up and returning `None`.
 
 **Effort:** Half a day for the description-context addition (straightforward prompt/data plumbing); the context-window strategy work is more open-ended and worth scoping separately once the cheap win is measured.
@@ -185,9 +181,7 @@ Shipped in Phase 13, alongside labeled speaker names in the transcript view (`Tr
 
 ### 1.14 Speaker-Labeled Retrieval Context
 
-Shipped in Phase 14. See ARCHITECTURE.md sections 3.3 and 3.10, and IMPLEMENTATION_PLAN.md Phase 14.
-
-Both pieces landed. Inline labeling: `ToolDispatcher._label_for_llm()` prefixes the LLM-facing `text`/`parent_text` of each `search_knowledge_base` result with the speaker's display name (`SPEAKER_NAME: "..."`, matching the format already used by the transcript view and `SpeakerResolver`'s own prompts) before it becomes tool-result content; `session.citations` keeps the original unlabeled text. Filter verification: `speaker_name` now resolves to every matching `(episode_id, speaker_id)` pair in scope (`SearchFilters.speaker_pairs`), not just the first — `speaker_id` is episode-scoped, so a name can legitimately match a different diarized speaker in each episode it appears in.
+Shipped in Phase 14. See ARCHITECTURE.md sections 3.3 and 3.6, and `docs/reference/phases/phase-14-speaker-labeled-retrieval.md`.
 
 Fuzzy/partial name matching was considered during this work and deliberately deferred — see 2.10.
 
@@ -198,7 +192,7 @@ Fuzzy/partial name matching was considered during this work and deliberately def
 
 ### 2.1 Decoupled Worker Queue
 
-Scheduled — see IMPLEMENTATION_PLAN.md Phase 12 and ARCHITECTURE.md section 3.5.
+Scheduled — see IMPLEMENTATION_PLAN.md Phase 12 and ARCHITECTURE.md section 3.4.
 
 ### 2.1a Subprocess-Level Job Cancellation
 
@@ -224,7 +218,7 @@ Scheduled — see IMPLEMENTATION_PLAN.md Phase 12 and ARCHITECTURE.md section 3.
 **Implementation path:**
 - Add `queued_at` / `finished_at` timestamp columns to `Episode` (small Alembic migration; existing rows get `NULL`)
 - `PipelineStatusService` writes `queued_at` on the `QUEUED` transition, `finished_at` on `READY`/`ERROR`
-- New read endpoint: episodes grouped by `pipeline_status`, ordered by `queued_at`/`finished_at` — a plain Postgres query, no queue involvement at all (`IngestionQueue` deliberately doesn't expose queue-position/ordering — see ARCHITECTURE.md 3.5)
+- New read endpoint: episodes grouped by `pipeline_status`, ordered by `queued_at`/`finished_at` — a plain Postgres query, no queue involvement at all (`IngestionQueue` deliberately doesn't expose queue-position/ordering — see ARCHITECTURE.md 3.4)
 - Frontend: new grouped list view, likely a tab or section on the Episodes page
 
 **Effort:** 1 weekend
@@ -316,19 +310,20 @@ Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
 
 ---
 
-### 2.7 Episode Transcript Delete
-Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
+### 2.7 — merged into 1.8
+
+Duplicate entry removed — this was the same shipped feature (Episode Transcript Delete) as 1.8 above. Number kept as a placeholder so 2.8/2.9/2.10 below don't need renumbering.
 
 
 ---
 
 ### 2.8 Speaker Diarization
 
-Follow-up items from Phase 13 (see IMPLEMENTATION_PLAN.md Phase 13 and ARCHITECTURE.md sections 3.3, 3.6a–3.8). Parent item 1.5 above is shipped; these are what's left.
+Follow-up items from Phase 13 (see IMPLEMENTATION_PLAN.md Phase 13 and ARCHITECTURE.md sections 3.3–3.5). Parent item 1.5 above is shipped; these are what's left.
 
 ### 2.8a RemoteTranscriptionService Incompatible with Diarization
 
-`RemoteTranscriptionService`'s current OpenAI-compatible `/audio/transcriptions` target returns no timestamps — every segment gets placeholder `start_ms=0, end_ms=0`. Alignment (3.6a) computes zero overlap for every segment against every diarization turn in this case, so every segment silently stays `UNKNOWN`. Not a bug introduced by Phase 13 — a pre-existing gap in `remote.py` that diarization work made newly relevant. Resolved properly by 1.9's remote-provider work (a provider returning real timestamps, or one that returns pre-labeled segments and bypasses diarization entirely).
+`RemoteTranscriptionService`'s current OpenAI-compatible `/audio/transcriptions` target returns no timestamps — every segment gets placeholder `start_ms=0, end_ms=0`. Alignment (see docs/reference/architecture/ingestion-pipeline.md) computes zero overlap for every segment against every diarization turn in this case, so every segment silently stays `UNKNOWN`. Not a bug introduced by Phase 13 — a pre-existing gap in `remote.py` that diarization work made newly relevant. Resolved properly by 1.9's remote-provider work (a provider returning real timestamps, or one that returns pre-labeled segments and bypasses diarization entirely).
 
 ### 2.8b Word-Level Alignment (Considered, Rejected for Now)
 
@@ -362,9 +357,7 @@ Deprioritized below 1.13 (name resolution quality) — see 1.13's rationale for 
 
 ### 2.9 Chunker: Speaker Misattribution on Short-Segment Merge
 
-Shipped in Phase 14. See IMPLEMENTATION_PLAN.md Phase 14.
-
-`_merge_short_segments` now only merges a short `TopicSegment` into a predecessor sharing its `speaker_id`; a short segment from a different speaker merges forward into a same-speaker successor instead, or stands alone under `min_tokens` (logged) rather than silently absorbing another speaker's words into the wrong chunk. The general cleanup noted below also shipped alongside the fix: `_block_embedding_indices`, `_blocks_to_topic_segment`, the duplicate broken `_average_embeddings`, the unused `blocks` parameter, and `_group_by_speaker`/`SpeakerBlock` were all removed as dead code.
+Shipped in Phase 14. See `docs/reference/phases/phase-14-speaker-labeled-retrieval.md` (section 14.1).
 
 ---
 

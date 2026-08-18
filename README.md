@@ -20,13 +20,13 @@ The application is built with local-first operation in mind, but expandable to u
 * SSE connections keep the episode frontend state consistent with pipeline progress.
 * Tracing and telemetry data are available through any OpenTelemetry OTEL/HTTP connector.
 
-For a deeper look at the decisions made along the way, see `ARCHITECTURE.md`, `IMPLEMENTATION_PLAN.md`, `FUTURE_SCOPE.md`, and `OPERATIONS.md`.
+For a deeper look at the decisions made along the way, see `docs/ARCHITECTURE.md`, `docs/IMPLEMENTATION_PLAN.md`, `docs/FUTURE_SCOPE.md`, and `docs/OPERATIONS.md`.
 
 ---
 
 ## Pipeline
 
-The ingestion pipeline and retrieval flow are fairly straightforward from a high level view. See the backend and frontend README docs as well as the project steering docs such as ARCHITECTURE.md for more details.
+The ingestion pipeline and retrieval flow are fairly straightforward from a high level view. See the backend and frontend README docs as well as the project steering docs such as `docs/ARCHITECTURE.md` for more details.
 
 ```mermaid
 flowchart LR
