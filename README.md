@@ -143,7 +143,8 @@ LLM_BASE_URL=http://host.docker.internal:11434/v1
 EMBEDDING_BASE_URL=http://host.docker.internal:11434/v1
 ```
 
-> **Transciption in Docker:** The default in-process Whisper works without any additional services. For a separate transcription service running on your host, use `http://host.docker.internal:8000` as the `TRANSCRIPTION_SERVICE_URL`.
+> **Transciption and Diarization in Docker:** The default in-process Whisper works without any additional services. For a separate transcription service running on your host, use `http://host.docker.internal:8000` as the `TRANSCRIPTION_SERVICE_URL`. Diarization will be very slow on Apple hardware, as there's no access to the GPU, thus falling back to CPU computations. It's advisable to run the worker directly on the machine.
+
 
 ---
 

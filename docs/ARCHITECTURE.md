@@ -29,7 +29,7 @@ The primary interface is a freeform chat that uses tool-calling to decide when r
 - YouTube or non-RSS podcast sources
 - Graph RAG (deferred upgrade path)
 - Persistent conversation history (ephemeral sessions only in v1)
-- Automated feed polling (manual ingestion trigger)
+- Automated ingestion (manual trigger only — feed *refresh* is automatic as of Phase 16, ingestion is not)
 - Mid-conversation scope changes (scope set once at session creation; V2 work — see Future Scope)
 
 ---
@@ -601,7 +601,7 @@ uv run pytest --cov=src --cov-report=term-missing
 | Persistent conversations | Implement `DBSessionStore` satisfying `SessionStore` Protocol; swap in `dependencies.py`                                                             |
 | Subprocess-level cancel  | Kill the OS-level Whisper subprocess on `cancel()`, not just the asyncio task — requires tracking PID across the `ProcessPoolExecutor` boundary        |
 | Queue overview UI        | `queued_at`/`finished_at` columns on `Episode`; grouped-by-status read endpoint — pure Postgres, no `IngestionQueue` involvement                        |
-| Automatic feed polling   | APScheduler; calls existing `refresh_feed` + `queue.enqueue()`                                                                                       |
+| Automatic feed polling   | Shipped in Phase 16 — `poll_all_feeds` (`src/ingestion/feed_poller.py`) calls existing `refresh_feed` per feed, no queue/ingestion involvement; invoked via `scripts/feed_polling.py`, chained before the dev server and inside `entrypoint.sh` on container start, and via host cron (`docker compose run --rm --no-deps`) on deployed instances |
 | Alternative vector DBs   | Implement `VectorStore` Protocol for Qdrant/Pinecone; swap in `dependencies.py`; ~1 day                                                              |
 | Non-OpenAI LLM SDK       | Implement `LLMClient` Protocol; swap in `dependencies.py`; no business logic changes                                                                 |
 | Chat response streaming  | `LLMClient.stream()` async generator; chat endpoint returns `EventSourceResponse`; applies to final synthesis only — tool rounds still block         |

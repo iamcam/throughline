@@ -247,18 +247,7 @@ Currently torch/torchaudio are pinned unconditionally to PyTorch's CPU-only inde
 
 ### 2.2 Automatic Feed Polling
 
-**What it is:** Background scheduler checks subscribed feeds on a configurable interval and automatically ingests new episodes.
-
-**Note:** Works naturally alongside the decoupled worker (2.1) — the scheduler enqueues jobs into Redis, the worker processes them. APScheduler can run in the API process or as a separate container.
-
-**Implementation path:**
-- Add APScheduler or use streaQ's built-in cron support
-- Configurable poll interval per feed
-- Notification in frontend when new episode is ready
-- Requires thinking about concurrency limits during batch polling
-
-**Effort:** 1 weekend
-**Note:** Mostly infrastructure work, low AI novelty. Good for product completeness. Requires the worker queue (2.1) to already be in place.
+Shipped in Phase 16. See IMPLEMENTATION_PLAN.md and `docs/reference/phases/phase-16-feed-polling.md`.
 
 ---
 
