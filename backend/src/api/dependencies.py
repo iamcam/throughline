@@ -7,7 +7,7 @@ from src.ingestion.chunker import Chunker
 from src.ingestion.embedder import Embedder
 from src.ingestion.queue import IngestionQueue
 from src.ingestion.speaker_store import SpeakerStore
-from src.llm.base import LLMClient
+from src.llm.base import EmbeddingClient, LLMClient
 from src.query.engine import QueryEngine
 from src.query.prompt_builder import PromptBuilder
 from src.query.query_rewriter import QueryRewriter
@@ -25,23 +25,6 @@ def get_session_store(request: Request) -> SessionStore:
     return request.app.state.session_store
 
 
-# ~~~~~~ Query ~~~~~~
-
-def get_retriever() -> Retriever:
-    return Retriever(
-        embedding_client=get_embedding_client(),
-        vector_store=get_vector_store(),
-        hydrator=ResultHydrator(),
-    )
-
-
-# ~~~~~~ Queue ~~~~~~
-
-
-def get_ingestion_queue(request: Request) -> IngestionQueue:
-    return request.app.state.ingestion_queue
-
-
 # ~~~~~~ Stores ~~~~~~
 
 
@@ -53,13 +36,33 @@ def get_vector_store() -> VectorStore:
     return PgvectorStore()
 
 
+# ~~~~~~ Query ~~~~~~
+
+def get_retriever(
+    embedding_client: EmbeddingClient = Depends(get_embedding_client),
+    vector_store: VectorStore = Depends(get_vector_store),
+) -> Retriever:
+    return Retriever(
+        embedding_client=embedding_client,
+        vector_store=vector_store,
+        hydrator=ResultHydrator(),
+    )
+
+
+# ~~~~~~ Queue ~~~~~~
+
+
+def get_ingestion_queue(request: Request) -> IngestionQueue:
+    return request.app.state.ingestion_queue
+
+
 # ~~~~~~ LLM + Embedding ~~~~~~
 
 def get_prompt_builder() -> PromptBuilder:
     return PromptBuilder()
 
-def get_query_rewriter() -> QueryRewriter:
-    return QueryRewriter(llm_client=get_llm_client())
+def get_query_rewriter(llm: LLMClient = Depends(get_llm_client)) -> QueryRewriter:
+    return QueryRewriter(llm_client=llm)
 
 def get_tool_dispatcher(
     retriever: Retriever = Depends(get_retriever),
@@ -96,6 +99,7 @@ def get_chunker() -> Chunker:
     )
 
 
-def get_embedder() -> Embedder:
-    return Embedder(embedding_client=get_embedding_client())
-
+def get_embedder(
+    embedding_client: EmbeddingClient = Depends(get_embedding_client),
+) -> Embedder:
+    return Embedder(embedding_client=embedding_client)

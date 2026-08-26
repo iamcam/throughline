@@ -1,15 +1,20 @@
 # src/api/routers/chat.py
 from __future__ import annotations
+import json
 import uuid
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
 from uuid import UUID
+
 from src.shared.db import get_db
 from src.api.dependencies import get_session_store, get_query_engine
-from src.query.engine import QueryEngine, LLMTimeoutError
+from src.query.engine import QueryEngine, LLMTimeoutError, DoneEvent, StatusEvent, TokenEvent
 from src.query.session_store import SessionStore, ChatSession
+
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -88,6 +93,15 @@ async def send_message(
         raise HTTPException(status_code=504, detail=str(e))
 
 
+@router.post("/{session_id}/message/stream")
+async def send_message_stream(
+    session_id: str,
+    body: ChatMessageRequest,
+    db: AsyncSession = Depends(get_db),
+    engine: QueryEngine = Depends(get_query_engine),
+) -> EventSourceResponse:
+    return EventSourceResponse(_sse_event_stream(engine, session_id, body.message, db))
+
 @router.get("/{session_id}/history", response_model=SessionHistoryResponse)
 async def get_history(
     session_id: str,
@@ -111,3 +125,39 @@ async def delete_session(
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
     await session_store.delete(session_id)
+
+
+# ~~~~~~ Supporting ~~~~~~
+
+def _error_type(e: Exception) -> str:
+    if isinstance(e, ValueError):
+        return "session_not_found"
+    if isinstance(e, LLMTimeoutError):
+        return "timeout"
+    return "internal_error"
+
+
+async def _sse_event_stream(
+    engine: QueryEngine,
+    session_id: str,
+    message: str,
+    db: AsyncSession,
+):
+    try:
+        async for event in engine.chat_stream(session_id=session_id, user_message=message, db=db):
+            if isinstance(event, StatusEvent):
+                yield {"event": "status", "data": "{}"}
+            elif isinstance(event, TokenEvent):
+                yield {"event": "token", "data": json.dumps({"delta": event.delta})}
+            elif isinstance(event, DoneEvent):
+                yield {
+                    "event": "done",
+                    "data": json.dumps({"citations": event.citations, "session_id": event.session_id}),
+                }
+    except Exception as e:
+        logger.warning(f"Error during chat stream (session={session_id}): {type(e).__name__}: {e}")
+        yield {
+            "event": "error",
+            "data": json.dumps({"detail": str(e), "error_type": _error_type(e)}),
+        }
+

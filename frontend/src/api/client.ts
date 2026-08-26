@@ -97,6 +97,13 @@ export interface ChatMessageResponse {
   citations: CitationResult[];
 }
 
+export interface ChatStreamHandlers {
+  onToken: (delta: string) => void;
+  onDone: (citations: CitationResult[], sessionId: string) => void;
+  onError: (detail: string, errorType: string) => void;
+}
+
+
 // -- Feeds ---------------------------------------------------------------------
 
 export const addFeed = (rss_url: string) =>
@@ -175,7 +182,43 @@ export const sendChatMessage = (sessionId: string, message: string) =>
 export const deleteChatSession = (sessionId: string) =>
   api.delete(`/chat/${sessionId}`);
 
-export default api;
+export async function streamChatMessage(
+  sessionId: string,
+  message: string,
+  handlers: ChatStreamHandlers,
+  signal?: AbortSignal
+): Promise<void> {
+  const baseURL = import.meta.env.VITE_API_URL ?? "";
+  const response = await fetch(
+    `${baseURL}/api/v1/chat/${sessionId}/message/stream`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+      signal,
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Stream request failed: ${response.status}`);
+  }
+
+  for await (const { event, data } of parseSSEStream(response)) {
+    if (event === "token") {
+      handlers.onToken((JSON.parse(data) as { delta: string }).delta);
+    } else if (event === "done") {
+      const parsed = JSON.parse(data) as {
+        citations: CitationResult[];
+        session_id: string;
+      };
+      handlers.onDone(parsed.citations, parsed.session_id);
+    } else if (event === "error") {
+      const parsed = JSON.parse(data) as { detail: string; error_type: string };
+      handlers.onError(parsed.detail, parsed.error_type);
+    }
+    // 'status' events intentionally produce no callback
+  }
+}
 
 
 // -- Error helpers -------------------------------------------------------------
@@ -188,3 +231,47 @@ export function isError404(error: unknown): boolean {
     (error as { response?: { status?: number } }).response?.status === 404
   )
 }
+
+// -- Additions ------------------------------------------------------------------
+
+// Generic: turns a fetch Response's streaming body into SSE (event, data) pairs.
+// Knows nothing about chat -- reusable for any future POST-based SSE endpoint.
+async function* parseSSEStream(response: Response): AsyncGenerator<{ event: string; data: string }> {
+  if (!response.body) {
+    throw new Error('Response has no body to stream')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let eventType: string | null = null
+  let dataLines: string[] = []
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? '' // last (possibly incomplete) line stays buffered
+
+    for (const rawLine of lines) {
+      const line = rawLine.replace(/\r$/, '')
+      if (line.startsWith('event:')) {
+        eventType = line.slice('event:'.length).trim()
+      } else if (line.startsWith('data:')) {
+        dataLines.push(line.slice('data:'.length).trim())
+      } else if (line === '') {
+        if (eventType !== null) {
+          yield { event: eventType, data: dataLines.join('\n') }
+        }
+        eventType = null
+        dataLines = []
+      }
+    }
+  }
+}
+
+// -----------------------------------------
+
+export default api;

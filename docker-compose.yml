@@ -1,4 +1,6 @@
 # docker-compose.yml
+name: throughline
+
 services:
   db:
     image: pgvector/pgvector:pg16

@@ -3,7 +3,7 @@
 > Version: 1.0
 > Status: In implementation
 > Author: Cameron Perry
-> Last Updated: 2026-07-04
+> Last Updated: 2026-08-26
 
 ---
 
@@ -177,7 +177,7 @@ Full code, dataclasses, and design notes: `docs/reference/architecture/protocols
 
 | Protocol                                             | Key method(s)                                                                           | Implementations                                                     |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `LLMClient` (`src/llm/base.py`)                      | `complete(messages, tools=None, response_format=None, temperature=0.7) -> LLMResponse`  | `OpenAICompatibleLLMClient`, `MockLLMClient`                        |
+| `LLMClient` (`src/llm/base.py`)                      | `complete(messages, tools=None, response_format=None, temperature=0.7) -> LLMResponse`; `stream(messages, tools=None, temperature=0.7) -> AsyncIterator[StreamChunk]` | `OpenAICompatibleLLMClient`, `MockLLMClient`                        |
 | `EmbeddingClient` (`src/llm/base.py`)                | `embed(texts: list[str]) -> list[list[float]]`                                          | `OpenAICompatibleEmbeddingClient`, `MockEmbeddingClient`            |
 | `TranscriptionService` (`src/transcription/base.py`) | `transcribe(audio_path, language="en") -> TranscriptResult`                             | `LocalTranscriptionService` (Whisper), `RemoteTranscriptionService` |
 | `DiarizationService` (`src/diarization/base.py`)     | `diarize(audio_path) -> DiarizationResult`                                              | `LocalDiarizationService` (Senko)                                   |
@@ -211,7 +211,9 @@ Full prompt structure, `SpeakerStore` post-inference logic, speaker-state table,
 
 Pipeline status streams over SSE (`GET /episodes/{id}/status/stream`), closing on `READY` or `ERROR`, with a polling fallback.
 
-The query engine (`src/query/engine.py`) is a thin orchestrator (`QueryEngine.chat()`) composing `QueryRewriter` (pre-retrieval conversational query rewriting), `PromptBuilder` (pure, no I/O), `ToolDispatcher` (routes tool calls, resolves speaker names, collects citations), and `ResultHydrator` (resolves `speaker_id` → `display_name`, batched, never N+1). It runs a bounded tool-calling loop (`max_tool_rounds`, default 3) against `LLMClient`, with a `for/else` forced-synthesis fallback if rounds are exhausted, and a per-call timeout (`LLM_REQUEST_TIMEOUT_SECONDS`) that fails safe without saving partial session state.
+The query engine (`src/query/engine.py`) is a thin orchestrator composing `QueryRewriter` (pre-retrieval conversational query rewriting), `PromptBuilder` (pure, no I/O), `ToolDispatcher` (routes tool calls, resolves speaker names, collects citations), and `ResultHydrator` (resolves `speaker_id` → `display_name`, batched, never N+1). It runs a bounded tool-calling loop (`max_tool_rounds`, default 3) against `LLMClient`, with a `for/else` forced-synthesis fallback if rounds are exhausted, and a per-call timeout (`LLM_REQUEST_TIMEOUT_SECONDS`) that fails safe without saving partial session state.
+
+**Chat response streaming (Phase 17):** `QueryEngine.chat_stream()` drives the same tool-calling loop but consumes each round via `LLMClient.stream()` instead of `complete()`, forwarding content tokens live as they arrive rather than waiting for the full response. `StreamAccumulator` (`src/query/stream_accumulator.py`) reconstructs each round's `StreamChunk` sequence into either live token strings or a terminal `LLMResponse`, and `with_heartbeat()` (`src/query/async_utils.py`) layers a periodic wait-time signal on top without abandoning the in-flight LLM call. `QueryEngine.chat()` (non-streaming) is now a thin wrapper that drains `chat_stream()` — one code path serves both the blocking `POST /message` endpoint and the streaming `POST /message/stream` endpoint. SSE events: `status` (heartbeat, no payload — tool-round activity is deliberately not broken out per-tool, to avoid coupling the frontend to the backend's tool set), `token` (`{"delta": str}`), `done` (`{"citations": [...], "session_id": str}`), `error` (`{"detail": str, "error_type": str}`, where `error_type` is a stable category — `session_not_found` | `timeout` | `internal_error` — not a raw Python exception name). Full design notes, including the thinking-model whitespace-content edge case discovered against Qwen 3.5: `docs/reference/phases/phase-17-chat-streaming.md`.
 
 | Tool                    | When used                                            | Key parameters                                            |
 | ----------------------- | ---------------------------------------------------- | --------------------------------------------------------- |
@@ -342,6 +344,7 @@ PUT    /api/v1/episodes/{episode_id}/speakers       Body: [{speaker_id, display_
 ```
 POST   /api/v1/chat/sessions                  Body: { scope_feed_ids?: UUID[], scope_episode_ids?: UUID[] }
 POST   /api/v1/chat/{session_id}/message      Body: { message }
+POST   /api/v1/chat/{session_id}/message/stream  Body: { message }   (SSE — status/token/done/error events)
 GET    /api/v1/chat/{session_id}/history
 DELETE /api/v1/chat/{session_id}
 ```
@@ -412,8 +415,8 @@ podcast-knowledge-engine/
 │   │   │   │   └── auth.py
 │   │   │   └── dependencies.py      # ALL dependency wiring lives here
 │   │   ├── llm/
-│   │   │   ├── base.py              # LLMClient + EmbeddingClient Protocols, ToolCall, LLMResponse
-│   │   │   └── client.py            # OpenAICompatibleLLMClient + OpenAICompatibleEmbeddingClient
+│   │   │   ├── base.py              # LLMClient + EmbeddingClient Protocols, ToolCall, LLMResponse, StreamChunk, ToolCallDelta
+│   │   │   └── client.py            # OpenAICompatibleLLMClient (complete + stream) + OpenAICompatibleEmbeddingClient
 │   │   ├── ingestion/
 │   │   │   ├── pipeline.py          # Thin orchestrator only
 │   │   │   ├── pipeline_runner.py   # Worker-side: builds PipelineServices, runs ingest_episode
@@ -437,7 +440,9 @@ podcast-knowledge-engine/
 │   │   ├── storage/
 │   │   │   └── vector_store.py      # VectorStore Protocol + PgvectorStore; SearchFilters with feed_ids
 │   │   ├── query/
-│   │   │   ├── engine.py            # Thin orchestrator; tool-calling loop; for/else synthesis
+│   │   │   ├── engine.py            # Thin orchestrator; chat_stream() drives the loop, chat() wraps it; for/else synthesis
+│   │   │   ├── stream_accumulator.py # StreamAccumulator — reconstructs StreamChunk sequences into tokens + LLMResponse
+│   │   │   ├── async_utils.py       # with_heartbeat() — races upstream call against a periodic timeout
 │   │   │   ├── prompt_builder.py    # Pure logic, no I/O; scope-aware system prompt
 │   │   │   ├── query_rewriter.py    # Pre-retrieval conversational query rewriting; passthrough by default
 │   │   │   ├── tool_dispatcher.py   # Routes tool calls; speaker resolution; citation collection
@@ -460,12 +465,14 @@ podcast-knowledge-engine/
 │   │   │   └── sample_transcript.json
 │   │   ├── integration
 │   │   │   ├── conftest.py
+│   │   │   ├── test_chat_streaming.py
 │   │   │   ├── test_feeds.py
 │   │   │   ├── test_ingestion_pipeline.py
 │   │   │   ├── test_queue.py
 │   │   │   └── test_speakers.py
 │   │   └── unit
 │   │       ├── test_alignment.py
+│   │       ├── test_async_utils.py
 │   │       ├── test_auth_middleware.py
 │   │       ├── test_background_queue.py
 │   │       ├── test_chunker.py
@@ -478,6 +485,7 @@ podcast-knowledge-engine/
 │   │       ├── test_rss_parser.py
 │   │       ├── test_schemas.py
 │   │       ├── test_speaker_resolver.py
+│   │       ├── test_stream_accumulator.py
 │   │       └── test_tool_dispatcher.py
 │   ├── pyproject.toml
 │   └── .env.example
@@ -559,12 +567,14 @@ Summary: `db` (Postgres + pgvector) and `redis` (streaQ job queue backend) are t
 - `PromptBuilder` — message construction, scope application; no I/O
 - `ResultHydrator` — display name resolution, timestamp formatting, audio_url batching; mock DB
 - `ToolDispatcher` — correct tool routing, filter application, citation population, speaker resolution
-- `QueryEngine` — tool-calling loop, round limits, message ordering, citation passthrough
+- `QueryEngine` — tool-calling loop, round limits, message ordering, citation passthrough; `chat_stream()` token/status event shape, mixed-stream error propagation, timeout handling
+- `StreamAccumulator` — content-only round, tool-call round (single + parallel), mixed-round error case, whitespace-only content deltas (thinking-model artifact), empty/finish_reason edge cases
+- `with_heartbeat` (`src/query/async_utils.py`) — fast source passes through untouched, slow source ticks heartbeats without abandoning the pending call, cleanup on `aclose()`
 - `SessionStore` — save/retrieve/delete, key correctness
 - Alignment (`tests/unit/test_alignment.py`) — overlap matching, tie-breaking, no-overlap fallback, non-mutation
 
 **Mock helpers** (`tests/conftest.py`) — plain classes, direct import in test files:
-- `MockLLMClient` — supports `response_content`, `tool_calls`, and `responses: list[LLMResponse]` sequence
+- `MockLLMClient` — supports `response_content`, `tool_calls`, `responses: list[LLMResponse]` sequence, and `stream_chunks: list[list[StreamChunk]]` for the streaming path
 - `MockVectorStore` — configurable results, records last call args
 - `MockHydrator` — configurable hydrated results
 - `MockEmbeddingClient` — configurable vector output
@@ -575,6 +585,7 @@ Summary: `db` (Postgres + pgvector) and `redis` (streaQ job queue backend) are t
 - Chat session: tool called for knowledge queries, not for summarization
 - SSE stream: status transitions delivered correctly
 - `PipelineStatusService`: writes correct status at each stage
+- `POST /chat/{session_id}/message/stream`: SSE `token`/`done` events delivered correctly with concatenated content and citations (`tests/integration/test_chat_streaming.py`)
 
 **Contract tests** — verify all Protocol implementations:
 - `LocalTranscriptionService` and `RemoteTranscriptionService` satisfy `TranscriptionService`
@@ -604,7 +615,7 @@ uv run pytest --cov=src --cov-report=term-missing
 | Automatic feed polling   | Shipped in Phase 16 — `poll_all_feeds` (`src/ingestion/feed_poller.py`) calls existing `refresh_feed` per feed, no queue/ingestion involvement; invoked via `scripts/feed_polling.py`, chained before the dev server and inside `entrypoint.sh` on container start, and via host cron (`docker compose run --rm --no-deps`) on deployed instances |
 | Alternative vector DBs   | Implement `VectorStore` Protocol for Qdrant/Pinecone; swap in `dependencies.py`; ~1 day                                                              |
 | Non-OpenAI LLM SDK       | Implement `LLMClient` Protocol; swap in `dependencies.py`; no business logic changes                                                                 |
-| Chat response streaming  | `LLMClient.stream()` async generator; chat endpoint returns `EventSourceResponse`; applies to final synthesis only — tool rounds still block         |
+| Chat response streaming  | Shipped in Phase 17 — `LLMClient.stream()`, `StreamAccumulator`, `QueryEngine.chat_stream()`; `POST /message/stream` returns `EventSourceResponse` with `status`/`token`/`done`/`error` events; `POST /message` (non-streaming) drains the same generator |
 | V2 chat scope filtering  | `GET /chat/{session_id}` returns full session object; `PATCH /chat/{session_id}` updates scope mid-conversation; frontend scope selector calls resetSession on change |
 
 ---

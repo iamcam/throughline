@@ -77,17 +77,7 @@ Superseded by Phase 13. The observability goal this item wanted (per-stage OTel 
 
 ### 1.7 Chat Response Streaming
 
-**What it is:** Stream LLM token generation via SSE rather than waiting for the full response before returning.
-
-**Why it matters:** With local models, multi-round tool-calling queries can take 30+ seconds to respond. Streaming tokens as they generate gives the user immediate feedback that something is happening. Currently observed in practice — slow local models make the app feel unresponsive on complex queries.
-
-**Implementation path:**
-- `LLMClient` gets a companion `stream()` method returning an async generator of token chunks
-- Chat endpoint switches to `EventSourceResponse` for the final synthesis response
-- Tool call rounds still block (must complete before the next round) — streaming applies only to the final text generation
-- Frontend renders tokens incrementally as they arrive
-
-**Effort:** 1 weekend
+Shipped in Phase 17. See ARCHITECTURE.md section 3.6 and `docs/reference/phases/phase-17-chat-streaming.md`.
 
 ---
 
@@ -112,7 +102,7 @@ Shipped in Phase 11. See ARCHITECTURE.md and IMPLEMENTATION_PLAN.md Phase 11.
 
 **Candidate providers:**
 - **OpenAI** — works with current `remote.py`; diarization via `gpt-4o-transcribe`
-- **Deepgram / AssemblyAI** — hosted, competitive pricing, strong diarization; not OpenAI-compatible, needs provider-specific client
+- **Deepgram / AssemblyAI** — hosted, competitive pricing, strong diarization; not OpenAI-compatible, needs provider-specific client. Deepgram's free tier is generous relative to this app's likely usage (single-user, occasional ingestion) — worth validating as the first provider when this item is picked up, ahead of building out support for others.
 - **FunASR** — self-hosted, OpenAI-compatible endpoints for both transcription and diarization ([github.com/modelscope/FunASR](https://github.com/modelscope/FunASR))
 
 **Effort:** 1 weekend per provider
@@ -161,6 +151,8 @@ Shipped in Phase 13. See `docs/reference/phases/phase-13-speaker-diarization.md`
 - Frontend: add `image_url: string | null` to `Episode` type in `client.ts`; display in `EpisodeRow` and `EpisodeDetailPage` with fallback to feed `image_url`
 
 **Effort:** Half a day
+
+**Revisit note (Phase 17 wrap-up):** flagged again as a small, easy addition worth doing soon — moved to the top of "What to Build Next" below.
 
 ---
 
@@ -418,15 +410,14 @@ Shipped in Phase 14. See `docs/reference/phases/phase-14-speaker-labeled-retriev
 
 ## What to Build Next (Recommended Order)
 
-With the worker queue (Phase 12), local speaker diarization (Phase 13), speaker-labeled retrieval (Phase 14), and query rewriting (Phase 15) in place, this is the highest-value sequence for what's left:
+With the worker queue (Phase 12), local speaker diarization (Phase 13), speaker-labeled retrieval (Phase 14), query rewriting (Phase 15), automatic feed polling (Phase 16), and chat response streaming (Phase 17) in place, this is the highest-value sequence for what's left:
 
-1. **Chat response streaming** — 1 weekend, addresses the most noticeable UX gap with local models
+1. **Individual episode artwork (1.12)** — half a day, small and easy, flagged again during Phase 17 wrap-up
 2. **Episode summarization** — 1 weekend, demonstrates a two-level LLM pipeline for handling transcripts that exceed context limits
-3. **Automatic feed polling** — 1 weekend, natural complement to the worker queue
-4. **Queue overview UI (2.1b)** — 1 weekend, visibility into what's queued/running/recently done across all episodes
-5. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
-6. **Temporal reasoning** — unique angle, memorable demo
-7. **Graph RAG** — the "big" upgrade, strongest architectural story
-8. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
+3. **Queue overview UI (2.1b)** — 1 weekend, visibility into what's queued/running/recently done across all episodes
+4. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
+5. **Temporal reasoning** — unique angle, memorable demo
+6. **Graph RAG** — the "big" upgrade, strongest architectural story
+7. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
 
 Graph RAG is deliberately near the end — retrieval failure modes will be better understood after real use, which makes the graph design decisions more grounded rather than speculative.

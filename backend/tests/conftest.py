@@ -1,6 +1,7 @@
-# src/conftest.py
+# tests/conftest.py
+from collections.abc import AsyncIterator
 import uuid
-from src.llm.base import LLMResponse, ToolCall
+from src.llm.base import LLMResponse, StreamChunk, ToolCall
 from src.query.result_hydrator import ChunkResult
 from src.storage.vector_store import RawChunkResult
 
@@ -15,6 +16,11 @@ class MockLLMClient:
     For tool call responses:
         MockLLMClient(tool_calls=[ToolCall(id="tc1", name="search_knowledge_base", arguments={"query": "consciousness"})])
 
+    For streaming, provide the chunk sequence per call:
+        MockLLMClient(stream_chunks=[
+            [StreamChunk(content_delta="Hello "), StreamChunk(content_delta="world", finish_reason="stop")],
+        ])
+
     Inspect last_messages and last_temperature after calling complete()
     to assert on what was sent to the LLM.
     """
@@ -23,6 +29,7 @@ class MockLLMClient:
         response_content: str | None = None,
         tool_calls: list[ToolCall] | None = None,
         responses: list[LLMResponse] | None = None,
+        stream_chunks: list[list[StreamChunk]] | None = None,
     ):
         if responses is not None:
             self._responses = responses
@@ -34,6 +41,12 @@ class MockLLMClient:
         self.last_messages = None
         self.last_tools = None
         self.last_temperature = None
+
+        self._stream_chunks = stream_chunks
+        self._stream_call_count = 0
+        self.last_stream_messages = None
+        self.last_stream_tools = None
+        self.last_stream_temperature = None
 
     async def complete(
         self,
@@ -48,6 +61,23 @@ class MockLLMClient:
         idx = min(self._call_count, len(self._responses) - 1)
         self._call_count += 1
         return self._responses[idx]
+
+    async def stream(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        temperature: float = 0.7,
+    ) -> AsyncIterator[StreamChunk]:
+        if not self._stream_chunks:
+            raise RuntimeError("MockLLMClient.stream() called but no stream_chunks configured")
+
+        self.last_stream_messages = messages
+        self.last_stream_tools = tools
+        self.last_stream_temperature = temperature
+        idx = min(self._stream_call_count, len(self._stream_chunks) - 1)
+        self._stream_call_count += 1
+        for chunk in self._stream_chunks[idx]:
+            yield chunk
 
 class MockEmbeddingClient:
     def __init__(self, vector: list[float] | None = None):

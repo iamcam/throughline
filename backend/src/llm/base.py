@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
@@ -19,6 +20,21 @@ class LLMResponse:
     finish_reason: str = "stop"
 
 
+@dataclass
+class ToolCallDelta:
+    index: int
+    id: str | None = None
+    name: str | None = None
+    arguments_delta: str | None = None
+
+
+@dataclass
+class StreamChunk:
+    content_delta: str | None = None
+    tool_call_deltas: list[ToolCallDelta] = field(default_factory=list)
+    finish_reason: str | None = None
+
+
 @runtime_checkable
 class LLMClient(Protocol):
     async def complete(
@@ -28,6 +44,13 @@ class LLMClient(Protocol):
         response_format: dict | None = None,
         temperature: float = 0.7,
     ) -> LLMResponse: ...
+
+    def stream(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        temperature: float = 0.7,
+    ) -> AsyncIterator[StreamChunk]: ...
 
 
 @runtime_checkable

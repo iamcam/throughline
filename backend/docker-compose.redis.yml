@@ -1,4 +1,6 @@
 # backend/docker-compose.redis.yml
+name: throughline
+
 services:
   redis:
     image: redis:7-alpine

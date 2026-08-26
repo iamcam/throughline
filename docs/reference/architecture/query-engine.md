@@ -89,7 +89,30 @@ class QueryRewriter:
 
     async def rewrite(self, session: ChatSession, user_message: str) -> str: ...
 ```
-Runs once per `chat()` call, before the tool-calling loop starts and before `user_message` is appended to `session.messages` — so its own conversation-history prompt only ever sees prior turns, never the current one. Resolves conversation-dependent queries (pronouns, implicit topic references) into a self-contained phrase; the prompt instructs passthrough (return unchanged) when the message is already self-contained, so this runs unconditionally on every turn rather than reactively after a low-similarity search — deliberate, not a default: the failure mode being fixed is query *formulation*, not corpus coverage, and no similarity-score signal currently reaches `engine.py` to gate on. The rewritten text is substituted into the LLM-facing message list for round 0 only — a transient swap done by constructing a new dict, never a mutation of the dict stored in `session.messages` (which `PromptBuilder.build_messages()` returns by reference, not by copy). `session.messages` therefore always retains the user's literal original wording; the rewrite has no persisted effect and cannot compound across turns. Never raises — a dedicated, constructor-configurable timeout (`QUERY_REWRITE_TIMEOUT_SECONDS`, default 15s, independent of the main `LLM_REQUEST_TIMEOUT_SECONDS`) and defensive JSON parsing both fall back to the original message on any failure, so this optimization can never block a chat turn.
+Runs once per `chat()`/`chat_stream()` call, before the tool-calling loop starts and before `user_message` is appended to `session.messages` — so its own conversation-history prompt only ever sees prior turns, never the current one. Resolves conversation-dependent queries (pronouns, implicit topic references) into a self-contained phrase; the prompt instructs passthrough (return unchanged) when the message is already self-contained, so this runs unconditionally on every turn rather than reactively after a low-similarity search — deliberate, not a default: the failure mode being fixed is query *formulation*, not corpus coverage, and no similarity-score signal currently reaches `engine.py` to gate on. The rewritten text is substituted into the LLM-facing message list for round 0 only — a transient swap done by constructing a new dict, never a mutation of the dict stored in `session.messages` (which `PromptBuilder.build_messages()` returns by reference, not by copy). `session.messages` therefore always retains the user's literal original wording; the rewrite has no persisted effect and cannot compound across turns. Never raises — a dedicated, constructor-configurable timeout (`QUERY_REWRITE_TIMEOUT_SECONDS`, default 15s, independent of the main `LLM_REQUEST_TIMEOUT_SECONDS`) and defensive JSON parsing both fall back to the original message on any failure, so this optimization can never block a chat turn.
+
+**`StreamAccumulator` (`src/query/stream_accumulator.py`, Phase 17)**
+```python
+class MixedStreamResponseError(Exception): ...
+
+class StreamAccumulator:
+    async def accumulate(
+        self, chunks: AsyncIterator[StreamChunk]
+    ) -> AsyncIterator[str | LLMResponse]: ...
+```
+Consumes one round's `StreamChunk` sequence from `LLMClient.stream()`. Yields content deltas live as plain `str` — forwarded to the frontend as they arrive — and reconstructs tool calls from `ToolCallDelta` fragments, joined by `index` (parallel tool calls interleave their argument fragments across chunks; `index` is what keeps them straight). Yields exactly one terminal `LLMResponse` per round, the same type `complete()` returns — the streaming and non-streaming paths converge on one representation of "a round finished."
+
+A round is assumed to be either a content round or a tool-call round, never both — mirroring `LLMResponse.content`'s "None when model is making tool calls" contract. A chunk sequence that violates this (content deltas followed by tool-call deltas, or vice versa) raises `MixedStreamResponseError` — fails the turn defensively rather than retrying (retry would require buffering the whole round, defeating the point of live token forwarding) or silently merging the two. The session is not saved on this path, same precedent as `LLMTimeoutError` below.
+
+**Whitespace-only content deltas do not count as "content happened."** Discovered against a real thinking-model backend (Qwen 3.5 via MLX, in "thinking mode"): the model streams its reasoning separately via a `reasoning_content` delta field (which `OpenAICompatibleLLMClient.stream()` never reads — reasoning text never becomes a `StreamChunk` at all), but then emits a `content` delta of exactly `"\n\n"` as a transition artifact immediately before its `tool_calls` deltas. A naive truthiness check (`if chunk.content_delta:`) treats that as real content and incorrectly trips `MixedStreamResponseError`. `accumulate()` instead gates on `chunk.content_delta.strip()` — a whitespace-only delta is neither yielded as a token nor counted toward "content happened," while genuine internal whitespace inside real content (e.g. a paragraph break within an actual answer) still passes through unchanged, since the *original* unstripped string is what gets yielded once the check passes.
+
+**`with_heartbeat` (`src/query/async_utils.py`, Phase 17)**
+```python
+async def with_heartbeat(
+    source: AsyncIterator[T], interval: float
+) -> AsyncIterator[T | None]: ...
+```
+Races the source iterator's `__anext__()` against `asyncio.wait(timeout=interval)`. On timeout, yields `None` (a heartbeat tick) *without* abandoning the pending `__anext__()` call — the upstream LLM call keeps running in the background across ticks, and the next real item is yielded transparently as soon as it arrives, whenever that is. `interval` is a polling cadence, not a wait duration: a call that finishes in 3 seconds with `interval=1.0` produces two heartbeat ticks then the real item, not a forced 1-second wait. `finally: pending.cancel()` ensures the in-flight task is cleaned up if the consumer stops iterating early (e.g. `aclose()`).
 
 ### Engine orchestration (`src/query/engine.py`)
 
@@ -105,55 +128,21 @@ class QueryEngine:
         max_tool_rounds: int = 3,
     ): ...
 
+    async def chat_stream(
+        self, session_id: str, user_message: str, db: AsyncSession
+    ) -> AsyncIterator[StatusEvent | TokenEvent | DoneEvent]: ...
+
     async def chat(self, session_id: str, user_message: str, db: AsyncSession) -> ChatResponse:
-        session = await self.session_store.get(session_id)
-        if session is None:
-            raise ValueError(f"Session not found: {session_id}")
-
-        # Rewrite before appending -- _format_history should only see turns prior to this one
-        rewritten_query = await self.query_rewriter.rewrite(session, user_message)
-
-        session.messages.append({"role": "user", "content": user_message})
-
-        for round_num in range(self.max_tool_rounds):
-            messages = self.prompt_builder.build_messages(session)
-            if round_num == 0:
-                # New dict, not a mutation -- messages[-1] is the same object as
-                # session.messages[-1]
-                messages[-1] = {**messages[-1], "content": rewritten_query}
-            response = await self.llm_client.complete(messages, tools=TOOLS)
-
-            if not response.tool_calls:
-                break   # LLM has a final answer
-
-            # Assistant tool call message must precede tool result messages
-            session.messages.append({
-                "role": "assistant",
-                "tool_calls": [...]   # serialized with json.dumps, not str()
-            })
-
-            for tc in response.tool_calls:
-                result = await self.tool_dispatcher.dispatch(tc, session, db)
-                session.messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,   # must match assistant tool call id
-                    "content": result,
-                })
-        else:
-            # for/else: loop exhausted without break — max rounds hit
-            # Make one final synthesis call with explicit instruction
-            synthesis_messages = self.prompt_builder.build_messages(session)
-            synthesis_messages.append({
-                "role": "user",
-                "content": "Based on the search results above, please provide your best answer now."
-            })
-            response = await self.llm_client.complete(synthesis_messages)
-
-        final_content = response.content or ""
-        session.messages.append({"role": "assistant", "content": final_content})
-        await self.session_store.save(session)
-        return ChatResponse(message=final_content, session_id=session_id, citations=session.citations)
+        # Thin wrapper (Phase 17): drains chat_stream(), accumulates TokenEvent.delta
+        # into the final message string, captures DoneEvent.citations, and returns
+        # the same ChatResponse shape this method has always returned.
+        # One code path serves both the blocking and streaming endpoints.
+        ...
 ```
+
+**`chat_stream()` is the real orchestrator (Phase 17).** It runs the same session lookup, `QueryRewriter` call, and bounded tool-calling loop `chat()` always has, but each round is consumed via `_stream_round()` — which wraps `with_heartbeat(self._stream_accumulator.accumulate(self._llm.stream(...)), STATUS_HEARTBEAT_SECONDS)` and tracks elapsed time against `LLM_REQUEST_TIMEOUT_SECONDS` itself (since there's no single blocking call left to wrap in `asyncio.wait_for()`). `_stream_round()` yields three kinds of things: `None` (heartbeat tick, from `with_heartbeat`) → `chat_stream()` turns this into a `StatusEvent`; `str` (a content token, from `StreamAccumulator`) → turned into a `TokenEvent(delta=...)`, but only during what turns out to be the final round (tool rounds never produce content tokens in the first place, since a genuine tool-call round has no content deltas to yield — see `StreamAccumulator` above); and the terminal `LLMResponse` for the round, which drives the same tool-call-or-break decision `chat()`'s loop always made. Once the loop ends (via `break` or the `for/else` forced-synthesis fallback), `chat_stream()` yields a final `DoneEvent(citations, session_id)`.
+
+Message ordering, `arguments` serialization, the `for/else` synthesis fallback, and the timeout/session-save interaction below are unchanged from pre-Phase-17 behavior — only the shape of how a round's response is obtained changed 	(`stream()` + `StreamAccumulator` instead of a single `complete()` call).
 
 **Critical message ordering:** The OpenAI API requires that a `tool` message with `tool_call_id: X` is
 always preceded by an `assistant` message that requested `X`. Missing or mismatched IDs produce API errors.
@@ -166,15 +155,24 @@ as invalid JSON.
 `break`. When max rounds are exhausted, a final LLM call without tools forces a text response using whatever
 was retrieved across all rounds.
 
-**Request timeout:** Each `llm_client.complete()` call (both tool-calling rounds and the final synthesis
-call) is wrapped in `asyncio.wait_for(..., timeout=LLM_REQUEST_TIMEOUT_SECONDS)` (60s, module-level constant
-in `engine.py`). A timeout raises `LLMTimeoutError`, caught in `src/api/routers/chat.py` and mapped to
-`504 Gateway Timeout`. The session is never saved when a timeout fires — `SessionStore.save()` only runs
-on the success path at the end of `chat()` — so a timed-out request leaves no partial state and is safe
-to retry. The whole `chat()` body runs inside a custom `"chat"` tracing span (`session.id`,
+**Request timeout:** Each round (both tool-calling rounds and the final synthesis round) is bounded by
+`LLM_REQUEST_TIMEOUT_SECONDS` (60s, module-level constant in `engine.py`). A timeout raises `LLMTimeoutError`,
+caught in `src/api/routers/chat.py` and mapped to `504 Gateway Timeout` on the blocking endpoint, or an SSE
+`error` event with `error_type: "timeout"` on the streaming endpoint. The session is never saved when a timeout
+fires — `SessionStore.save()` only runs on the success path — so a timed-out request leaves no partial state
+and is safe to retry. The whole `chat_stream()` body runs inside a custom `"chat"` tracing span (`session.id`,
 `chat.tool_rounds_used`, `chat.citation_count` on success; `record_exception` + `set_status` on any
 exception) — this is orchestration-level instrumentation, distinct from the automatic per-call spans
-`OpenAIInstrumentor` already provides for each `llm_client.complete()` call.
+`OpenAIInstrumentor` already provides for each `llm_client.stream()`/`complete()` call.
+
+**SSE event vocabulary (Phase 17):** `src/api/routers/chat.py`'s `_sse_event_stream()` translates `chat_stream()`'s
+events into SSE: `status` (`{}` — heartbeat only, no payload; tool-round activity is deliberately not broken out
+per-tool, to avoid coupling the frontend to the backend's tool set — the frontend's existing "Thinking" indicator
+covers this, persisting until the first `token`), `token` (`{"delta": str}`), `done` (`{"citations": [...],
+"session_id": str}`), `error` (`{"detail": str, "error_type": str}`). `error_type` is produced by `_error_type()`,
+a small mapping from exception type to a stable string category (`session_not_found` | `timeout` |
+`internal_error`) — deliberately not the raw Python exception class name, since that would make the frontend's
+error handling an accidental contract on backend implementation details.
 
 **`ChatResponse`:**
 ```python

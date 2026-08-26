@@ -1,6 +1,8 @@
 # src/llm/client.py
+from collections.abc import AsyncIterator
+
 from openai import AsyncOpenAI
-from src.llm.base import LLMResponse, ToolCall
+from src.llm.base import LLMResponse, StreamChunk, ToolCall, ToolCallDelta
 import json
 import logging
 
@@ -59,7 +61,44 @@ class OpenAICompatibleLLMClient:
             finish_reason=response.choices[0].finish_reason
             )
 
+    async def stream(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        temperature: float = 0.7,
+    ) -> AsyncIterator[StreamChunk]:
+        kwargs = dict(
+            model=self._model,
+            messages=messages,
+            temperature=temperature,
+            stream=True,
+        )
+        if tools:
+            kwargs["tools"] = tools
 
+        response_stream = await self._client.chat.completions.create(**kwargs)
+
+        async for chunk in response_stream:
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            delta = choice.delta
+
+            tool_call_deltas = [
+                ToolCallDelta(
+                    index=tc.index,
+                    id=tc.id,
+                    name=tc.function.name if tc.function else None,
+                    arguments_delta=tc.function.arguments if tc.function else None,
+                )
+                for tc in (delta.tool_calls or [])
+            ]
+
+            yield StreamChunk(
+                content_delta=delta.content,
+                tool_call_deltas=tool_call_deltas,
+                finish_reason=choice.finish_reason,
+            )
 
 class OpenAICompatibleEmbeddingClient:
     """

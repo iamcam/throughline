@@ -20,6 +20,19 @@ class LLMResponse:
     finish_reason: str = "stop"
     # TokenUsage deferred to Phase 9 observability
 
+@dataclass
+class ToolCallDelta:
+    index: int
+    id: str | None
+    name: str | None
+    arguments_delta: str | None
+
+@dataclass
+class StreamChunk:
+    content_delta: str | None
+    tool_call_deltas: list[ToolCallDelta] = field(default_factory=list)
+    finish_reason: str | None = None
+
 class LLMClient(Protocol):
     async def complete(
         self,
@@ -28,17 +41,31 @@ class LLMClient(Protocol):
         response_format: dict | None = None,
         temperature: float = 0.7,
     ) -> LLMResponse: ...
+
+    def stream(
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        temperature: float = 0.7,
+    ) -> AsyncIterator[StreamChunk]: ...
 ```
 
-**Current state (post-Phase 6):** `LLMResponse` includes `content: str | None`, `tool_calls: list[ToolCall]`,
+**Current state (post-Phase 17):** `LLMResponse` includes `content: str | None`, `tool_calls: list[ToolCall]`,
 and `finish_reason: str`. `LLMClient.complete()` accepts a `tools` parameter. `TokenUsage` is deferred to Phase 9.
+`LLMClient.stream()` (Phase 17) is declared as a plain `def`, not `async def` — it describes a callable that
+*returns* an async generator, and calling an `async def` generator function does not execute any of its body
+until first iteration, matching this Protocol's usage in `StreamAccumulator.accumulate()`.
 
 `OpenAICompatibleLLMClient` in `src/llm/client.py` parses tool call arguments from JSON strings defensively —
 malformed arguments produce an empty dict with a logged warning rather than raising. All business logic receives
-`LLMClient`. The OpenAI SDK is referenced only in `src/llm/client.py`.
+`LLMClient`. The OpenAI SDK is referenced only in `src/llm/client.py`. `stream()` only reads `delta.content` from
+each chunk — it never reads `delta.reasoning_content` (the field some backends use for "thinking mode" reasoning
+text on models like Qwen 3), so reasoning tokens never become part of a `StreamChunk` in the first place.
 
 `MockLLMClient` lives in `tests/conftest.py` and supports a `responses: list[LLMResponse]` sequence parameter
-for multi-round tool-calling tests. It is a plain class, not a pytest fixture — import it directly in test files.
+for multi-round tool-calling tests, plus a `stream_chunks: list[list[StreamChunk]]` sequence parameter for the
+streaming path (Phase 17) — one inner list of `StreamChunk` per round, replayed via `stream()`. It is a plain
+class, not a pytest fixture — import it directly in test files.
 
 ## EmbeddingClient (`src/llm/base.py`)
 

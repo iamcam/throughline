@@ -1,6 +1,6 @@
 // src/components/ChatInterface.tsx
 import type { CitationResult } from '@/api/client'
-import { sendChatMessage } from '@/api/client'
+import { streamChatMessage } from '@/api/client'
 import { CitationList } from '@/components/CitationList'
 import { SearchFilterList } from '@/components/SearchFilterList'
 import { Button } from '@/components/ui/button'
@@ -90,41 +90,54 @@ export function ChatInterface({ scopeFeedIds, scopeEpisodeIds }: ChatInterfacePr
       role: 'user',
       content: text,
     }
-    const thinkingMessage: Message = {
-      id: 'thinking',
+    const assistantId = `assistant-${Date.now()}`
+    const assistantMessage: Message = {
+      id: assistantId,
       role: 'assistant',
       content: '',
       isThinking: true,
     }
 
-    setMessages(prev => [...prev, userMessage, thinkingMessage])
+    setMessages(prev => [...prev, userMessage, assistantMessage])
     setInput('')
     setIsSending(true)
 
+    const updateAssistant = (updater: (m: Message) => Message) => {
+      setMessages(prev => prev.map(m => (m.id === assistantId ? updater(m) : m)))
+    }
+
     try {
-      const response = await sendChatMessage(sessionId, text)
-      setMessages(prev => [
-        ...prev.filter(m => m.id !== 'thinking'),
-        {
-          id: `assistant-${Date.now()}`,
-          role: 'assistant',
-          content: response.message,
-          citations: response.citations,
+      await streamChatMessage(sessionId, text, {
+        onToken: (delta) => {
+          updateAssistant(m => ({
+            ...m,
+            isThinking: false,
+            content: m.content + delta,
+          }))
         },
-      ])
-    } catch (e: unknown) {
-      const status = (e as { response?: { status?: number } })?.response?.status
-      setMessages(prev => [
-        ...prev.filter(m => m.id !== 'thinking'),
-        {
-          id: `error-${Date.now()}`,
-          role: 'assistant',
-          content: status === 404
-            ? 'Session expired. Starting a new one by refreshing the page...'
-            : 'Something went wrong. Please try again.',
+        onDone: (citations) => {
+          updateAssistant(m => ({ ...m, citations }))
         },
-      ])
-      if (status === 404) resetSession()
+        onError: (_detail, errorType) => {
+          updateAssistant(m => ({
+            ...m,
+            isThinking: false,
+            content:
+              errorType === 'session_not_found'
+                ? 'Session expired. Starting a new one by refreshing the page...'
+                : errorType === 'timeout'
+                  ? 'The request took too long. Please try again.'
+                  : 'Something went wrong. Please try again.',
+          }))
+          if (errorType === 'session_not_found') resetSession()
+        },
+      })
+    } catch {
+      updateAssistant(m => ({
+        ...m,
+        isThinking: false,
+        content: 'Something went wrong. Please try again.',
+      }))
     } finally {
       setIsSending(false)
     }
