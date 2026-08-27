@@ -20,6 +20,7 @@ episodes (
   title TEXT, description TEXT, published_at TIMESTAMPTZ,
   audio_url TEXT, audio_local_path TEXT,
   duration_seconds INT,
+  image_url TEXT,
   pipeline_status TEXT NOT NULL DEFAULT 'PENDING',
   pipeline_stage TEXT,
   pipeline_progress FLOAT,

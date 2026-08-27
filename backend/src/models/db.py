@@ -43,6 +43,7 @@ class Episode(Base):
     audio_url: Mapped[str | None] = mapped_column(Text)
     audio_local_path: Mapped[str | None] = mapped_column(Text)
     duration_seconds: Mapped[int | None] = mapped_column(Integer)
+    image_url: Mapped[str | None] = mapped_column(Text)
 
     # Pipeline state — DB is source of truth, SSE reads from here
     pipeline_status: Mapped[str] = mapped_column(Text, nullable=False, default="PENDING")

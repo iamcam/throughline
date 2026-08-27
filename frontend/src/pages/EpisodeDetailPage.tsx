@@ -122,7 +122,7 @@ export default function EpisodeDetailPage() {
   const stage = liveStatus?.stage ?? episode?.pipeline_stage
   const progress = liveStatus?.progress ?? episode?.pipeline_progress
   const isActive = ACTIVE_STATUSES.includes(status ?? '')
-  const coverArt = feed?.image_url || null
+  const coverArt = episode?.image_url || feed?.image_url || null
 
   const ingestMutation = useMutation({
     mutationFn: () => ingestEpisode(episodeId!),
@@ -171,7 +171,7 @@ export default function EpisodeDetailPage() {
           <div className='flex flex-row gap-4'>
 
             {/* Left column - cover art, if any */}
-            {coverArt && <div className='shrink-0'><img className="aspect-square w-54" src={coverArt} alt="cover artwork for episode" /></div>}
+            {coverArt && <div className='shrink-0'><img className="aspect-square w-64" src={coverArt} alt="cover artwork for episode" /></div>}
 
             {/* Center - title, description, etc column */}
             <div className='grow flex flex-col gap-2'>

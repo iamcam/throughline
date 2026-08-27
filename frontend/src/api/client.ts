@@ -27,6 +27,7 @@ export interface Episode {
   published_at: string | null;
   duration_seconds: number | null;
   audio_url: string | null;
+  image_url: string | null;
   pipeline_status: string;
   pipeline_stage: string | null;
   pipeline_progress: number | null;

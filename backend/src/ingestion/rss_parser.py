@@ -15,6 +15,7 @@ class ParsedEpisode:
     published_at: datetime | None
     audio_url: str | None
     duration_seconds: int | None
+    image_url: str | None
 
 
 @dataclass
@@ -68,6 +69,11 @@ def parse_feed(rss_url: str) -> ParsedFeed:
         itunes = getattr(entry, "itunes_duration", None)
         duration_seconds = parse_duration(itunes)
 
+        # Episode image artwork
+        image_url = None
+        if hasattr(entry, "image") and hasattr(entry.image, "href"):
+            image_url = entry.image.href
+
         # published_at
         published_at = None
         if hasattr(entry, "published_parsed") and entry.published_parsed:
@@ -80,6 +86,7 @@ def parse_feed(rss_url: str) -> ParsedFeed:
             published_at=published_at,
             audio_url=audio_url,
             duration_seconds=duration_seconds,
+            image_url=image_url
         ))
 
     return ParsedFeed(

@@ -143,7 +143,7 @@ export default function EpisodesPage() {
           )}
           {feed && (
             <div className="flex items-stretch justify-between gap-6">
-              {feed.image_url && <div className='shrink-0 w-1/3 aspect-square  max-h-64 max-w-64 '>
+              {feed.image_url && <div className='shrink-0 w-1/3 aspect-square  max-h-64 max-w-64 shadow-md'>
                 <img src={feed.image_url} alt="Feed cover artwork" />
               </div>}
 

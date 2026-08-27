@@ -33,8 +33,10 @@ export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTr
 
   return (
     <Card className={"pb-0 drop-shadow " + (isReady ? 'border-2 border-accent' : '')}>
-      <CardHeader className='flex flex-row'>
-        <div className='flex-1 w-100'>
+      <CardHeader className='flex flex-row gap-(--card-spacing)'>
+        {episode.image_url && <img src={episode.image_url} className="mr-4 w-42 h-42 shadow-md" />}
+          <div className='flex-1 w-100'>
+
           <CardTitle className="text-xl line-clamp-2 flex flex-row gap-2 items-center">
             {isReady && <LucideSparkles className="text-accent size-4" />}
             <Link to={link} className="hover:text-hover transition-colors">{episode.title ?? 'Untitled'}</Link>

@@ -1,6 +1,7 @@
 // src/components/TranscriptViewer.tsx
-import { getTranscript } from '@/api/client'
+import { getTranscript, type TranscriptSegment } from '@/api/client'
 import { Button } from '@/components/ui/button'
+import { formatTimestamp } from '@/lib/date'
 import { useQuery } from '@tanstack/react-query'
 import { LucideChevronDown, LucideChevronRight, LucideChevronUp } from 'lucide-react'
 import { useState } from 'react'
@@ -11,6 +12,20 @@ interface TranscriptViewerProps {
   episodeId: string
   collapsedSegments?: number,
   className?: string
+}
+
+const group_transcript = (segments: TranscriptSegment[]) => {
+
+  const grouped: TranscriptSegment[] = []
+  segments.forEach((segment: TranscriptSegment, idx: number) => {
+    const new_seg = { ...segment }
+    if (segments[idx - 1]?.speaker_id !== segment.speaker_id) {
+      grouped.push(new_seg)
+    } else if (segments[idx - 1]?.speaker_id === segment.speaker_id) {
+      grouped[grouped.length - 1].text += `\n${new_seg.text}`
+    }
+  })
+  return grouped
 }
 
 export function TranscriptViewer({ episodeId, collapsedSegments = COLLAPSED_SEGMENTS, className }: TranscriptViewerProps) {
@@ -25,9 +40,10 @@ export function TranscriptViewer({ episodeId, collapsedSegments = COLLAPSED_SEGM
   if (isError) return <p className="text-sm text-destructive">Failed to load transcript.</p>
   if (!transcript?.segments.length) return <p className="text-sm text-muted-foreground">No transcript available.</p>
 
+  const grouped = group_transcript(transcript.segments)
   const visible = expanded
-    ? transcript.segments
-    : transcript.segments.slice(0, collapsedSegments)
+    ? grouped
+    : grouped.slice(0, collapsedSegments)
 
   const canCollapse = transcript.segments.length > collapsedSegments
 
@@ -44,13 +60,16 @@ export function TranscriptViewer({ episodeId, collapsedSegments = COLLAPSED_SEGM
         </Button>
       )}
       {visible.map((seg, idx) => (
-        <div key={`${seg.sequence_order}`} className="text-sm grid grid-cols-4 sm:grid-cols-6 sm:gap-2">
+        <div key={`${seg.sequence_order}`} className="text-sm grid grid-cols-4 sm:grid-cols-6 sm:gap-4 mb-8">
           {(visible[idx - 1]?.speaker_id === seg.speaker_id) ? <></> :
             (
-                <div className='sm:text-end font-mono col-span-full sm:col-span-1 text-primary font-semibold wrap-anywhere'>{(seg.display_name ?? seg.speaker_id)}:</div>
+              <div className='sm:text-end font-mono col-span-full sm:col-span-1 wrap-anywhere'>
+                <div className='text-primary font-semibold '>{(seg.display_name ?? seg.speaker_id)}</div>
+                <div className='h-0 text-xs text-muted-foreground'>{formatTimestamp(seg.start_ms/1000)}</div>
+                </div>
             )
           }
-          <div className="block col-start-1 sm:col-start-2 col-span-full">{seg.text}</div>
+          <div className="block col-start-1 sm:col-start-2 col-span-full whitespace-pre-line">{seg.text}</div>
         </div>
       ))}
       {canCollapse && (

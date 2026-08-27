@@ -33,6 +33,7 @@ class EpisodeResponse(BaseModel):
     pipeline_progress: float | None
     pipeline_error: str | None
     audio_url: str | None
+    image_url: str | None
 
     model_config = {"from_attributes": True}
 

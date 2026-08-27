@@ -71,6 +71,7 @@ async def refresh_feed(feed_id: UUID, db: AsyncSession) -> list[Episode]:
             description=ep.description,
             published_at=ep.published_at,
             audio_url=ep.audio_url,
+            image_url=ep.image_url,
             duration_seconds=ep.duration_seconds,
             pipeline_status="PENDING",
         )

@@ -7,7 +7,7 @@
 
 ## Current Status
 
-Phases 0 through 17 (including the unplanned 10.1 follow-up) are **✅ Complete** as of git tag `v1.6.0`. This document now carries only the durable, always-relevant planning material — guiding principles, the phase overview, and agent-collaboration guidance. Full build-by-build detail for every completed phase (tasks, code, decisions made, known tech debt at the time, done-when criteria) has moved to `docs/reference/phases/` — one file per phase, named `phase-NN-slug.md`. Open a specific phase file when you need the history behind a decision; you don't need to read them to work on new features.
+Phases 0 through 18 (including the unplanned 10.1 follow-up) are **✅ Complete** as of git tag `v1.7.0`. This document now carries only the durable, always-relevant planning material — guiding principles, the phase overview, and agent-collaboration guidance. Full build-by-build detail for every completed phase (tasks, code, decisions made, known tech debt at the time, done-when criteria) has moved to `docs/reference/phases/` — one file per phase, named `phase-NN-slug.md`. Open a specific phase file when you need the history behind a decision; you don't need to read them to work on new features.
 
 For what to build next, see `FUTURE_SCOPE.md` — in particular its "What to Build Next (Recommended Order)" section.
 
@@ -58,6 +58,7 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 | 15    | Query rewriting ✅ Complete                                  | Vague/pronoun-dependent follow-ups resolve to retrievable queries before search; measurable in Phoenix | `docs/reference/phases/phase-15-query-rewriting.md` |
 | 16    | Automatic feed polling ✅ Complete                           | Feeds refresh automatically on server startup and via cron in deployed environments; ingestion stays manual | `docs/reference/phases/phase-16-feed-polling.md` |
 | 17    | Chat response streaming ✅ Complete                          | Multi-round tool-calling queries show live status while tools run, then stream the final answer token-by-token | `docs/reference/phases/phase-17-chat-streaming.md` |
+| 18    | Episode UI updates ✅ Complete                               | Per-episode artwork with feed-artwork fallback; transcript layout/formatting improvements | `docs/reference/phases/phase-18-episode-ui-updates.md` |
 
 ---
 
@@ -131,3 +132,4 @@ Test that BackgroundTaskQueue satisfies the IngestionQueue Protocol."
 | `v1.4.0`                              | Query rewriting: conversation-aware pre-retrieval rewrite (passthrough by default), transient substitution only, chat span telemetry for original vs. rewritten query |
 | `v1.5.0`                              | Automatic feed polling: `poll_all_feeds` routine, `scripts/feed_polling.py` CLI wrapper shared by dev startup chain and host cron, no auto-ingest |
 | `v1.6.0`                              | Chat response streaming: SSE `status`/`token`/`done`/`error` events, `QueryEngine.chat_stream()`, thinking-model-safe `StreamAccumulator`, incremental frontend rendering |
+| `v1.7.0`                              | Episode UI updates: per-episode artwork (`episodes.image_url`, item-level `<itunes:image>` parsing) with feed-artwork fallback; transcript view groups consecutive same-speaker segments with a per-speaker start timestamp |

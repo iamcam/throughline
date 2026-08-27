@@ -108,6 +108,7 @@ async def ingest_episode(
             # src/diarization/alignment.py for how segments get matched to turns.
 
             await services.status.set(episode_id, "DIARIZING", db=db)
+            logger.info(f"Audio path: {audio_path}")
             diarization = await services.diarization.diarize(audio_path)
             transcript.segments = align_segments(transcript.segments, diarization)
 

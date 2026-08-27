@@ -140,19 +140,9 @@ Shipped in Phase 13. See `docs/reference/phases/phase-13-speaker-diarization.md`
 
 ---
 
-### 1.12 Individual Episode Artwork
+### 1.12 Individual Episode Artwork — Shipped in Phase 18
 
-**What it is:** Display per-episode artwork (`<itunes:image>` at the item level) in episode lists and detail pages. Feed-level artwork (`feeds.image_url`) is already implemented.
-
-**Why deferred:** Per-episode artwork is less common in RSS feeds and was deprioritized for Phase 8 polish work. Feed-level artwork covers the majority of use cases.
-
-**Implementation path:**
-- Backend: add `image_url TEXT` to `episodes` table (Alembic migration); parse `<itunes:image>` at item level in `rss_parser.py`
-- Frontend: add `image_url: string | null` to `Episode` type in `client.ts`; display in `EpisodeRow` and `EpisodeDetailPage` with fallback to feed `image_url`
-
-**Effort:** Half a day
-
-**Revisit note (Phase 17 wrap-up):** flagged again as a small, easy addition worth doing soon — moved to the top of "What to Build Next" below.
+See `docs/reference/phases/phase-18-episode-ui-updates.md` for the implementation.
 
 ---
 
@@ -410,9 +400,9 @@ Shipped in Phase 14. See `docs/reference/phases/phase-14-speaker-labeled-retriev
 
 ## What to Build Next (Recommended Order)
 
-With the worker queue (Phase 12), local speaker diarization (Phase 13), speaker-labeled retrieval (Phase 14), query rewriting (Phase 15), automatic feed polling (Phase 16), and chat response streaming (Phase 17) in place, this is the highest-value sequence for what's left:
+With the worker queue (Phase 12), local speaker diarization (Phase 13), speaker-labeled retrieval (Phase 14), query rewriting (Phase 15), automatic feed polling (Phase 16), chat response streaming (Phase 17), and episode UI updates (Phase 18) in place, this is the highest-value sequence for what's left:
 
-1. **Individual episode artwork (1.12)** — half a day, small and easy, flagged again during Phase 17 wrap-up
+1. **Investigate remote transcription+diarization via Deepgram (1.9)** — effort TBD pending investigation; validate Deepgram specifically (their free tier looks generous for single-user usage) before committing to the full 1-weekend build estimate. Motivated by local compute load, not diarization quality — Senko already covers that well.
 2. **Episode summarization** — 1 weekend, demonstrates a two-level LLM pipeline for handling transcripts that exceed context limits
 3. **Queue overview UI (2.1b)** — 1 weekend, visibility into what's queued/running/recently done across all episodes
 4. **V2 chat scope filtering** — 1-2 weekends, unlocks the full feed/episode filter UI
