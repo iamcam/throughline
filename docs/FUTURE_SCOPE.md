@@ -359,6 +359,24 @@ Shipped in Phase 14. See `docs/reference/phases/phase-14-speaker-labeled-retriev
 
 **Effort:** Half a day — small, contained, but touches a shared Protocol and two call sites, so worth doing deliberately rather than folding into an unrelated change.
 
+### 2.12 Spawn-Based GPU Embedding for Local Models
+
+**What it is:** Run the local embedding model (`LocalEmbeddingClient`, see 2.11 and `src/llm/local.py`) on CUDA via a dedicated spawn-context `ProcessPoolExecutor`, instead of the current CPU-only device resolution.
+
+**Why deferred:** The embedding models under consideration (BGE-base, GTE-base, E5-base, Nomic-embed, all in the 100-350M parameter range) are cheap enough that CPU inference is fast enough for this app's volume — GPU acceleration isn't needed for correctness or acceptable latency today. More importantly, `resolve_device()` previously auto-selected CUDA when available, which broke the worker: `LocalEmbeddingClient` initializing a CUDA context in the main worker process during `lifespan()` setup poisoned every subsequent `fork()`'d `ProcessPoolExecutor` subprocess used by transcription/diarization (`RuntimeError: CUDA failed with error initialization error`) — CUDA contexts don't survive `fork()`. Fixed by dropping the CUDA branch from `resolve_device()` entirely (CPU/MPS only); this item is the "if we ever actually need GPU-accelerated embedding" follow-up, not a currently-needed feature.
+
+**When to revisit:** If a several-billion-parameter encoder is chosen later (e.g. `Qwen3-Embedding-8B`, `gte-Qwen2-7B-instruct`, `NV-Embed-v2` — real, high-ranking MTEB models at this scale, not hypothetical). At that size, CPU inference latency stops being a rounding error and becomes a real bottleneck — potentially multiple seconds per text rather than sub-second per batch — and the CPU/GPU throughput gap widens roughly with model size, so GPU acceleration goes from optional to close to necessary. At that point this item stops being optional groundwork and becomes a prerequisite: without it, GPU acceleration isn't safely available at all, since using it without the spawn isolation reintroduces the exact fork-poisoning bug this item's "why deferred" section describes.
+
+**Implementation path:**
+- Give `LocalEmbeddingClient` its own dedicated `ProcessPoolExecutor`, constructed with `mp_context=multiprocessing.get_context("spawn")` rather than the platform default (`fork` on Linux).
+- Model loads once via a pool `initializer` function (same warm-model-per-subprocess pattern Senko's diarizer already uses via `_init_diarizer`), not per-call.
+- Because `spawn` starts each worker as a genuinely fresh process with no inherited memory, the subprocess is free to initialize its own CUDA context safely — no ordering hazard with the transcription/diarization pools, regardless of what the main process has or hasn't touched.
+- Route `embed()` calls through `loop.run_in_executor` against this dedicated pool instead of the current `ThreadPoolExecutor`.
+
+**Effort:** Half a day — small, isolated to `src/llm/local.py`, no Protocol changes needed.
+
+---
+
 ## Tier 3 — Research / Experimental
 
 ### 3.1 Speaker Embedding and Voice Fingerprinting
