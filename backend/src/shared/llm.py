@@ -1,11 +1,19 @@
 # src/shared/llm.py
+from functools import lru_cache
+
 from src.config import get_settings
+from src.llm.base import EmbeddingClient
 from src.llm.client import OpenAICompatibleLLMClient, OpenAICompatibleEmbeddingClient
 
 settings = get_settings()
 
+@lru_cache
+def get_embedding_client() -> EmbeddingClient:
+    if settings.embedding_base_url == "local":
+        from src.llm.local import LocalEmbeddingClient
 
-def get_embedding_client() -> OpenAICompatibleEmbeddingClient:
+        return LocalEmbeddingClient(model_name=settings.embedding_model_name)
+
     return OpenAICompatibleEmbeddingClient(
         base_url=settings.embedding_base_url or settings.llm_base_url,
         api_key=settings.embedding_api_key or settings.llm_api_key,
@@ -13,6 +21,7 @@ def get_embedding_client() -> OpenAICompatibleEmbeddingClient:
     )
 
 
+@lru_cache
 def get_llm_client() -> OpenAICompatibleLLMClient:
     return OpenAICompatibleLLMClient(
         base_url=settings.llm_base_url,

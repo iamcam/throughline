@@ -342,6 +342,23 @@ Shipped in Phase 14. See `docs/reference/phases/phase-14-speaker-labeled-retriev
 
 ---
 
+### 2.11 Embedding Query/Document Prefix Support
+
+**What it is:** Several modern embedding models (`nomic-embed-text-v1.5`, `nomic-ai/modernbert-embed-base`, `google/embeddinggemma-300m`, `intfloat/e5-base-v2`) produce meaningfully better retrieval results when the text passed to them is prefixed differently depending on whether it's a document being indexed or a query being searched with (e.g. `"search_document: "` vs `"search_query: "`). The model actually chosen for Phase 19 (`Alibaba-NLP/gte-modernbert-base`) does not need this — plain text in, no prefix — so Phase 19 ships without it.
+
+**Why it matters:** If the embedding model is ever swapped for one of the prefix-sensitive alternatives above, skipping the prefix doesn't error — it just leaves retrieval quality on the table silently, the same failure mode documented for cross-deployment model mismatches (see `backend/README.md` §3.3). Worth having the plumbing in place *before* that swap is needed, since it touches call sites (`Embedder`, `Retriever`) that are easy to forget once the code is written and working.
+
+**Investigated and ruled out:** there's no reliable way to auto-detect a model's prefix requirement at runtime. `sentence-transformers` has a real mechanism for this (`SentenceTransformer.prompts` / `default_prompt_name`, loaded from a `config_sentence_transformers.json` file in the model repo, with `encode_query()`/`encode_document()` auto-applying them when present) — but it's opt-in per model author and inconsistently used even when a prefix convention is documented in prose. Confirmed by inspecting real repos: `nomic-ai/modernbert-embed-base`'s `config_sentence_transformers.json` has `"prompts": {}` despite its model card explicitly documenting the `search_query:`/`search_document:` convention; `BAAI/bge-base-en-v1.5` doesn't have the field at all. A hardcoded lookup table, not introspection, is the only reliable approach.
+
+**Implementation path:**
+- Add an optional `task: Literal["document", "query"] = "document"` parameter to the `EmbeddingClient` Protocol's `embed()` method — default keeps every existing call site working unchanged.
+- A small lookup table (keyed by HF repo id) mapping known models to their document/query prefix strings, verified by reading each model's card rather than trusting repo metadata.
+- `LocalEmbeddingClient.embed()` looks up its own model name in the table and prepends the right prefix; an unrecognized model falls back to no prefix plus a logged warning, rather than failing.
+- `OpenAICompatibleEmbeddingClient.embed()` gains the same signature for Protocol compliance. Worth noting: the current Ollama `nomic-embed-text` API deployment likely has this exact gap already (no prefix applied), just silently — this same table could close that gap too, once built.
+- Call-site changes: `Embedder` passes `task="document"` for chunk embedding; `Retriever` passes `task="query"` for the user's query embedding.
+
+**Effort:** Half a day — small, contained, but touches a shared Protocol and two call sites, so worth doing deliberately rather than folding into an unrelated change.
+
 ## Tier 3 — Research / Experimental
 
 ### 3.1 Speaker Embedding and Voice Fingerprinting
@@ -409,5 +426,6 @@ With the worker queue (Phase 12), local speaker diarization (Phase 13), speaker-
 5. **Temporal reasoning** — unique angle, memorable demo
 6. **Graph RAG** — the "big" upgrade, strongest architectural story
 7. **Multi-feed persona synthesis** — the killer demo feature (plumbing already done in Phase 6)
+8. **Embedding query/document prefix support (2.11)** — low priority; only worth doing if/when the embedding model is swapped for one that needs it
 
 Graph RAG is deliberately near the end — retrieval failure modes will be better understood after real use, which makes the graph design decisions more grounded rather than speculative.

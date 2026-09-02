@@ -178,12 +178,16 @@ Full code, dataclasses, and design notes: `docs/reference/architecture/protocols
 | Protocol                                             | Key method(s)                                                                           | Implementations                                                     |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | `LLMClient` (`src/llm/base.py`)                      | `complete(messages, tools=None, response_format=None, temperature=0.7) -> LLMResponse`  | `OpenAICompatibleLLMClient`, `MockLLMClient`                        |
-| `EmbeddingClient` (`src/llm/base.py`)                | `embed(texts: list[str]) -> list[list[float]]`                                          | `OpenAICompatibleEmbeddingClient`, `MockEmbeddingClient`            |
+| `EmbeddingClient` (`src/llm/base.py`)                | `embed(texts: list[str]) -> list[list[float]]`                                          | `OpenAICompatibleEmbeddingClient`, `LocalEmbeddingClient` (sentence-transformers), `MockEmbeddingClient` |
 | `TranscriptionService` (`src/transcription/base.py`) | `transcribe(audio_path, language="en") -> TranscriptResult`                             | `LocalTranscriptionService` (Whisper), `RemoteTranscriptionService` |
 | `DiarizationService` (`src/diarization/base.py`)     | `diarize(audio_path) -> DiarizationResult`                                              | `LocalDiarizationService` (Senko)                                   |
 | `IngestionQueue` (`src/ingestion/queue.py`)          | `enqueue(episode_id, job_args)`, `get_status(job_id)`, `cancel(job_id)`                 | `StreaqQueue` (default), `BackgroundTaskQueue` (fallback)           |
 | `VectorStore` (`src/storage/vector_store.py`)        | `search(embedding, filters, top_k=5, db) -> list[RawChunkResult]`, `upsert(chunks, db)` | `PgvectorStore`                                                     |
 | `SessionStore` (`src/query/session_store.py`)        | `get(session_id)`, `save(session)`, `delete(session_id)`, `list_sessions()`             | `InMemorySessionStore`                                              |
+
+---
+
+**Embedding backend consistency:** `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL_NAME`, and `EMBEDDING_DIMENSIONS` must be identical across every API and worker deployment sharing the same pgvector data. Unlike `LLMClient` — where API and worker can safely run different models — `EmbeddingClient` output from ingestion (worker) and from a query (API) is compared directly by `PgvectorStore`. A mismatch doesn't raise an error; it silently degrades retrieval, since two different models can produce same-dimension vectors that occupy unrelated vector spaces. Changing the embedding model or backend requires re-embedding every existing chunk before it's queryable again — there's no partial-migration path.
 
 ---
 
@@ -259,7 +263,8 @@ LLM_BASE_URL=http://localhost:11434/v1
 LLM_API_KEY=ollama
 LLM_MODEL_NAME=llama3.1:8b
 
-# Embeddings
+# Embeddings — EMBEDDING_BASE_URL="local" runs sentence-transformers in-process instead of calling an API;
+# see §3.3 for the cross-deployment consistency requirement
 EMBEDDING_BASE_URL=http://localhost:11434/v1
 EMBEDDING_API_KEY=ollama
 EMBEDDING_MODEL_NAME=nomic-embed-text
@@ -413,7 +418,8 @@ podcast-knowledge-engine/
 │   │   │   └── dependencies.py      # ALL dependency wiring lives here
 │   │   ├── llm/
 │   │   │   ├── base.py              # LLMClient + EmbeddingClient Protocols, ToolCall, LLMResponse
-│   │   │   └── client.py            # OpenAICompatibleLLMClient + OpenAICompatibleEmbeddingClient
+│   │   │   ├── client.py            # OpenAICompatibleLLMClient + OpenAICompatibleEmbeddingClient
+│   │   │   └── local.py             # LocalEmbeddingClient (sentence-transformers)
 │   │   ├── ingestion/
 │   │   │   ├── pipeline.py          # Thin orchestrator only
 │   │   │   ├── pipeline_runner.py   # Worker-side: builds PipelineServices, runs ingest_episode
@@ -561,6 +567,7 @@ Summary: `db` (Postgres + pgvector) and `redis` (streaQ job queue backend) are t
 - `ToolDispatcher` — correct tool routing, filter application, citation population, speaker resolution
 - `QueryEngine` — tool-calling loop, round limits, message ordering, citation passthrough
 - `SessionStore` — save/retrieve/delete, key correctness
+- `LocalEmbeddingClient` satisfies `EmbeddingClient`
 - Alignment (`tests/unit/test_alignment.py`) — overlap matching, tie-breaking, no-overlap fallback, non-mutation
 
 **Mock helpers** (`tests/conftest.py`) — plain classes, direct import in test files:

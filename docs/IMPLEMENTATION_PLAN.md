@@ -11,6 +11,8 @@ Phases 0 through 18 (including the unplanned 10.1 follow-up) are **✅ Complete*
 
 For what to build next, see `FUTURE_SCOPE.md` — in particular its "What to Build Next (Recommended Order)" section.
 
+Phase 19 (Local Embedding Support) is 🚧 in progress — see the task breakdown below.
+
 ## Before You Start
 
 This is the implementation plan for the **Podcast Knowledge Engine** — a local-first RAG application that ingests podcast feeds, transcribes and diarizes episodes, and exposes a freeform chat interface for querying podcast content. The full system design, schema, API reference, and configuration are in `ARCHITECTURE.md`. Read that document first and keep it open alongside this one.
@@ -59,6 +61,39 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 | 16    | Automatic feed polling ✅ Complete                           | Feeds refresh automatically on server startup and via cron in deployed environments; ingestion stays manual | `docs/reference/phases/phase-16-feed-polling.md` |
 | 17    | Chat response streaming ✅ Complete                          | Multi-round tool-calling queries show live status while tools run, then stream the final answer token-by-token | `docs/reference/phases/phase-17-chat-streaming.md` |
 | 18    | Episode UI updates ✅ Complete                               | Per-episode artwork with feed-artwork fallback; transcript layout/formatting improvements | `docs/reference/phases/phase-18-episode-ui-updates.md` |
+| 19    | Local embedding support 🚧 In Progress                       | Embeddings can be produced locally (sentence-transformers) or via external API, selected per-deployment via `.env` | See "Phase 19" section below |
+
+---
+
+## Phase 19 — Local Embedding Support (In Progress)
+
+**Why:** the external embedding API in use doesn't support the 768-dim output the existing pgvector schema and already-embedded chunks depend on. Local embedding removes that dependency entirely, using the same `device="auto"`-style pattern already used by `senko.Diarizer`.
+
+**Design note:** unlike `TranscriptionService`/`DiarizationService`, `EmbeddingClient` is constructed in both the API process (`dependencies.py`, for query-time embedding) and the worker process (`worker.py`'s `lifespan()`, for ingestion) — so `LocalEmbeddingClient` must be safe to load in-process in either, and doesn't need Senko's `ProcessPoolExecutor`/warm-subprocess treatment. It offloads `model.encode()` via a plain `run_in_executor` call to keep the event loop free.
+
+**Tasks:**
+1. Add `sentence-transformers` dependency.
+2. `src/config.py`: add `embedding_backend: str = ""` (`""` = existing API-based client, `"local"` = sentence-transformers). `embedding_model_name` is reused; for local mode it holds a Hugging Face repo id instead of an API model name.
+3. `src/llm/local.py`: `LocalEmbeddingClient(EmbeddingClient)` — loads `SentenceTransformer(model_name, device=resolve_device())` once in `__init__` (device resolution: cuda → mps → cpu); `embed()` runs `model.encode()` in an executor.
+4. `src/shared/llm.py`: branch `get_embedding_client()` on `settings.embedding_backend`.
+5. `.env.example`: document `EMBEDDING_BACKEND`, and flag that `EMBEDDING_BACKEND`/`EMBEDDING_MODEL_NAME` must match exactly across every API and worker deployment sharing the same pgvector data — a mismatch produces no error, just silently degraded retrieval, since embeddings from different models occupy unrelated vector spaces even at matching dimensionality.
+6. Same warning added to `ARCHITECTURE.md`'s config reference.
+7. Pick the model from the candidates below and verify 768-dim output before wiring in a default. Fallback if none fit: a pgvector schema migration + re-embed, not the default plan.
+8. Update `docs/reference/architecture/protocols.md`'s `EmbeddingClient` implementations row.
+
+**Model chosen:** `Alibaba-NLP/gte-modernbert-base` — 768-dim native, Apache 2.0, no `trust_remote_code`, ungated, ~149M params, and (unlike most of the alternatives considered) needs no query/document prefix, so `EmbeddingClient.embed()`'s flat `texts: list[str]` signature stays accurate with no further plumbing. Other candidates considered and ruled out:
+- `nomic-embed-text-v1.5` — needs a prefix; `trust_remote_code` requirement is conditionally avoidable on newer transformers/sentence-transformers but adds risk
+- `nomic-ai/modernbert-embed-base` — same architecture family and size class as the chosen model, but needs a prefix
+- `BAAI/bge-base-en-v1.5`, `sentence-transformers/all-mpnet-base-v2` — viable, but GTE-ModernBERT benchmarks ahead of both at the same size class
+- `intfloat/e5-base-v2` — requires `"query: "`/`"passage: "` prefixes on essentially everything, not just optionally
+- `google/embeddinggemma-300m` — 768-dim native, but its HF repo is gated (requires accepting Google's Gemma terms + an `HF_TOKEN`), which breaks unattended first-boot model download on the worker
+- `Qwen/Qwen3-Embedding-0.6B` — 1024-dim native (768 reachable via Matryoshka truncation, but not one of its headline-documented truncation points); at 0.6B params it's 3-5x the size of the other candidates and doesn't comfortably fit the target deployment's memory budget
+
+Query/document prefix support (needed if a future model swap picks one of the prefix-sensitive candidates above) is deliberately deferred — see `FUTURE_SCOPE.md` 2.11.
+
+**Found during implementation:** `get_embedding_client()`/`get_llm_client()` needed `@lru_cache` (matching `get_settings()`'s existing pattern) — without it, FastAPI's per-request `Depends()` caching was constructing a fresh `LocalEmbeddingClient` on every chat message, reloading the model and re-verifying its Hugging Face cache each time. Invisible with the API-based client (cheap to construct); a real bug once construction does actual work. See `docs/reference/architecture/protocols.md`'s EmbeddingClient section for the detail.
+
+**Done when:** `EMBEDDING_BASE_URL=local` produces 768-dim vectors end-to-end (ingestion + query) with no schema change, on CPU, MPS, and CUDA. CPU and MPS verified via local smoke test. **CUDA still open** — not yet verified on any CUDA device.
 
 ---
 

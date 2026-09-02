@@ -25,6 +25,7 @@ dependencies = [
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.1.0",
     "python-dotenv>=1.2.2",
+    "sentence-transformers>=6.0.1",
     "sqlalchemy[asyncio]>=2.0.50",
     "sse-starlette>=3.4.4",
     "streaq>=7.1.0",

@@ -74,7 +74,33 @@ class EmbeddingClient(Protocol):
     async def embed(self, texts: list[str]) -> list[list[float]]: ...
 ```
 
-Implementations: `OpenAICompatibleEmbeddingClient` (production, in `src/llm/client.py`), `MockEmbeddingClient` (tests).
+Implementations: `OpenAICompatibleEmbeddingClient` (`src/llm/client.py`), `LocalEmbeddingClient` (`src/llm/local.py`,
+sentence-transformers, Phase 19), `MockEmbeddingClient` (tests).
+
+**Selection:** `src/shared/llm.py`'s `get_embedding_client()` branches on `EMBEDDING_BASE_URL` — `"local"` builds
+`LocalEmbeddingClient`; anything else (including empty, which falls back to `LLM_BASE_URL`) builds
+`OpenAICompatibleEmbeddingClient`. Same presence/absence-of-a-value convention `TRANSCRIPTION_SERVICE_URL` already
+uses, rather than a separate `EMBEDDING_BACKEND` enum.
+
+**`LocalEmbeddingClient`:** loads a `SentenceTransformer` model once, eagerly, in `__init__` (device resolution:
+cuda -> mps -> cpu). `embed()` offloads the blocking `model.encode()` call to a small `ThreadPoolExecutor`. Unlike
+`LocalDiarizationService`, it does not use a `ProcessPoolExecutor` with a warm-subprocess initializer — that
+pattern exists because Senko only ever runs inside the worker process, whereas `EmbeddingClient` is constructed in
+*both* the API process (`dependencies.py`, for query-time embedding) and the worker process (`worker.py`'s
+`lifespan()`, for ingestion), so the model just lives in-process in whichever one constructs it.
+
+**Singleton caching:** `get_embedding_client()` (and `get_llm_client()`, for consistency) is decorated with
+`@lru_cache`, matching `get_settings()`'s existing pattern in `config.py`. This is load-bearing, not cosmetic —
+FastAPI's `Depends()` caches a dependency only within one request, not across requests, and constructing a fresh
+`LocalEmbeddingClient` per request was measured during Phase 19 smoke testing to reload the model and re-verify its
+Hugging Face cache on every single chat message (several seconds of redirect-chain HTTP calls per request).
+`OpenAICompatibleEmbeddingClient` never surfaced this because building it has no meaningful cost; `LocalEmbeddingClient`
+does, since `__init__` performs real model-loading work.
+
+**Model chosen:** `Alibaba-NLP/gte-modernbert-base` (768-dim native, Apache 2.0, no `trust_remote_code`, ungated,
+~149M params) — see `IMPLEMENTATION_PLAN.md` Phase 19 for the comparison against other 768-dim candidates.
+Deliberately requires no query/document prefix, which keeps `embed()`'s flat `texts: list[str]` signature accurate;
+see `FUTURE_SCOPE.md` 2.11 for the deferred design to support prefix-sensitive models later.
 
 ## TranscriptionService (`src/transcription/base.py`)
 

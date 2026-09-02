@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     topic_similarity_threshold: float = 0.75
 
     # Embeddings
-    embedding_base_url: str = ""
+    embedding_base_url: str = "" # empty - use LLM base url; OpenAI-compatible API client; "local" to run local embedding
     embedding_api_key: str = "none"
     embedding_model_name: str = "nomic-embed-text"
     embedding_dimensions: int = 768
