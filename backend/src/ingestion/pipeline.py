@@ -1,6 +1,7 @@
 # src/ingestion/pipeline.py
 
 import logging
+import time
 from dataclasses import dataclass
 from uuid import UUID
 from opentelemetry import trace
@@ -157,7 +158,12 @@ async def ingest_episode(
                 return
 
             segment_texts = [s.text for s in segments]
-            segment_embeddings = await services.embedder._client.embed(segment_texts)
+            t0 = time.monotonic()
+            segment_embeddings = await services.embedder.embed_texts(segment_texts)
+            logger.info(
+                "Episode %s: embedded %s segments for topic detection in %.1fs",
+                episode_id, len(segment_texts), time.monotonic() - t0
+            )
 
             chunks = services.chunker.chunk(
                 episode_id=episode_id,

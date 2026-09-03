@@ -81,4 +81,16 @@ class Embedder:
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """Embeds arbitrary texts. Used by the pipeline for segment embeddings."""
-        return await self._client.embed(texts)
+        with tracer.start_as_current_span("embed_texts") as span:
+            span.set_attribute("openinference.span.kind", "CHAIN")
+            span.set_attribute("embedding.text_count", len(texts))
+
+            if not texts:
+                return []
+
+            try:
+                return await self._client.embed(texts)
+            except Exception as e:
+                span.record_exception(e)
+                span.set_status(trace.StatusCode.ERROR, str(e))
+                raise
