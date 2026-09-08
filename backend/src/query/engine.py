@@ -35,6 +35,7 @@ class TokenEvent:
 class DoneEvent:
     citations: list[dict]
     session_id: str
+    message: str
 
 logger = logging.getLogger(__name__)
 
@@ -77,18 +78,17 @@ class QueryEngine:
         user_message: str,
         db: AsyncSession,
     ) -> ChatResponse:
-        content_parts: list[str] = []
         citations: list[dict] = []
+        message = ""
 
         async for event in self.chat_stream(session_id, user_message, db):
-            if isinstance(event, TokenEvent):
-                content_parts.append(event.delta)
-            elif isinstance(event, DoneEvent):
+            if isinstance(event, DoneEvent):
                 citations = event.citations
-            # StatusEvent ignored -- no client here to notify
+                message = event.message
+            # TokenEvent/StatusEvent ignored -- no client here to notify
 
         return ChatResponse(
-            message="".join(content_parts),
+            message=message,
             session_id=session_id,
             citations=citations,
         )
@@ -179,7 +179,7 @@ class QueryEngine:
                 span.set_attribute("chat.citation_count", len(session.citations))
                 span.set_status(trace.StatusCode.OK)
 
-                yield DoneEvent(citations=session.citations, session_id=session_id)
+                yield DoneEvent(citations=session.citations, session_id=session_id, message=final_content)
 
             except Exception as e:
                 span.record_exception(e)

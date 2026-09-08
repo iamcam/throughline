@@ -8,10 +8,6 @@ from src.llm.base import LLMResponse, StreamChunk, ToolCall
 logger = logging.getLogger(__name__)
 
 
-class MixedStreamResponseError(Exception):
-    """Raised when a single round's stream produces both content and tool-call deltas."""
-
-
 class _PendingToolCall:
     def __init__(self):
         self.id: str | None = None
@@ -20,6 +16,7 @@ class _PendingToolCall:
 
 
 class StreamAccumulator:
+
     async def accumulate(
         self, chunks: AsyncIterator[StreamChunk]
     ) -> AsyncIterator[str | LLMResponse]:
@@ -31,19 +28,22 @@ class StreamAccumulator:
 
         async for chunk in chunks:
             has_content = bool(chunk.content_delta and chunk.content_delta.strip())
-            if has_content:
-                if saw_tool_calls:
-                    raise MixedStreamResponseError(
-                        "Received content after tool call deltas in the same round"
-                    )
+
+            if has_content and not saw_tool_calls:
                 saw_content = True
                 content_parts.append(chunk.content_delta)
                 yield chunk.content_delta
+            elif has_content and saw_tool_calls:
+                logger.warning(
+                    "Received content delta after tool call deltas in the same round; "
+                    "discarding content, tool calls take priority"
+                )
 
             if chunk.tool_call_deltas:
-                if saw_content:
-                    raise MixedStreamResponseError(
-                        "Received tool call deltas after content in the same round"
+                if saw_content and not saw_tool_calls:
+                    logger.warning(
+                        "Received tool call deltas after content in the same round; "
+                        "discarding preceding content, tool calls take priority"
                     )
                 saw_tool_calls = True
                 for delta in chunk.tool_call_deltas:
@@ -64,7 +64,7 @@ class StreamAccumulator:
         ]
 
         yield LLMResponse(
-            content="".join(content_parts) if saw_content else None,
+            content="".join(content_parts) if (saw_content and not saw_tool_calls) else None,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
         )

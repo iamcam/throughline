@@ -8,7 +8,6 @@ import uuid
 from src.query.engine import QueryEngine, ChatResponse, StatusEvent, TokenEvent, DoneEvent, LLMTimeoutError
 from src.query.session_store import InMemorySessionStore, ChatSession
 from src.query.prompt_builder import PromptBuilder
-from src.query.stream_accumulator import MixedStreamResponseError
 from src.query.tool_dispatcher import ToolDispatcher
 from src.llm.base import ToolCall, LLMResponse, StreamChunk, ToolCallDelta
 from tests.conftest import MockLLMClient
@@ -339,22 +338,33 @@ async def test_chat_stream_no_tokens_during_tool_round():
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_propagates_mixed_stream_error():
-    class MixedLLMClient:
-        async def stream(self, messages, tools=None, temperature=0.7):
-            yield StreamChunk(content_delta="partial answer")
-            yield StreamChunk(tool_call_deltas=[
+async def test_mixed_round_recovers():
+    """A round with content before tool-call deltas (e.g. a Claude preamble
+    like "I'll search for that...") no longer raises. The round should
+    resolve as tool-only -- content discarded, dispatcher still runs -- and
+    the loop continues to a normal final answer."""
+    llm = MockLLMClient(stream_chunks=[
+        [
+            StreamChunk(content_delta="I'll search for that..."),
+            StreamChunk(tool_call_deltas=[
                 ToolCallDelta(index=0, id="tc1", name="search_knowledge_base", arguments_delta="{}")
-            ], finish_reason="tool_calls")
-
+            ], finish_reason="tool_calls"),
+        ],
+        content_round("Here is my answer."),
+    ])
+    dispatcher = make_mock_dispatcher()
     store = InMemorySessionStore()
     session = make_session()
     await store.save(session)
-    engine = make_engine(MixedLLMClient(), session_store=store)
 
-    with pytest.raises(MixedStreamResponseError):
-        async for _event in engine.chat_stream("test-session", "hello", MockDb()):
-            pass
+    engine = make_engine(llm, session_store=store, dispatcher=dispatcher, max_tool_rounds=1)
+    response = await engine.chat("test-session", "hello", MockDb())
+
+    assert dispatcher.dispatch.call_count == 1
+    assert response.message == "Here is my answer."
+    saved = await store.get("test-session")
+    roles = [m["role"] for m in saved.messages]
+    assert roles == ["user", "assistant", "tool", "assistant"]
 
 
 @pytest.mark.asyncio

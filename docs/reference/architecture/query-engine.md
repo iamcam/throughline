@@ -93,8 +93,6 @@ Runs once per `chat()`/`chat_stream()` call, before the tool-calling loop starts
 
 **`StreamAccumulator` (`src/query/stream_accumulator.py`, Phase 17)**
 ```python
-class MixedStreamResponseError(Exception): ...
-
 class StreamAccumulator:
     async def accumulate(
         self, chunks: AsyncIterator[StreamChunk]
@@ -102,7 +100,7 @@ class StreamAccumulator:
 ```
 Consumes one round's `StreamChunk` sequence from `LLMClient.stream()`. Yields content deltas live as plain `str` — forwarded to the frontend as they arrive — and reconstructs tool calls from `ToolCallDelta` fragments, joined by `index` (parallel tool calls interleave their argument fragments across chunks; `index` is what keeps them straight). Yields exactly one terminal `LLMResponse` per round, the same type `complete()` returns — the streaming and non-streaming paths converge on one representation of "a round finished."
 
-A round is assumed to be either a content round or a tool-call round, never both — mirroring `LLMResponse.content`'s "None when model is making tool calls" contract. A chunk sequence that violates this (content deltas followed by tool-call deltas, or vice versa) raises `MixedStreamResponseError` — fails the turn defensively rather than retrying (retry would require buffering the whole round, defeating the point of live token forwarding) or silently merging the two. The session is not saved on this path, same precedent as `LLMTimeoutError` below.
+A round is nominally content-only or tool-call-only, mirroring `LLMResponse.content`'s "`None` during tool calls" contract — but Claude sometimes emits a short text preamble (e.g. "I'll search for that...") before switching to `tool_calls` deltas in the same round. `accumulate()` no longer raises on this (`MixedStreamResponseError` removed, P0.20 fix): tool calls always win. Content preceding tool-call deltas is still yielded live as `str` (already streamed, can't be recalled) but excluded from the round's terminal `LLMResponse.content`, which comes back `None`; content arriving after tool-call deltas is caught before yielding and dropped outright. Both cases log a warning. The engine's tool-dispatch loop only sees the terminal `LLMResponse`, so a mixed round always resolves as tool-only downstream — see `chat_stream()` below for how the leaked live content is kept out of the persisted/returned message.
 
 **Whitespace-only content deltas do not count as "content happened."** Discovered against a real thinking-model backend (Qwen 3.5 via MLX, in "thinking mode"): the model streams its reasoning separately via a `reasoning_content` delta field (which `OpenAICompatibleLLMClient.stream()` never reads — reasoning text never becomes a `StreamChunk` at all), but then emits a `content` delta of exactly `"\n\n"` as a transition artifact immediately before its `tool_calls` deltas. A naive truthiness check (`if chunk.content_delta:`) treats that as real content and incorrectly trips `MixedStreamResponseError`. `accumulate()` instead gates on `chunk.content_delta.strip()` — a whitespace-only delta is neither yielded as a token nor counted toward "content happened," while genuine internal whitespace inside real content (e.g. a paragraph break within an actual answer) still passes through unchanged, since the *original* unstripped string is what gets yielded once the check passes.
 
@@ -133,14 +131,14 @@ class QueryEngine:
     ) -> AsyncIterator[StatusEvent | TokenEvent | DoneEvent]: ...
 
     async def chat(self, session_id: str, user_message: str, db: AsyncSession) -> ChatResponse:
-        # Thin wrapper (Phase 17): drains chat_stream(), accumulates TokenEvent.delta
-        # into the final message string, captures DoneEvent.citations, and returns
-        # the same ChatResponse shape this method has always returned.
+        # Thin wrapper (Phase 17): drains chat_stream(), builds ChatResponse from
+        # the terminal DoneEvent's citations and message -- not from re-accumulating
+        # TokenEvent.delta, which can include leaked preamble from a tool round.
         # One code path serves both the blocking and streaming endpoints.
         ...
 ```
 
-**`chat_stream()` is the real orchestrator (Phase 17).** It runs the same session lookup, `QueryRewriter` call, and bounded tool-calling loop `chat()` always has, but each round is consumed via `_stream_round()` — which wraps `with_heartbeat(self._stream_accumulator.accumulate(self._llm.stream(...)), STATUS_HEARTBEAT_SECONDS)` and tracks elapsed time against `LLM_REQUEST_TIMEOUT_SECONDS` itself (since there's no single blocking call left to wrap in `asyncio.wait_for()`). `_stream_round()` yields three kinds of things: `None` (heartbeat tick, from `with_heartbeat`) → `chat_stream()` turns this into a `StatusEvent`; `str` (a content token, from `StreamAccumulator`) → turned into a `TokenEvent(delta=...)`, but only during what turns out to be the final round (tool rounds never produce content tokens in the first place, since a genuine tool-call round has no content deltas to yield — see `StreamAccumulator` above); and the terminal `LLMResponse` for the round, which drives the same tool-call-or-break decision `chat()`'s loop always made. Once the loop ends (via `break` or the `for/else` forced-synthesis fallback), `chat_stream()` yields a final `DoneEvent(citations, session_id)`.
+**`chat_stream()` is the real orchestrator (Phase 17).** It runs the same session lookup, `QueryRewriter` call, and bounded tool-calling loop `chat()` always has, but each round is consumed via `_stream_round()` — which wraps `with_heartbeat(self._stream_accumulator.accumulate(self._llm.stream(...)), STATUS_HEARTBEAT_SECONDS)` and tracks elapsed time against `LLM_REQUEST_TIMEOUT_SECONDS` itself (since there's no single blocking call left to wrap in `asyncio.wait_for()`). `_stream_round()` yields three kinds of things: `None` (heartbeat tick, from `with_heartbeat`) → `StatusEvent`; `str` (a content token, from `StreamAccumulator`) → `TokenEvent(delta=...)` immediately, for any round — previously this only happened on the final round by construction, but a tool round can now leak preamble tokens this way (P0.20); and the terminal `LLMResponse` for the round, which drives the same tool-call-or-break decision `chat()`'s loop always made. Once the loop ends (via `break` or the `for/else` forced-synthesis fallback), `chat_stream()` yields a final `DoneEvent(citations, session_id, message)`, where `message` is `final_content` (this round's `response.content`, the same value saved to `session.messages`) — the source `chat()` reads instead of re-deriving the message from `TokenEvent`s.
 
 Message ordering, `arguments` serialization, the `for/else` synthesis fallback, and the timeout/session-save interaction below are unchanged from pre-Phase-17 behavior — only the shape of how a round's response is obtained changed 	(`stream()` + `StreamAccumulator` instead of a single `complete()` call).
 
