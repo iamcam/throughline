@@ -128,3 +128,21 @@ def make_chunk_result(episode_id=None, display_name="Ada Sinclair") -> ChunkResu
         end_ms=90_000,
         similarity_score=0.88
     )
+
+class FakeIngestionQueue:
+    """No-op IngestionQueue for tests that hit endpoints which enqueue jobs.
+    Records calls but never actually runs anything -- integration tests
+    assert on synchronous request/DB state, not on background job outcomes."""
+
+    def __init__(self):
+        self.enqueued: list[tuple] = []
+
+    async def enqueue(self, episode_id, job_args) -> str:
+        self.enqueued.append((episode_id, job_args))
+        return "fake-job-id"
+
+    async def get_status(self, job_id: str):
+        return None
+
+    async def cancel(self, job_id: str) -> bool:
+        return False

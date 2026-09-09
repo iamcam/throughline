@@ -1,14 +1,20 @@
 # tests/integration/conftest.py
 import pytest
+import time
+
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from asgi_lifespan import LifespanManager
 
+from src.api.dependencies import get_ingestion_queue
 from src.api.main import app
+from src.config import get_settings
 from src.shared.db import get_db
 from src.models.db import Base
-from src.config import get_settings
 from src.llm.base import LLMResponse, ToolCall
+from src.shared.llm import get_embedding_client
+
+from tests.conftest import FakeIngestionQueue, MockEmbeddingClient
 
 settings = get_settings()
 TEST_DATABASE_URL = f"{settings.database_url}_test"
@@ -44,6 +50,9 @@ async def client(db_engine):
                 raise
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_ingestion_queue] = lambda: FakeIngestionQueue()
+    app.dependency_overrides[get_embedding_client] = lambda: MockEmbeddingClient()
+
     async with LifespanManager(app):
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"

@@ -34,12 +34,12 @@ class QueryRewriter:
             response = await asyncio.wait_for(
                 self._llm.complete(
                     messages=[{"role": "user", "content": prompt}],
-                    response_format={"type": "json_object"},
                     temperature=0.0,
                 ),
                 timeout=self._timeout,
             )
-            data = json.loads(response.content)
+            raw = response.content.strip().strip("```json").strip("```").strip()
+            data = json.loads(raw)
             rewritten = data.get("rewritten_query")
             if rewritten and isinstance(rewritten, str):
                 return rewritten
@@ -75,7 +75,7 @@ Conversation so far:
 
 Latest message: "{user_message}"
 
-Respond with this exact JSON format: {{"rewritten_query": "[query text]"}}"""
+Respond with ONLY a JSON object, no explanation, no markdown, no backticks: {{"rewritten_query": "[query text]"}}"""
 
     def _format_history(self, session: ChatSession) -> str:
         lines = [

@@ -175,15 +175,15 @@ All swappable components are defined as Python `Protocol` classes. Concrete impl
 
 Full code, dataclasses, and design notes: `docs/reference/architecture/protocols.md`
 
-| Protocol                                             | Key method(s)                                                                           | Implementations                                                     |
-| ---------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `LLMClient` (`src/llm/base.py`)                      | `complete(messages, tools=None, response_format=None, temperature=0.7) -> LLMResponse`  | `OpenAICompatibleLLMClient`, `MockLLMClient`                        |
+| Protocol                                             | Key method(s)                                                                           | Implementations                                                                                          |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `LLMClient` (`src/llm/base.py`)                      | `complete(messages, tools=None, response_format=None, temperature=0.7) -> LLMResponse`  | `OpenAICompatibleLLMClient`, `MockLLMClient`                                                             |
 | `EmbeddingClient` (`src/llm/base.py`)                | `embed(texts: list[str]) -> list[list[float]]`                                          | `OpenAICompatibleEmbeddingClient`, `LocalEmbeddingClient` (sentence-transformers), `MockEmbeddingClient` |
-| `TranscriptionService` (`src/transcription/base.py`) | `transcribe(audio_path, language="en") -> TranscriptResult`                             | `LocalTranscriptionService` (Whisper), `RemoteTranscriptionService` |
-| `DiarizationService` (`src/diarization/base.py`)     | `diarize(audio_path) -> DiarizationResult`                                              | `LocalDiarizationService` (Senko)                                   |
-| `IngestionQueue` (`src/ingestion/queue.py`)          | `enqueue(episode_id, job_args)`, `get_status(job_id)`, `cancel(job_id)`                 | `StreaqQueue` (default), `BackgroundTaskQueue` (fallback)           |
-| `VectorStore` (`src/storage/vector_store.py`)        | `search(embedding, filters, top_k=5, db) -> list[RawChunkResult]`, `upsert(chunks, db)` | `PgvectorStore`                                                     |
-| `SessionStore` (`src/query/session_store.py`)        | `get(session_id)`, `save(session)`, `delete(session_id)`, `list_sessions()`             | `InMemorySessionStore`                                              |
+| `TranscriptionService` (`src/transcription/base.py`) | `transcribe(audio_path, language="en") -> TranscriptResult`                             | `LocalTranscriptionService` (Whisper), `RemoteTranscriptionService`                                      |
+| `DiarizationService` (`src/diarization/base.py`)     | `diarize(audio_path) -> DiarizationResult`                                              | `LocalDiarizationService` (Senko)                                                                        |
+| `IngestionQueue` (`src/ingestion/queue.py`)          | `enqueue(episode_id, job_args)`, `get_status(job_id)`, `cancel(job_id)`                 | `StreaqQueue` (default), `BackgroundTaskQueue` (fallback)                                                |
+| `VectorStore` (`src/storage/vector_store.py`)        | `search(embedding, filters, top_k=5, db) -> list[RawChunkResult]`, `upsert(chunks, db)` | `PgvectorStore`                                                                                          |
+| `SessionStore` (`src/query/session_store.py`)        | `get(session_id)`, `save(session)`, `delete(session_id)`, `list_sessions()`             | `InMemorySessionStore`                                                                                   |
 
 ---
 
@@ -575,6 +575,12 @@ Summary: `db` (Postgres + pgvector) and `redis` (streaQ job queue backend) are t
 - `MockVectorStore` — configurable results, records last call args
 - `MockHydrator` — configurable hydrated results
 - `MockEmbeddingClient` — configurable vector output
+
+**Test isolation** — `Settings.testing` auto-detects via `"pytest" in sys.modules` (true under `uv run pytest`, false otherwise) — nothing to set in `.env`, nothing to remember to flip back. When `True`:
+- The API lifespan (`src/api/main.py`) skips building the real `WorkerContext`, `BackgroundTaskQueue`, and OTel telemetry setup entirely — no real LLM/embedding client, transcription `ProcessPoolExecutor`, or Phoenix connection gets constructed per test process.
+- The integration `client` fixture (`tests/integration/conftest.py`) overrides `get_ingestion_queue` (`FakeIngestionQueue`) and `get_embedding_client` (`MockEmbeddingClient`) by default, since FastAPI DI resolves these independent of the lifespan (e.g. the chat endpoint's `QueryEngine` needs an embedding client for retrieval).
+
+This exists because those real services are expensive to construct per test — a fresh `ProcessPoolExecutor`, a real `SentenceTransformer` load plus Hugging Face Hub cache verification — and `BackgroundTaskQueue.enqueue()` is fire-and-forget, so an un-mocked test hitting an ingest/reingest endpoint would trigger a real, unawaited pipeline run in the background. A test that needs to exercise a dependency not already covered here should add its own `app.dependency_overrides` entry rather than falling through to the real implementation.
 
 **Integration tests** — real DB, mock LLM/transcription/embedding:
 - Full ingestion pipeline with `sample_transcript.json` fixture (skips audio/Whisper)

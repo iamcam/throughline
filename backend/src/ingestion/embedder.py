@@ -80,16 +80,29 @@ class Embedder:
                 raise
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        """Embeds arbitrary texts. Used by the pipeline for segment embeddings."""
+        """
+        Embeds arbitrary texts. Used by the pipeline for segment embeddings.
+        Batches the same way embed() does, to avoid oversized requests.
+        """
         with tracer.start_as_current_span("embed_texts") as span:
             span.set_attribute("openinference.span.kind", "CHAIN")
             span.set_attribute("embedding.text_count", len(texts))
+            span.set_attribute("embedding.batch_size", self._batch_size)
+            span.set_attribute(
+                "embedding.batch_count",
+                math.ceil(len(texts) / self._batch_size) if texts else 0
+            )
 
             if not texts:
                 return []
 
             try:
-                return await self._client.embed(texts)
+                vectors: list[list[float]] = []
+                for batch_start in range(0, len(texts), self._batch_size):
+                    batch = texts[batch_start: batch_start + self._batch_size]
+                    logger.debug("Embedding batch of %d texts", len(batch))
+                    vectors.extend(await self._client.embed(batch))
+                return vectors
             except Exception as e:
                 span.record_exception(e)
                 span.set_status(trace.StatusCode.ERROR, str(e))

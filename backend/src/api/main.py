@@ -13,9 +13,11 @@ from src.ingestion.pipeline_runner import (
     WorkerContext,
     build_pipeline_services,
     build_transcription_service,
+    build_diarization_service,
     clear_audio_storage,
     run_ingest,
 )
+from src.diarization.local import LocalDiarizationService
 from src.shared.llm import get_llm_client, get_embedding_client
 
 settings = get_settings()
@@ -43,22 +45,29 @@ def _make_job_runner(worker_context: WorkerContext, settings):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    setup_telemetry(settings)
+    if not settings.testing:
+        setup_telemetry(settings)
     clear_audio_storage(settings)
+
     app.state.session_store = InMemorySessionStore()
 
     async with AsyncExitStack() as stack:
         transcription_service = None
-        if settings.redis_url:
+        diarization_service = None
+        if settings.testing:
+            pass  # tests override get_ingestion_queue directly; nothing to build
+        elif settings.redis_url:
             queue = StreaqQueue(redis_url=settings.redis_url)
             await stack.enter_async_context(queue)
             app.state.ingestion_queue = queue
         else:
             transcription_service = build_transcription_service(settings)
+            diarization_service = build_diarization_service(settings)
             worker_context = WorkerContext(
                 llm_client=get_llm_client(),
                 embedding_client=get_embedding_client(),
                 transcription_service=transcription_service,
+                diarization_service=diarization_service,
             )
             app.state.ingestion_queue = BackgroundTaskQueue(
                 max_concurrent=settings.max_concurrent_ingestions,
@@ -70,10 +79,13 @@ async def lifespan(app: FastAPI):
         if not settings.redis_url and isinstance(transcription_service, LocalTranscriptionService):
             transcription_service.shutdown()
 
+        if not settings.redis_url and isinstance(diarization_service, LocalDiarizationService):
+            diarization_service.shutdown()
+
 
 app = FastAPI(
     title="Throughline Knowledge Engine",
-    version="1.1.0",
+    version="1.7.1",
     lifespan=lifespan
 )
 

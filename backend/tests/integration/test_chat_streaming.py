@@ -29,9 +29,12 @@ def _parse_sse(raw_lines: list[str]) -> list[tuple[str, str]]:
 
 @pytest.mark.asyncio
 async def test_message_stream_returns_token_and_done_events(client):
-    mock_llm = MockLLMClient(stream_chunks=[
-        [StreamChunk(content_delta="Marcus talks about consciousness a lot.", finish_reason="stop")]
-    ])
+    mock_llm = MockLLMClient(
+        response_content="What does Marcus think?",
+        stream_chunks=[
+            [StreamChunk(content_delta="Marcus talks about consciousness a lot.", finish_reason="stop")]
+        ],
+    )
     app.dependency_overrides[get_llm_client] = lambda: mock_llm
 
     try:

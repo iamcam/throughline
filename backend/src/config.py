@@ -1,4 +1,5 @@
 # src/config.py
+import sys
 import logging
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
@@ -7,6 +8,8 @@ from pydantic import model_validator
 
 class Settings(BaseSettings):
     # App
+    testing: bool = "pytest" in sys.modules
+
     log_level: str = "WARN"
     audio_storage_path: str = "./data/audio"
 
