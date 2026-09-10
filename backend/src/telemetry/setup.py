@@ -17,7 +17,7 @@ def setup_telemetry(settings: Settings) -> None:
   from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
   from openinference.instrumentation.openai import OpenAIInstrumentor
 
-  resource = Resource(attributes={
+  resource = Resource.create({
     "openinference.project.name": settings.otel_project_name,
   })
 
