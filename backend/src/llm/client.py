@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI
 from src.llm.base import LLMResponse, StreamChunk, ToolCall, ToolCallDelta
+from src.llm.model_capabilities import needs_reasoning_effort_none, supports_temperature
 import json
 import logging
 
@@ -18,6 +19,8 @@ class OpenAICompatibleLLMClient:
     def __init__(self, base_url: str, api_key: str, model: str):
         self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
         self._model = model
+        self._supports_temperature = supports_temperature(model)
+        self._needs_reasoning_effort_none = needs_reasoning_effort_none(model)
 
     async def complete(
         self,
@@ -29,12 +32,15 @@ class OpenAICompatibleLLMClient:
         kwargs = dict(
             model=self._model,
             messages=messages,
-            temperature=temperature,
         )
+        if self._supports_temperature:
+            kwargs["temperature"] = temperature
         if response_format:
             kwargs["response_format"] = response_format
         if tools:
             kwargs["tools"] = tools
+            if self._needs_reasoning_effort_none:
+                kwargs["reasoning_effort"] = "none"
 
         response = await self._client.chat.completions.create(**kwargs)
         message = response.choices[0].message
@@ -70,11 +76,14 @@ class OpenAICompatibleLLMClient:
         kwargs = dict(
             model=self._model,
             messages=messages,
-            temperature=temperature,
             stream=True,
         )
+        if self._supports_temperature:
+            kwargs["temperature"] = temperature
         if tools:
             kwargs["tools"] = tools
+            if self._needs_reasoning_effort_none:
+                kwargs["reasoning_effort"] = "none"
 
         response_stream = await self._client.chat.completions.create(**kwargs)
 
