@@ -102,6 +102,14 @@ does, since `__init__` performs real model-loading work.
 Deliberately requires no query/document prefix, which keeps `embed()`'s flat `texts: list[str]` signature accurate;
 see `FUTURE_SCOPE.md` 2.11 for the deferred design to support prefix-sensitive models later.
 
+**`OpenAICompatibleEmbeddingClient` dimensions (Phase 19.1):** `__init__` takes a required `dimensions: int`, and
+`embed()` always includes `dimensions=self._dimensions` in the `embeddings.create()` request — unconditionally, with
+no per-endpoint opt-in flag. This was verified empirically before writing any code: both Ollama's OpenAI-compatible
+embeddings endpoint (`nomic-embed-text`) and OpenAI's real API honored an explicit `dimensions` value correctly
+(neither rejected nor silently ignored it), which ruled out the originally-planned opt-in flag as unnecessary. No
+client-side length check is done on the returned vector — `PgvectorStore`'s column has a fixed dimension, so a
+mismatched vector already fails at insert time at the DB layer.
+
 ## TranscriptionService (`src/transcription/base.py`)
 
 ```python

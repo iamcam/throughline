@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     # Embeddings
     embedding_base_url: str = "" # empty - use LLM base url; OpenAI-compatible API client; "local" to run local embedding
-    embedding_api_key: str = "none"
+    embedding_api_key: str = "" # empty - use LLM api key if not preseent
     embedding_model_name: str = "nomic-embed-text"
     embedding_dimensions: int = 768
 

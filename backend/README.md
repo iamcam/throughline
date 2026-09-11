@@ -189,6 +189,8 @@ Full code, dataclasses, and design notes: `docs/reference/architecture/protocols
 
 **Embedding backend consistency:** `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL_NAME`, and `EMBEDDING_DIMENSIONS` must be identical across every API and worker deployment sharing the same pgvector data. Unlike `LLMClient` — where API and worker can safely run different models — `EmbeddingClient` output from ingestion (worker) and from a query (API) is compared directly by `PgvectorStore`. A mismatch doesn't raise an error; it silently degrades retrieval, since two different models can produce same-dimension vectors that occupy unrelated vector spaces. Changing the embedding model or backend requires re-embedding every existing chunk before it's queryable again — there's no partial-migration path.
 
+**Remote embedding `dimensions` (Phase 19.1):** `OpenAICompatibleEmbeddingClient` always sends `dimensions=EMBEDDING_DIMENSIONS` as a request parameter to the embeddings endpoint — unconditionally, no opt-in flag. Verified directly against both Ollama's OpenAI-compatible embeddings endpoint and OpenAI's real API before shipping: both honor an explicit `dimensions` value rather than rejecting or silently ignoring it. This means the "different models, same dimensionality" mismatch described above is still not detectable this way, but a provider that ignored `dimensions` and returned the wrong size anyway now fails fast at `PgvectorStore` insert time (its column has a fixed dimension) rather than only showing up as degraded retrieval quality later.
+
 ---
 
 ### 3.4 Ingestion Pipeline, Queue, and Worker Model
@@ -581,6 +583,8 @@ Summary: `db` (Postgres + pgvector) and `redis` (streaQ job queue backend) are t
 - The integration `client` fixture (`tests/integration/conftest.py`) overrides `get_ingestion_queue` (`FakeIngestionQueue`) and `get_embedding_client` (`MockEmbeddingClient`) by default, since FastAPI DI resolves these independent of the lifespan (e.g. the chat endpoint's `QueryEngine` needs an embedding client for retrieval).
 
 This exists because those real services are expensive to construct per test — a fresh `ProcessPoolExecutor`, a real `SentenceTransformer` load plus Hugging Face Hub cache verification — and `BackgroundTaskQueue.enqueue()` is fire-and-forget, so an un-mocked test hitting an ingest/reingest endpoint would trigger a real, unawaited pipeline run in the background. A test that needs to exercise a dependency not already covered here should add its own `app.dependency_overrides` entry rather than falling through to the real implementation.
+
+**Note (Phase 19.1):** no test currently constructs `OpenAICompatibleEmbeddingClient` directly, despite the contract-test claim below — this gap is deliberately closed in Phase 20's new `tests/unit/test_llm_client.py` rather than in isolation, since that phase touches the same file and needs its own test coverage added anyway.
 
 **Integration tests** — real DB, mock LLM/transcription/embedding:
 - Full ingestion pipeline with `sample_transcript.json` fixture (skips audio/Whisper)

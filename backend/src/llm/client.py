@@ -107,14 +107,16 @@ class OpenAICompatibleEmbeddingClient:
     Configure with EMBEDDING_BASE_URL, EMBEDDING_API_KEY, EMBEDDING_MODEL_NAME in .env
     """
 
-    def __init__(self, base_url: str, api_key: str, model: str):
+    def __init__(self, base_url: str, api_key: str, model: str, dimensions: int):
         self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
         self._model = model
+        self._dimensions = dimensions
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         response = await self._client.embeddings.create(
             model=self._model,
             input=texts,
+            dimensions=self._dimensions
         )
         # Response items are ordered by index, not by input order
         # Sort by index to guarantee alignment with input list
