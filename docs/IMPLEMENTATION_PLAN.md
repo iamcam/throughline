@@ -11,7 +11,7 @@ Phases 0 through 18 (including the unplanned 10.1 follow-up) are **✅ Complete*
 
 For what to build next, see `FUTURE_SCOPE.md` — in particular its "What to Build Next (Recommended Order)" section.
 
-Phase 19 (Local Embedding Support) is 🚧 in progress — see the task breakdown below. Phase 19.1 (Remote Embedding `dimensions` Parameter) is ✅ Complete — see `docs/reference/phases/phase-19.1-embedding-dimensions-param.md`. Phase 20 (OpenAI Model Compatibility) is ✅ Complete as of `v1.7.3`.
+Phase 19 (Local Embedding Support) is 🚧 in progress — see the task breakdown below. Phase 19.1 (Remote Embedding `dimensions` Parameter) is ✅ Complete — see `docs/reference/phases/phase-19.1-embedding-dimensions-param.md`. Phase 20 (OpenAI Model Compatibility) is ✅ Complete as of `v1.7.3`. Phase 20.1 (Transcript Segmentation Hardening) is ✅ Complete as of `v1.7.4` — see `docs/reference/phases/phase-20.1-transcript-segmentation-hardening.md`.
 
 ## Before You Start
 
@@ -64,6 +64,7 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 | 19    | Local embedding support 🚧 In Progress                       | Embeddings can be produced locally (sentence-transformers) or via external API, selected per-deployment via `.env` | See "Phase 19" section below |
 | 19.1  | Remote embedding `dimensions` param ✅ Complete                | Remote embedding endpoints that support OpenAI's `dimensions` parameter can request 768-dim output directly, matching the pgvector schema without relying on the provider's default | `docs/reference/phases/phase-19.1-embedding-dimensions-param.md` |
 | 20    | OpenAI model compatibility ✅ Complete                        | LLM calls adapt automatically for OpenAI's gpt-5+ family: non-default `temperature` is omitted, and `reasoning_effort` is set to `"none"` when tools are used, instead of erroring | See "Phase 20" section below |
+| 20.1  | Transcript segmentation hardening ✅ Complete                 | Local transcription segments never exceed the embedding token limit even when Whisper drops sentence punctuation on a long run of speech | `docs/reference/phases/phase-20.1-transcript-segmentation-hardening.md` |
 
 ---
 
@@ -197,3 +198,4 @@ Test that BackgroundTaskQueue satisfies the IngestionQueue Protocol."
 | `v1.7.1`                              | Test isolation: `Settings.testing` auto-detects via `"pytest" in sys.modules`, skipping real `WorkerContext`/OTel construction in the API lifespan under test; `client` fixture default-overrides `get_ingestion_queue` and `get_embedding_client`; fixed a `WorkerContext` construction bug (missing `diarization_service`) in the no-Redis lifespan path found along the way |
 | `v1.7.2`                              | Phase 19.1 — remote embedding `dimensions` parameter: `OpenAICompatibleEmbeddingClient` always requests `EMBEDDING_DIMENSIONS` via the API's `dimensions` field, verified directly against Ollama and OpenAI; a mismatched vector now fails at `PgvectorStore` insert time instead of silently degrading retrieval |
 | `v1.7.3`                              | Phase 20 — OpenAI gpt-5+ compatibility: `src/llm/model_capabilities.py` classifies the gpt-5+ family; `OpenAICompatibleLLMClient` omits `temperature` and sets `reasoning_effort="none"` for tool calls accordingly; verified live against gpt-5.5-luna |
+| `v1.7.4`                              | Phase 20.1 — transcript segmentation hardening: three-tier segmentation (punctuation → pause-rescue → hard-cut) in `LocalTranscriptionService` fixes an embedding-token-limit crash caused by Whisper occasionally dropping sentence punctuation on long runs of speech; settings-driven via `Settings`, verified against faster_whisper and mlx_whisper |

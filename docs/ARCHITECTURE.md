@@ -266,12 +266,16 @@ EMBEDDING_BASE_URL=http://localhost:11434/v1
 EMBEDDING_API_KEY=ollama
 EMBEDDING_MODEL_NAME=nomic-embed-text
 EMBEDDING_DIMENSIONS=768
+EMBEDDING_MAX_INPUT_TOKENS=8000
 
 # Transcription
 TRANSCRIPTION_BACKEND=local             # local | remote
 TRANSCRIPTION_SERVICE_URL=http://localhost:8001
 WHISPER_BACKEND=faster_whisper          # faster_whisper | mlx_whisper
 WHISPER_MODEL=medium               # tiny | base | small | medium | large-v3
+TRANSCRIPTION_MIN_SEGMENT_WORDS=5
+TRANSCRIPTION_MAX_SEGMENT_TOKENS=200
+TRANSCRIPTION_PAUSE_THRESHOLD_S=1.2
 
 # Diarization
 PIPELINE_MAX_WORKERS=1                  # ProcessPoolExecutor size shared by local Whisper and local Senko

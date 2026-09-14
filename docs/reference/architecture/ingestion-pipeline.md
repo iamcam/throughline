@@ -149,7 +149,11 @@ Whisper and Senko are both CPU/GPU-bound and will block the worker's event loop 
 ```python
 # src/transcription/local.py
 class LocalTranscriptionService:
-    def __init__(self, whisper_backend, whisper_model, max_workers=1, executor=None):
+    def __init__(
+        self, whisper_backend, whisper_model,
+        min_segment_words, max_segment_tokens, pause_threshold_s,
+        max_workers=1, executor=None,
+    ):
         self._executor = executor or ProcessPoolExecutor(max_workers=max_workers)
 
     async def transcribe(self, audio_path, language="en"):
@@ -157,6 +161,7 @@ class LocalTranscriptionService:
         return await loop.run_in_executor(
             self._executor, _transcribe_sync, audio_path, language,
             self._whisper_backend, self._model_size,
+            self._min_segment_words, self._max_segment_tokens, self._pause_threshold_s,
         )
 ```
 
@@ -228,7 +233,12 @@ Swappable behind the `TranscriptionService` Protocol. See `docs/reference/archit
 TRANSCRIPTION_BACKEND=local          # local | remote
 TRANSCRIPTION_SERVICE_URL=http://localhost:8001
 WHISPER_MODEL=medium
+TRANSCRIPTION_MIN_SEGMENT_WORDS=5    # floor before a punctuation or pause cut is allowed to fire
+TRANSCRIPTION_MAX_SEGMENT_TOKENS=200 # crossing this with no punctuation triggers the pause-rescue/hard-cut fallback below
+TRANSCRIPTION_PAUSE_THRESHOLD_S=1.2  # word-timestamp gap treated as a natural speech pause during rescue
 ```
+
+**Segmentation (punctuation → pause-rescue → hard-cut):** `_build_segments_from_words` in `src/transcription/local.py` normally cuts segments on terminal punctuation (`.`/`?`/`!`/`...`/`。`), same as before Phase 20.1. This alone isn't safe: Whisper has a known upstream bug where it occasionally drops sentence-ending punctuation entirely across a long run of speech, which let one segment grow unbounded and eventually exceed the embedding API's token limit. The fix adds two fallback tiers that only engage once an unpunctuated run crosses `TRANSCRIPTION_MAX_SEGMENT_TOKENS`: first, search backward (past `TRANSCRIPTION_MIN_SEGMENT_WORDS`) for a word-timestamp gap greater than `TRANSCRIPTION_PAUSE_THRESHOLD_S` and cut there; if no such pause exists, hard-cut at the token boundary and log a warning. Pause-based cutting is deliberately never used as a routine/opportunistic segmentation signal — natural speaking cadence includes pauses inside otherwise-normal sentences, so it only applies as a last resort once punctuation has already failed. Full design rationale and test coverage: `docs/reference/phases/phase-20.1-transcript-segmentation-hardening.md`.
 
 **Diarization:** Fully separate from transcription — see "Diarization + Alignment" below. Transcription's only remaining job is speech-to-text; every segment it produces is written with `speaker_id = 'UNKNOWN'` and relabeled afterward by the diarization + alignment stage.
 

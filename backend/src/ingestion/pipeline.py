@@ -25,7 +25,6 @@ from src.models.db import Episode
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class PipelineServices:
     status: PipelineStatusService
@@ -158,6 +157,17 @@ async def ingest_episode(
                 return
 
             segment_texts = [s.text for s in segments]
+
+            # Log any oversized transcript segments prior to embedding
+            for i, text in enumerate(segment_texts):
+                token_count = services.chunker.count_tokens(text)
+                if token_count > services.embedder.max_input_tokens:
+                    logger.warning(
+                        "Oversized transcript segment before embedding: episode_id=%s; index=%d tokens=%d "
+                        "words=%d start_ms=%d end_ms=%d preview=%r",
+                        episode_id, i, token_count, len(text.split()),
+                        segments[i].start_ms, segments[i].end_ms, text[:100],
+                    )
             t0 = time.monotonic()
             segment_embeddings = await services.embedder.embed_texts(segment_texts)
             logger.info(

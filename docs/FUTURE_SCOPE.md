@@ -324,6 +324,16 @@ Discovered via real-episode testing: some podcast hosting platforms (confirmed: 
 
 Deprioritized below 1.13 (name resolution quality) — see 1.13's rationale for why.
 
+### 2.8f Diarize-Before-Transcribe Pipeline Ordering (Investigation)
+
+Raised while investigating Phase 20.1's transcript-segmentation fix. A long, unpunctuated run of speech (the failure mode Phase 20.1 defends against) is also exactly the kind of segment most likely to span a genuine speaker change — and alignment (see 2.8b) assigns a whole segment's `speaker_id` to whichever diarization turn overlaps it most, so any speaker change inside one of these longer segments is silently misattributed to the dominant speaker rather than split.
+
+**Proposed direction, not yet built:** run diarization before (or in parallel with) transcription, then combine the two independent outputs — diarization turns and Whisper's word-level timestamps — into segments that respect both sentence boundaries and speaker-turn boundaries, rather than deriving segments from words alone and reconciling speaker identity afterward. This is 2.8b's word-level alignment idea, revisited with a concrete trigger (long unpunctuated runs) instead of a general precision concern.
+
+**Before building anything:** quantify whether this is a real problem, per 2.8b's own stated bar ("worth revisiting only if segment-level misattribution proves to be a real, frequently-observed problem in practice — not before"). A rough measurement script and full write-up are saved at `docs/reference/investigations/speaker-misattribution-estimate.md` — it measures, without any pipeline changes, how much word-time in each segment the current pipeline produces belongs to a non-dominant diarization turn (i.e. speech silently misattributed today because alignment can only assign one speaker_id per segment). Copy it into `experiments/` to run it.
+
+**Done when:** the script has been run against a handful of real episodes, giving a concrete answer — either closing this out as negligible, or providing the evidence to justify the reordering work above.
+
 ---
 
 ### 2.9 Chunker: Speaker Misattribution on Short-Segment Merge

@@ -40,9 +40,15 @@ class Settings(BaseSettings):
     embedding_model_name: str = "nomic-embed-text"
     embedding_dimensions: int = 768
 
+    embedding_max_input_tokens: int = 8000
+
     # Transcription
     transcription_service_url: str = ""
     transcription_api_key: str | None = None
+
+    transcription_min_segment_words: int = 5
+    transcription_max_segment_tokens: int = 200
+    transcription_pause_threshold_s: float = 1.2
 
     whisper_backend: str = "faster_whisper"
     whisper_model: str = "medium"

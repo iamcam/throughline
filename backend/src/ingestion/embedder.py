@@ -5,14 +5,22 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import replace
+from typing import Callable
 
 from opentelemetry import trace
+import tiktoken
 
 from src.ingestion.chunker import ChunkData
 from src.llm.base import EmbeddingClient
 from src.telemetry.tracer import tracer
 
 logger = logging.getLogger(__name__)
+
+# load once rather than ever time tokenizer is used
+_encoder = tiktoken.get_encoding("cl100k_base")
+
+def _default_tokenizer(text: str) -> int:
+    return len(_encoder.encode(text))
 
 
 class Embedder:
@@ -26,9 +34,17 @@ class Embedder:
     embedding endpoint.
     """
 
-    def __init__(self, embedding_client: EmbeddingClient, batch_size: int = 100):
+    def __init__(
+            self,
+            embedding_client: EmbeddingClient,
+            batch_size: int = 100,
+            max_input_tokens: int = 256,
+            tokenizer: Callable[[str], int] | None = None
+            ):
         self._client = embedding_client
         self._batch_size = batch_size
+        self._tokenizer = tokenizer or _default_tokenizer
+        self.max_input_tokens = max_input_tokens
 
     async def embed(self, chunks: list[ChunkData]) -> list[ChunkData]:
         """

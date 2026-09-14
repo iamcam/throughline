@@ -80,7 +80,11 @@ class Chunker:
         self._overlap = chunk_overlap_tokens
         self._threshold = topic_similarity_threshold
         self._min_tokens = min_tokens
-        self._tokenize = tokenizer or _default_tokenizer
+        self._tokenizer = tokenizer or _default_tokenizer
+
+
+    def count_tokens(self, text: str) -> int:
+        return self._tokenizer(text)
 
 
     def chunk(
@@ -158,7 +162,7 @@ class Chunker:
         for topic in topic_segments:
             parent_id = uuid.uuid4()
             parent_text = topic.text
-            parent_token_count = self._tokenize(parent_text)
+            parent_token_count = self._tokenizer(parent_text)
 
             parent = ChunkData(
                 id=parent_id,
@@ -210,7 +214,7 @@ class Chunker:
         while start < total_words:
             end = min(start + self._chunk_size, total_words)
             window_text = " ".join(words[start:end])
-            token_count = self._tokenize(window_text)
+            token_count = self._tokenizer(window_text)
 
             # Linear interpolation for timestamps
             leaf_start_ms = start_ms + int((start / total_words) * duration_ms)
@@ -250,7 +254,7 @@ class Chunker:
 
             merged: list[TopicSegment] = []
             for segment in segments:
-                is_short = self._tokenize(segment.text) < self._min_tokens
+                is_short = self._tokenizer(segment.text) < self._min_tokens
                 same_speaker_as_prev = merged and segment.speaker_id == merged[-1].speaker_id
 
                 if merged and is_short and same_speaker_as_prev:
@@ -266,13 +270,13 @@ class Chunker:
                         logger.info(
                             "Leaving short segment standalone (%d tokens): speaker=%s "
                             "differs from predecessor speaker=%s",
-                            self._tokenize(segment.text), segment.speaker_id, merged[-1].speaker_id,
+                            self._tokenizer(segment.text), segment.speaker_id, merged[-1].speaker_id,
                         )
                     merged.append(segment)
 
             # If first segment is short and has no predecessor, merge forward
             # into the second, but only if they share a speaker.
-            if len(merged) >= 2 and self._tokenize(merged[0].text) < self._min_tokens:
+            if len(merged) >= 2 and self._tokenizer(merged[0].text) < self._min_tokens:
                 if merged[0].speaker_id == merged[1].speaker_id:
                     merged[1] = TopicSegment(
                         speaker_id=merged[1].speaker_id,
@@ -285,7 +289,7 @@ class Chunker:
                     logger.info(
                         "Leaving short leading segment standalone (%d tokens): speaker=%s "
                         "differs from successor speaker=%s",
-                        self._tokenize(merged[0].text), merged[0].speaker_id, merged[1].speaker_id,
+                        self._tokenizer(merged[0].text), merged[0].speaker_id, merged[1].speaker_id,
                     )
 
             return merged

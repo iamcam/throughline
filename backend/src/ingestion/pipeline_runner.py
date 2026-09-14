@@ -50,6 +50,9 @@ def build_transcription_service(settings):
     return LocalTranscriptionService(
         whisper_backend=settings.whisper_backend,
         whisper_model=settings.whisper_model,
+        min_segment_words=settings.transcription_min_segment_words,
+        max_segment_tokens=settings.transcription_max_segment_tokens,
+        pause_threshold_s=settings.transcription_pause_threshold_s,
         max_workers=settings.pipeline_max_workers,
     )
 
@@ -80,7 +83,10 @@ def build_pipeline_services(settings, worker_context) -> PipelineServices:
             min_tokens=settings.chunk_min_tokens,
             topic_similarity_threshold=settings.topic_similarity_threshold,
         ),
-        embedder=Embedder(embedding_client=worker_context.embedding_client),
+        embedder=Embedder(
+            embedding_client=worker_context.embedding_client,
+            max_input_tokens=settings.embedding_max_input_tokens,
+            ),
         vector_store=PgvectorStore(),
     )
 

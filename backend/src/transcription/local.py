@@ -2,18 +2,28 @@
 import asyncio
 import logging
 from concurrent.futures import ProcessPoolExecutor
+from typing import Callable
 from opentelemetry import trace
 
 from src.transcription.base import TranscriptResult, TranscriptSegment
 from src.telemetry.tracer import tracer
+import tiktoken
 
 logger = logging.getLogger(__name__)
+
+_encoder = tiktoken.get_encoding("cl100k_base")
+
+def _default_tokenizer(text: str) -> int:
+    return len(_encoder.encode(text))
 
 def _transcribe_sync(
     audio_path: str,
     language: str,
     whisper_backend: str,
     whisper_model: str,
+    min_segment_words: int,
+    max_segment_tokens: int,
+    pause_threshold_s: float,
 ) -> TranscriptResult:
     """
     Runs in a subprocess. No async, no event loop.
@@ -52,52 +62,18 @@ def _transcribe_sync(
         )
         for segment in segments_iter:
             for word in segment.words:
-                words.append((word.start, word.end, word.word))
+                words.append((word.start, word.end, word.word.strip()))
 
     logger.info(f"Finished transcribing.")
 
     # Speaker assignment happens later, in the diarization + alignment stage.
     # Everything here is UNKNOWN until then.
-    segments = []
-    current_words = []
-    current_start = None
-    current_end = 0.0
-
-    for word_start, word_end, word_text in words:
-        if not current_words:
-            current_start = word_start
-        current_words.append(word_text)
-        current_end = word_end
-
-        # Pick a minimum useful sentence length.
-        MIN_SEGMENT_WORDS = 5
-        if word_text.strip().endswith((".", "?", "!", "...", "。")):
-            if len(current_words) >= MIN_SEGMENT_WORDS:
-                segments.append(TranscriptSegment(
-                    speaker_id="UNKNOWN",
-                    text=" ".join(current_words).strip(),
-                    start_ms=int(current_start * 1000),
-                    end_ms=int(current_end * 1000),
-                    sequence_order=len(segments)
-                ))
-                current_words = []
-            # else keep adding words to the next sentence.
-
-    if current_words:
-        segments.append(TranscriptSegment(
-            speaker_id="UNKNOWN",
-            text=" ".join(current_words).strip(),
-            start_ms=int(current_start * 1000),
-            end_ms=int(current_end * 1000),
-            sequence_order=len(segments)
-        ))
-
-    logger.info(f"Finished assigning transcription to 'UNKNOWN' speaker label")
-    return TranscriptResult(
-        segments=segments,
-        language=language,
-        source="whisper_local",
+    segments = _build_segments_from_words(
+        words, min_segment_words, max_segment_tokens, pause_threshold_s,
+        tokenizer=_default_tokenizer,
     )
+    logger.info(f"Segmented into {len(segments)} transcript segments")
+    return TranscriptResult(segments=segments, language=language, source="whisper_local")
 
 
 class LocalTranscriptionService:
@@ -105,11 +81,17 @@ class LocalTranscriptionService:
         self,
         whisper_backend: str,
         whisper_model: str,
+        min_segment_words: int,
+        max_segment_tokens: int,
+        pause_threshold_s: float,
         max_workers: int = 1,
         executor: ProcessPoolExecutor | None = None,
     ):
         self._whisper_backend = whisper_backend
         self._model_size = whisper_model
+        self._min_segment_words = min_segment_words
+        self._max_segment_tokens = max_segment_tokens
+        self._pause_threshold_s = pause_threshold_s
         self._executor = executor or ProcessPoolExecutor(max_workers=max_workers)
 
     def shutdown(self):
@@ -137,6 +119,9 @@ class LocalTranscriptionService:
                     language,
                     self._whisper_backend,
                     self._model_size,
+                    self._min_segment_words,
+                    self._max_segment_tokens,
+                    self._pause_threshold_s,
                 )
 
                 span.set_attribute("transcription.segment_count", len(result.segments))
@@ -148,3 +133,60 @@ class LocalTranscriptionService:
                 span.record_exception(e)
                 span.set_status(trace.StatusCode.ERROR, str(e))
                 raise
+
+def _build_segments_from_words(
+    words: list[tuple[float, float, str]],
+    min_segment_words: int,
+    max_segment_tokens: int,
+    pause_threshold_s: float,
+    tokenizer: Callable[[str], int],
+) -> list[TranscriptSegment]:
+    """Pure -- no I/O, no subprocess dependency. Takes flattened (start, end,
+    text) word tuples (from either whisper backend) and returns segments,
+    using sentence punctuation as the normal boundary and falling back to a
+    pause, then a hard cut, only once an unpunctuated run crosses
+    max_segment_tokens."""
+    segments: list[TranscriptSegment] = []
+    current: list[tuple[float, float, str]] = []
+
+    def _flush(upto: int):
+        nonlocal current
+        piece = current[:upto]
+        segments.append(TranscriptSegment(
+            speaker_id="UNKNOWN",
+            text=" ".join(w[2] for w in piece).strip(),
+            start_ms=int(piece[0][0] * 1000),
+            end_ms=int(piece[-1][1] * 1000),
+            sequence_order=len(segments),
+        ))
+        current = current[upto:]
+
+    for word_start, word_end, word_text in words:
+        current.append((word_start, word_end, word_text))
+
+        ends_sentence = word_text.strip().endswith((".", "?", "!", "...", "。"))
+        if ends_sentence and len(current) >= min_segment_words:
+            _flush(len(current))
+            continue
+
+        token_count = tokenizer(" ".join(w[2] for w in current))
+        if token_count >= max_segment_tokens:
+            cut_at = None
+            for i in range(min_segment_words, len(current) - 1):
+                if current[i + 1][0] - current[i][1] > pause_threshold_s:
+                    cut_at = i + 1
+                    break
+            if cut_at is None:
+                logger.warning(
+                    "Forcing segment cut at %d tokens, no terminal punctuation or pause "
+                    "found -- likely Whisper punctuation dropout on a long run of speech "
+                    "(known upstream issue). start=%.2fs end=%.2fs",
+                    token_count, current[0][0], current[-1][1],
+                )
+                cut_at = len(current)
+            _flush(cut_at)
+
+    if current:
+        _flush(len(current))
+
+    return segments

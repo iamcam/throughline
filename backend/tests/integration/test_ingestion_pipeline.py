@@ -327,6 +327,9 @@ def test_local_transcription_satisfies_protocol():
     svc = LocalTranscriptionService(
         whisper_backend="faster_whisper",
         whisper_model="tiny",
+        min_segment_words=5,
+        max_segment_tokens=200,
+        pause_threshold_s=1.2,
     )
     assert isinstance(svc, TranscriptionService)
 
