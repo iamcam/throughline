@@ -1,4 +1,5 @@
 # src/transcription/local.py
+
 import asyncio
 import logging
 from concurrent.futures import ProcessPoolExecutor
@@ -12,6 +13,13 @@ import tiktoken
 logger = logging.getLogger(__name__)
 
 _encoder = tiktoken.get_encoding("cl100k_base")
+
+def _configure_worker_logging(level: int) -> None:
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+        force=True,
+    )
 
 def _default_tokenizer(text: str) -> int:
     return len(_encoder.encode(text))
@@ -33,12 +41,13 @@ def _transcribe_sync(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    logger.info(f"Begin transcription: {audio_path}")
+    logger.info(f"🎧 Begin transcription: {audio_path}")
     # --- Whisper ---
     # MPS not supported by faster-whisper; fall back to CPU on Apple Silicon
     words = []
     if whisper_backend == "mlx_whisper":
-        logger.info(f"Using mlx_whisper with model {whisper_model}")
+        apple_device = "mlx" if torch.mps.is_available() else "cpu"
+        logger.info(f"Using mlx_whisper with model {whisper_model} ({apple_device})")
         import mlx_whisper
         result = mlx_whisper.transcribe(
             audio_path,
@@ -51,7 +60,7 @@ def _transcribe_sync(
             for w in s.get("words", [])
         ]
     else:
-        logger.info(f"Using faster_whisper with model {whisper_model}")
+        logger.info(f"Using faster_whisper with model {whisper_model} ({device})")
         from faster_whisper import WhisperModel
         compute_type = "int8" if device == "cpu" else "float16"
         whisper = WhisperModel(whisper_model, device=device, compute_type=compute_type)
@@ -92,7 +101,11 @@ class LocalTranscriptionService:
         self._min_segment_words = min_segment_words
         self._max_segment_tokens = max_segment_tokens
         self._pause_threshold_s = pause_threshold_s
-        self._executor = executor or ProcessPoolExecutor(max_workers=max_workers)
+        self._executor = executor or ProcessPoolExecutor(
+            max_workers=max_workers,
+            initializer=_configure_worker_logging,
+            initargs=(logging.getLogger().getEffectiveLevel(),),
+        )
 
     def shutdown(self):
         """Performs a proper shutdown; cleans up any leaked semaphores."""
@@ -109,7 +122,7 @@ class LocalTranscriptionService:
             span.set_attribute("transcription.backend", self._whisper_backend)
             span.set_attribute("transcription.model", self._model_size)
             span.set_attribute("transcription.language", language)
-
+            logger.info("Transcribing - _transcribe_sync upcoming...")
             try:
                 loop = asyncio.get_running_loop()
                 result = await loop.run_in_executor(

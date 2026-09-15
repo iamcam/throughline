@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Throughline Knowledge Engine",
-    version="1.7.4",
+    version="1.7.5",
     lifespan=lifespan
 )
 

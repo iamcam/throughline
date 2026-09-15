@@ -227,6 +227,11 @@ Currently torch/torchaudio are pinned unconditionally to PyTorch's CPU-only inde
 
 ---
 
+### 2.1g Stale pipeline-status sweep
+When a worker is killed abnormally mid-episode (OOM kill, a Modal `timeout=` hard-kill, or any SIGKILL-class termination), the process dies before `ingest_episode`'s `try/except` can run, so `pipeline_status` never reaches `ERROR` — the episode is left frozen at whatever stage it was last in, indistinguishable from one still actively processing. Currently requires manually resetting the episode in the DB. Unlike 2.1d's audio sweep, this should *not* run at worker startup — once more than one worker can be running (e.g. scaled to two machines), "this worker just started" says nothing about whether another worker is still legitimately processing that episode. Needs to be a periodic, fleet-independent sweep instead: flag episodes whose `pipeline_status` is an active/non-terminal stage and whose last update is older than a per-stage threshold (a single flat N-minute cutoff is wrong, since stages have very different normal durations — `DOWNLOADING` depends on file size, `EMBEDDING` on chunk count, etc.). Needs the `updated_at` column on `Episode` (`DateTime(timezone=True)`, `onupdate=func.now()`) as a prerequisite — `PipelineStatusService.set()`'s existing `UPDATE` bumps it automatically, no other code change needed for that part. Trigger mechanism TBD, likely the same scheduling path as feed polling.
+
+---
+
 ### 2.2 Automatic Feed Polling
 
 Shipped in Phase 16. See IMPLEMENTATION_PLAN.md and `docs/reference/phases/phase-16-feed-polling.md`.

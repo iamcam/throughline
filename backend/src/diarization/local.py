@@ -20,16 +20,22 @@ MIN_SEGMENT_S = 0.5
 _diarizer = None
 
 
-def _init_diarizer(device: str) -> None:
+def _init_diarizer(device: str, log_level: int) -> None:
     """
     ProcessPoolExecutor initializer -- runs once when a subprocess starts,
     before any tasks are submitted to it. No async, no event loop.
     """
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+        force=True,
+    )
+
     global _diarizer
     import senko
-
     logger.info(f"Loading Senko diarizer (device={device})")
     _diarizer = senko.Diarizer(device=device, warmup=True)
+
 
 
 def _diarize_sync(audio_path: str) -> DiarizationResult:
@@ -92,7 +98,10 @@ class LocalDiarizationService:
         self._executor = executor or ProcessPoolExecutor(
             max_workers=max_workers,
             initializer=_init_diarizer,
-            initargs=(device,),
+            initargs=(
+                device,
+                logging.getLogger().getEffectiveLevel(),
+            ),
         )
 
     def shutdown(self):
