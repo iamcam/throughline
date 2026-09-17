@@ -6,6 +6,7 @@ import asyncio
 from sqlalchemy import update, delete, select
 
 from sse_starlette.sse import EventSourceResponse
+from src.api.artwork_proxy import fetch_artwork
 from src.shared.db import AsyncSessionLocal
 from src.api.dependencies import get_ingestion_queue
 from src.ingestion.queue import IngestionQueue
@@ -199,3 +200,17 @@ async def reingest_episode_handler(
         "status": "accepted",
         "job_id": job_id,
     }
+
+@router.get("/{episode_id}/artwork")
+async def get_episode_artwork(episode_id: UUID, db: AsyncSession = Depends(get_db)):
+    """
+    Request the cover art in cases where the client cannot load the image directly
+    (eg, host prevents resources from loading on other domains' pages). fetch_artwork
+    will proxy request the image
+    """
+    episode = await feed_service.get_episode(episode_id, db)
+    if not episode:
+        raise HTTPException(status_code=404, detail="Episode not found")
+    if not episode.image_url:
+        raise HTTPException(status_code=404, detail="Episode has no artwork")
+    return await fetch_artwork(episode.image_url)

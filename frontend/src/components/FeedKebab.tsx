@@ -35,6 +35,7 @@ interface KebabPopoverProps {
   feedTitle?: string | null;
   deleteMutation: MutationLike;
   refreshMutation: MutationLike;
+  className?: string | undefined;
 }
 
 interface KebabDeleteProps {
@@ -65,7 +66,7 @@ function Confirmation({ isOpen, onDelete, onCancel, feedTitle }: KebabDeleteProp
   )
 }
 
-export default function FeedKebab({ feedId, feedTitle, deleteMutation, refreshMutation }: KebabPopoverProps) {
+export default function FeedKebab({ feedId, feedTitle, deleteMutation, refreshMutation, className }: KebabPopoverProps) {
   const [isOpen, setIsOpen] = useState(false)
 
   const onDelete = () => {
@@ -79,7 +80,7 @@ export default function FeedKebab({ feedId, feedTitle, deleteMutation, refreshMu
   }
 
   return (
-    <div>
+    <div className={className}>
       <Confirmation feedTitle={feedTitle} isOpen={isOpen} onDelete={onDelete} onCancel={onCancel}/>
       <DropdownMenu>
         <DropdownMenuTrigger asChild disabled={deleteMutation.isPending || refreshMutation.isPending}>

@@ -50,11 +50,18 @@ def parse_duration(raw: str | None) -> int | None:
 
 def parse_feed(rss_url: str) -> ParsedFeed:
     data = feedparser.parse(rss_url)
+
+    if data.bozo and (not data.entries or not data.feed.get("title")):
+        raise ValueError(
+            f"Could not parse RSS feed at '{rss_url}': "
+            f"{data.get('bozo_exception', 'malformed feed with no usable content')}"
+        )
+
     feed = data.feed
 
-    image_url = None
+    feed_image_url = None
     if hasattr(feed, "image") and hasattr(feed.image, "href"):
-        image_url = feed.image.href
+        feed_image_url = feed.image.href
 
     episodes = []
     for entry in data.entries:
@@ -92,6 +99,6 @@ def parse_feed(rss_url: str) -> ParsedFeed:
     return ParsedFeed(
         title=feed.get("title"),
         description=html_to_markdown(feed.get("subtitle") or feed.get("description")),
-        image_url=image_url,
+        image_url=feed_image_url,
         episodes=episodes,
     )

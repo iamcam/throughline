@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
+from src.api.artwork_proxy import fetch_artwork
 from src.shared.db import get_db
 from src.models.schemas import AddFeedRequest, FeedResponse, EpisodeResponse
 from src.ingestion import feed_service
@@ -20,7 +21,11 @@ async def add_feed(body: AddFeedRequest, db: AsyncSession = Depends(get_db)):
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
 
-    feed = await feed_service.add_feed(rss_url, db)
+    try:
+        feed = await feed_service.add_feed(rss_url, db)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
     episode_count, latest_episode_published_at = await feed_service.get_feed_stats(feed.id, db)
     return FeedResponse(
         id=feed.id,
@@ -93,3 +98,17 @@ async def refresh_feed(feed_id: UUID, db: AsyncSession = Depends(get_db)):
 async def list_episodes(feed_id: UUID, db: AsyncSession = Depends(get_db)):
     episodes = await feed_service.list_episodes(feed_id, db)
     return [EpisodeResponse.model_validate(ep) for ep in episodes]
+
+@router.get("/{feed_id}/artwork")
+async def get_feed_artwork(feed_id: UUID, db: AsyncSession = Depends(get_db)):
+    """
+    Request the cover art in cases where the client cannot load the image directly
+    (eg, host prevents resources from loading on other domains' pages). fetch_artwork
+    will proxy request the image
+    """
+    feed = await feed_service.get_feed(feed_id, db)
+    if not feed:
+        raise HTTPException(status_code=404, detail="Feed not found")
+    if not feed.image_url:
+        raise HTTPException(status_code=404, detail="Feed has no artwork")
+    return await fetch_artwork(feed.image_url)

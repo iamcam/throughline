@@ -1,11 +1,13 @@
 // src/pages/EpisodeDetailPage.tsx
-import { deleteEpisodeTranscript, getEpisode, getFeed, getSpeakerPreviews, ingestEpisode, isError404, listSpeakers, reingestEpisode } from '@/api/client'
+import { deleteEpisodeTranscript, getEpisode, getEpisodeArtworkUrl, getFeed, getSpeakerPreviews, ingestEpisode, isError404, listSpeakers, reingestEpisode } from '@/api/client'
 import { ChatInterface } from '@/components/ChatInterface'
 import EpisodeKebab from '@/components/EpisodeKebab'
 import { ExpandableDescription } from '@/components/ExpandableDescription'
 import { SpeakerRow } from '@/components/SpeakerRow'
 import { TranscriptViewer } from '@/components/TranscriptViewer'
+import AskAiButton from '@/components/ui/AskAiButton'
 import { Button } from '@/components/ui/button'
+import CoverArt from '@/components/ui/CoverArt'
 
 import {
   ResizableHandle,
@@ -19,7 +21,7 @@ import { formatDate, formatDuration } from '@/lib/date'
 import { ACTIVE_STATUSES } from '@/lib/episode'
 import { invalidateEpisode } from '@/lib/queryInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { LucideChevronLeft, LucideCircleAlert, LucideCloudDownload, LucideEllipsis, LucideLoaderCircle, LucideMessageCircleDashed, LucideX, LucideXCircle, Sparkles } from 'lucide-react'
+import { LucideChevronLeft, LucideCircleAlert, LucideCloudDownload, LucideEllipsis, LucideLoaderCircle, LucideMessageCircleDashed, LucideX, LucideXCircle } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -33,7 +35,7 @@ export default function EpisodeDetailPage() {
     if (chatOpen) {
       chatPanelRef.current?.collapse()
     } else {
-      chatPanelRef.current?.resize("33%")
+      chatPanelRef.current?.resize("50");
     }
   }
   const { episodeId } = useParams<{ episodeId: string }>()
@@ -155,9 +157,15 @@ export default function EpisodeDetailPage() {
     </div>
   )
 
-  if( status ) return (
-    <ResizablePanelGroup orientation="horizontal" className="h-full">
-      <ResizablePanel defaultSize="100%" minSize="50%" className='scrollbar-thin scrollbar-gutter-auto bg-page-background'>
+  if (status) return (
+    <ResizablePanelGroup orientation="horizontal" className="">
+      <ResizablePanel
+        // defaultSize="100%"
+        minSize={175}
+        maxSize="100%"
+        className='scrollbar-thin scrollbar-gutter-auto bg-page-background'
+      >
+        {/* Episode Content */}
         <div className="space-y-6 h-full p-6">
           {feed &&
             <Button variant="link" size="default"
@@ -168,44 +176,45 @@ export default function EpisodeDetailPage() {
             {feed.title}
           </Button>}
 
-          <div className='flex flex-row gap-4'>
+          {/* ------------------------------- */}
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className='flex flex-col sm:flex-row gap-4 h-auto'>
 
-            {/* Left column - cover art, if any */}
-            {coverArt && <div className='shrink-0'><img className="aspect-square w-64" src={coverArt} alt="cover artwork for episode" /></div>}
-
-            {/* Center - title, description, etc column */}
-            <div className='grow flex flex-col gap-2'>
-              <div className='flex flex-col gap-2 grow items-start'>
-                <h1 className="font-bold text-2xl">{episode.title ?? 'Untitled'}</h1>
-
-                <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                  <span>{formatDate(episode.published_at)}</span>
-                  <span>{formatDuration(episode.duration_seconds)}</span>
+              {/* Left column - cover art, if any */}
+              <div className="flex flex-row flex-wrap justify-between">
+                  <div className="">
+                    <CoverArt src={episode.image_url}
+                      alt="Episode cover artwork"
+                      className="w-42 min-w-18 max-w-full aspect-saqare shadow-md text-primary"
+                      proxySrc={getEpisodeArtworkUrl(episode.id)}
+                    />
                 </div>
-
-                {/* <CopyButton copyValue={episode.id} displayText={episode.id.slice(0, 4) + "..." + episode.id.slice(-4)} /> */}
+                {!chatOpen && (
+                  <AskAiButton disabled={status !== "READY"} onClick={toggleChat}
+                  className="visible sm:hidden" />
+                )}
               </div>
+              {/* Center - title, description, etc column */}
+              <div className='flex flex-col gap-2'>
+                <div className='flex flex-col gap-2 grow items-start'>
+                  <h1 className="font-bold  wrap-anywhere text-2xl">{episode.title ?? 'Untitled'}</h1>
 
-              {episode && episode.audio_url && (
-                <div className=''>
-                  <audio
-                    ref={setAudioNode}
-                    src={episode.audio_url}
-                    controls
-                    className="mt-2 w-92 max-w-full h-8"
-                  />
+                  <div className="flex items-center gap-3 text-sm text-muted-foreground">
+                    <span>{formatDate(episode.published_at)}</span>
+                    <span>{formatDuration(episode.duration_seconds)}</span>
+                  </div>
+
+
+                  {/* <CopyButton copyValue={episode.id} displayText={episode.id.slice(0, 4) + "..." + episode.id.slice(-4)} /> */}
                 </div>
-              )}
 
+              </div>
             </div>
-
             {/* Right / Buttons column */}
             <div className={'flex flex-col items-end ' + (!chatOpen ? 'justify-between' : 'justify-end')}>
               {!chatOpen && (
-                <Button disabled={status !== "READY"} variant="outline" size="sm" aria-label="open AI chat" onClick={toggleChat}>
-                  <Sparkles className="h-4 w-4 mr-1" />
-                  Ask AI
-                </Button>
+                <AskAiButton disabled={status !== "READY"} onClick={toggleChat}
+                  className="sm:visible invisible" />
               )}
 
               <div className='flex flex-col items-end gap-2'>
@@ -224,28 +233,37 @@ export default function EpisodeDetailPage() {
                   </div>
                 )}
 
-              {ACTIVE_STATUSES.includes(status) ? (
-                <div className='flex items-center gap-2'>
-                {ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
-                <Button size="icon" variant="outline" aria-label="loading" disabled={true}><LucideLoaderCircle className='animate-spin' /></Button>
-                </div>
-              ) : (status === "READY" ? (
-                <EpisodeKebab
-                  disabled={isActive}
-                  episodeId={episode.id}
-                  episodeTitle={episode.title}
-                  reingestMutation={reingestMutation}
-                  deleteTranscriptMutation={deleteTranscriptMutation}
-                />
-              ) : undefined)
-              }
+                {ACTIVE_STATUSES.includes(status) ? (
+                  <div className='flex items-center gap-2'>
+                  {ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
+                  <Button size="icon" variant="outline" aria-label="loading" disabled={true}><LucideLoaderCircle className='animate-spin' /></Button>
+                  </div>
+                ) : (status === "READY" ? (
+                  <EpisodeKebab
+                    disabled={isActive}
+                    episodeId={episode.id}
+                    episodeTitle={episode.title}
+                    reingestMutation={reingestMutation}
+                    deleteTranscriptMutation={deleteTranscriptMutation}
+                  />
+                ) : undefined)
+                }
 
 
               </div>
 
             </div>
           </div>
-
+          {episode && episode.audio_url && (
+            <div className=''>
+              <audio
+                ref={setAudioNode}
+                src={episode.audio_url}
+                controls
+                className="mt-2 w-92 max-w-full h-8"
+              />
+            </div>
+          )}
           {episode && episode.description && (
             <>
               <h2 className="font-semibold">Summary</h2>
@@ -317,15 +335,15 @@ export default function EpisodeDetailPage() {
         </div>
       </ResizablePanel>
 
-      <ResizableHandle withHandle />
+      <ResizableHandle withHandle disabled={status !== "READY"} />
       <ResizablePanel
         panelRef={chatPanelRef}
         defaultSize={0}
-        minSize={320}
-        maxSize="50%"
+        maxSize="75%"
         collapsible
         onResize={(size) => setChatOpen(size.asPercentage > 0)}
         className="h-full flex flex-col"
+        disabled={status !== "READY"}
       >
         <div className="flex items-center shrink-0 p-2 bg-background border-b px-2">
           <h2 className="flex-1">Ask the Pod</h2>

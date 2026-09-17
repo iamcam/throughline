@@ -1,10 +1,12 @@
 // src/pages/EpisodesPage.tsx
-import { deleteEpisodeTranscript, deleteFeed, getFeed, ingestEpisode, isError404, listEpisodes, refreshFeed, reingestEpisode } from '@/api/client'
+import { deleteEpisodeTranscript, deleteFeed, getFeed, getFeedArtworkUrl, ingestEpisode, isError404, listEpisodes, refreshFeed, reingestEpisode } from '@/api/client'
 import { ChatInterface } from '@/components/ChatInterface'
 import { EpisodeRow } from '@/components/EpisodeRow'
 import FeedKebab from '@/components/FeedKebab'
+import AskAiButton from '@/components/ui/AskAiButton'
 import { Button } from '@/components/ui/button'
 import { ButtonGroup } from '@/components/ui/button-group'
+import CoverArt from '@/components/ui/CoverArt'
 import { Input } from '@/components/ui/input'
 import {
   ResizableHandle,
@@ -15,7 +17,7 @@ import { Separator } from '@/components/ui/separator'
 import { formatRelativeDate } from '@/lib/date'
 import { invalidateAfterFeedDelete, invalidateEpisode, invalidateFeedAndEpisodes } from '@/lib/queryInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { LucideActivity, LucideChevronLeft, LucideCircleAlert, LucideX, Sparkles } from 'lucide-react'
+import { LucideActivity, LucideChevronLeft, LucideCircleAlert, LucideX } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
 
@@ -127,7 +129,7 @@ export default function EpisodesPage() {
   return (
     <ResizablePanelGroup orientation="horizontal" className="h-full">
       {/* Main content */}
-      <ResizablePanel defaultSize="100%" minSize="50%">
+      <ResizablePanel defaultSize="100%" >
         <div ref={scrollContainerRef} className="space-y-6 overflow-y-auto h-full p-6 bg-page-background scrollbar-thin scrollbar-gutter-auto ">
           {feed && (
             <div className="flex justify-between">
@@ -142,12 +144,23 @@ export default function EpisodesPage() {
             </div>
           )}
           {feed && (
-            <div className="flex items-stretch justify-between gap-6">
-              {feed.image_url && <div className='shrink-0 w-1/3 aspect-square  max-h-64 max-w-64 shadow-md'>
-                <img src={feed.image_url} alt="Feed cover artwork" />
-              </div>}
-
-            <div className="space-y-3">
+            <div className="flex flex-col sm:flex-row items-stretch flex-wrap justify-between gap-6">
+              <div className="flex flex-wrap flex-column justify-between gap-2">
+                {feed.image_url &&
+                  <CoverArt src={feed.image_url}
+                    alt="Feed cover artwork"
+                    className="w-full max-w-42 h-42 shadow-md aspect-square text-primary"
+                    proxySrc={getFeedArtworkUrl(feed.id)}
+                  />
+                }
+                {!chatOpen ? (
+                  <AskAiButton
+                    onClick={toggleChat}
+                    disabled={!ingestedCount}
+                    className="h-8 sm:hidden item-end" />
+                ) : <div ></div>}
+              </div>
+            <div className="space-y-3 flex-2">
                 <h1 className="text-3xl">{feed.title ?? feed.rss_url}</h1>
 
 
@@ -170,12 +183,13 @@ export default function EpisodesPage() {
                 )}
               </div>
 
-              <div className='flex flex-col justify-between items-end '>
+              <div className='flex sm:flex-col justify-between items-end '>
                 {!chatOpen ? (
-                  <Button variant="outline" size="sm" disabled={!ingestedCount} aria-label="open ai chat" onClick={toggleChat}>
-                    <Sparkles className="h-4 w-4 mr-1" />
-                    Ask AI
-                  </Button>
+                  // <Button variant="outline" size="sm" disabled={!ingestedCount} aria-label="open ai chat" onClick={toggleChat} className="invisible sm:visible">
+                  //   <Sparkles className="h-4 w-4 mr-1" />
+                  //   Ask AI
+                  // </Button>
+                  <AskAiButton disabled={!ingestedCount} onClick={toggleChat} className="invisible sm:visible" />
                 ) : <div></div>}
 
                 <FeedKebab feedTitle={feed.title}  feedId={feed.id} refreshMutation={refreshMutation} deleteMutation={deleteMutation} />
@@ -185,7 +199,7 @@ export default function EpisodesPage() {
 
           <Separator />
           {!isEpisodesError && (
-            <div className='flex gap-8'>
+            <div className='flex gap-8 flex-wrap'>
               <ButtonGroup aria-label='Filter options'>
                 <Button
                   variant={filter === 'all' ? 'default' : 'outline'}
@@ -271,14 +285,15 @@ export default function EpisodesPage() {
       </ResizablePanel>
 
       {/* Chat panel */}
-      <ResizableHandle withHandle />
+      <ResizableHandle withHandle disabled={ingestedCount === 0} />
       <ResizablePanel
         panelRef={chatPanelRef}
         defaultSize={0}
         minSize={320}
-        maxSize="50%"
+        maxSize="75%"
         collapsible
         onResize={(size) => setChatOpen(size.asPercentage > 0)}
+        disabled={ingestedCount === 0}
         className="h-full flex flex-col "
       >
         <div className="flex items-center shrink-0 p-2 bg-background border-b">
@@ -287,7 +302,7 @@ export default function EpisodesPage() {
         </div>
 
         <div className="flex-1 min-h-0 overflow-hidden">
-          {feedId && (<ChatInterface scopeFeedIds={[feedId]} />)}
+          {feedId && ingestedCount > 0 && (<ChatInterface scopeFeedIds={[feedId]} />)}
         </div>
 
       </ResizablePanel>

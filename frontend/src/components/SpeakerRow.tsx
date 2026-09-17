@@ -66,7 +66,7 @@ export function SpeakerRow({ speaker, episodeId, preview, isPreviewPlaying, onTo
 
   return (
     <div className="flex items-center justify-between gap-4 py-2">
-      <div className="flex items-center gap-4">
+      <div className="flex items-center flex-wrap gap-2 sm:gap-4">
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
             <Button variant="outline" size="xs" aria-label='Edit speaker name'><LucidePencil /></Button>
@@ -122,7 +122,7 @@ export function SpeakerRow({ speaker, episodeId, preview, isPreviewPlaying, onTo
           </Button>
         )}
 
-        <span className="min-w-36 border-b">
+        <span className="min-w-42 border-b">
           {speaker.display_name ?? <div className='text-sm italic text-muted-foreground' onClick={(e) => { e.stopPropagation(); setOpen(true)}}>Add name</div>}
         </span>
         {speaker.name_inferred && !speaker.name_confirmed ? (

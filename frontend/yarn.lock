@@ -1875,6 +1875,16 @@ clsx@^2.1.1:
   resolved "https://registry.yarnpkg.com/clsx/-/clsx-2.1.1.tgz#eed397c9fd8bd882bfb18deab7102049a2f32999"
   integrity sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA==
 
+cn@^0.2.4:
+  version "0.2.6"
+  resolved "https://registry.yarnpkg.com/cn/-/cn-0.2.6.tgz#16e7a9f1746efcb104fbea027806c17810b5ee6a"
+  integrity sha512-+i4L0zUGgRcEnhsxueVrP7iBGxBx5iD0WOTYg1MwFEu2ZyCmH5Ov2V1cul2Ht5UchRQQgftCf4be/RxspuW6QQ==
+
+cn@^0.3.0:
+  version "0.3.0"
+  resolved "https://registry.yarnpkg.com/cn/-/cn-0.3.0.tgz#7ce2bdd4032d69f8c73f1f6cd6904704901599a0"
+  integrity sha512-qRoU0ARrZD3Bbj1wKFftEKxPjSnzTEdFkf22NVhW+zU9D/wajhoP+qUZ5DChhhSOBCH1onV12hrmGqfu1+5Z2Q==
+
 code-block-writer@^13.0.3:
   version "13.0.3"
   resolved "https://registry.yarnpkg.com/code-block-writer/-/code-block-writer-13.0.3.tgz#90f8a84763a5012da7af61319dd638655ae90b5b"
@@ -2786,6 +2796,11 @@ inline-style-parser@0.2.7:
   resolved "https://registry.yarnpkg.com/inline-style-parser/-/inline-style-parser-0.2.7.tgz#b1fc68bfc0313b8685745e4464e37f9376b9c909"
   integrity sha512-Nb2ctOyNR8DqQoR0OwRG95uNWIC0C1lCgf5Naz5H6Ji72KZ8OcFZLz2P5sNgwlyoJ8Yif11oMuYs5pBQa86csA==
 
+ip-address@^10.1.1:
+  version "10.7.2"
+  resolved "https://registry.yarnpkg.com/ip-address/-/ip-address-10.7.2.tgz#5b3b2b7d46c6293861b82dfcd49cc203aa8f2c5c"
+  integrity sha512-7H/2gFSIitxc0hG3nOI1glS8QLo/EHBFFLk8vEUjXY/xu0AdL8jZ9U1IzO2PUm0d2D/ofQcAifb0g6OBkt8U7w==
+
 ip-address@^10.2.0:
   version "10.2.0"
   resolved "https://registry.yarnpkg.com/ip-address/-/ip-address-10.2.0.tgz#805fc178b20c518bd4c8548b24fe30892d7f3206"
@@ -3152,10 +3167,10 @@ lru-cache@^5.1.1:
   dependencies:
     yallist "^3.0.2"
 
-lucide-react@^1.17.0:
-  version "1.17.0"
-  resolved "https://registry.yarnpkg.com/lucide-react/-/lucide-react-1.17.0.tgz#5b8ddd7d6975e3e45dc9d03025afc7674d78f8a8"
-  integrity sha512-9FA9evdox/JQL5PT57fdA1x/yg8T7knJ98+zjTL3UfKza6pflQUUh3XtaQIHKvnsJw1lmsEyHVlt5jchYxOQ5w==
+lucide-react@^1.33.0:
+  version "1.39.0"
+  resolved "https://registry.yarnpkg.com/lucide-react/-/lucide-react-1.39.0.tgz#9acdc7be3c414bf707d956ee40208f79b6fb203f"
+  integrity sha512-y8nXoEwvqqIsF927NBWXODa4bfMrcUeEb/9sgpwFqg0gUjgn3j5Hznk+v7STmPgZ2iQ11JKlbQGdFRuTOwvYkA==
 
 magic-string@^0.30.21:
   version "0.30.21"
@@ -4211,10 +4226,10 @@ setprototypeof@~1.2.0:
   resolved "https://registry.yarnpkg.com/setprototypeof/-/setprototypeof-1.2.0.tgz#66c9a24a73f9fc28cbe66b09fed3d33dcaf1b424"
   integrity sha512-E5LDX7Wrp85Kil5bhZv46j8jOeboKq5JMmYM3gVGdGH8xFpPWXUMsNrlODCrkoxMEeNi/XZIwuRvY4XNwYMJpw==
 
-shadcn@^4.11.0:
-  version "4.12.0"
-  resolved "https://registry.yarnpkg.com/shadcn/-/shadcn-4.12.0.tgz#72a5faeec44813d313230a0121d41480a9fa1a18"
-  integrity sha512-o781ieQziCnXH2FKsEqxp1fnbHdbgAPO9inTSPeZ59hQfsZXuMGp3ul8oFSV5KQS4nbUK9b+DrDE6C7OvfKKQQ==
+shadcn@^4.21.0:
+  version "4.21.0"
+  resolved "https://registry.yarnpkg.com/shadcn/-/shadcn-4.21.0.tgz#7610399358644b8398b9f50b51c40d72dd592f21"
+  integrity sha512-UU2mFNusW8C5rvadKdH69vERYZqUlOOlXBcf0MYhYLdTGP6DPti7X4qovCu+RTfCqsAgq/T+YfE0Vnttxh9aiw==
   dependencies:
     "@babel/core" "^7.28.0"
     "@babel/parser" "^7.28.0"
@@ -4224,6 +4239,7 @@ shadcn@^4.11.0:
     "@modelcontextprotocol/sdk" "^1.26.0"
     "@types/validate-npm-package-name" "^4.0.2"
     browserslist "^4.26.2"
+    cn "^0.2.4"
     commander "^14.0.0"
     cosmiconfig "^9.0.0"
     dedent "^1.6.0"
@@ -4240,8 +4256,8 @@ shadcn@^4.11.0:
     postcss-selector-parser "^7.1.0"
     prompts "^2.4.2"
     recast "^0.23.11"
+    socks "^2.8.8"
     stringify-object "^5.0.0"
-    tailwind-merge "^3.0.1"
     ts-morph "^26.0.0"
     tsconfig-paths "^4.2.0"
     undici "^7.27.2"
@@ -4315,6 +4331,19 @@ sisteransi@^1.0.5:
   version "1.0.5"
   resolved "https://registry.yarnpkg.com/sisteransi/-/sisteransi-1.0.5.tgz#134d681297756437cc05ca01370d3a7a571075ed"
   integrity sha512-bLGGlR1QxBcynn2d5YmDX4MGjlZvy2MRBDRNHLJ8VI6l6+9FUiyTFNJ0IveOSP0bcXgVDPRcfGqA0pjaqUpfVg==
+
+smart-buffer@^4.2.0:
+  version "4.2.0"
+  resolved "https://registry.yarnpkg.com/smart-buffer/-/smart-buffer-4.2.0.tgz#6e1d71fa4f18c05f7d0ff216dd16a481d0e8d9ae"
+  integrity sha512-94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg==
+
+socks@^2.8.8:
+  version "2.8.10"
+  resolved "https://registry.yarnpkg.com/socks/-/socks-2.8.10.tgz#23aab4dccc1fdae110aaf4fa51cd190552432dc5"
+  integrity sha512-e0VyvkVTwVYViNovRkZ9aodhxVlyoMn7eJhVUPxZ+eK9P/7CBkxvvsBOHqFPEH416726W8tLXXXjKwqgTErrCQ==
+  dependencies:
+    ip-address "^10.1.1"
+    smart-buffer "^4.2.0"
 
 source-map-js@^1.2.1:
   version "1.2.1"
@@ -4414,11 +4443,6 @@ systeminformation@^5.22.11:
   version "5.31.11"
   resolved "https://registry.yarnpkg.com/systeminformation/-/systeminformation-5.31.11.tgz#9c637ff3e8d19a482deff70a136330e1b2399f00"
   integrity sha512-I6O7iaUj23AXRgCPDDnvi3xHvdOLp4+1YMbF+X194lJwY1NeWojgHJPhslVKcmTtrLTguRk3QJK+xEdTiI3P0w==
-
-tailwind-merge@^3.0.1, tailwind-merge@^3.6.0:
-  version "3.6.0"
-  resolved "https://registry.yarnpkg.com/tailwind-merge/-/tailwind-merge-3.6.0.tgz#88d83242d1dd7bc847223f73dcf210dd1f2ee11c"
-  integrity sha512-uxL7qAVQriqRQPAyK3pj66VqskWqoZ37PW94jwOTwNfq/z9oyu1V+eqrZqtR2+fCiXdYOZe/Modt8GtvqNzu+w==
 
 tailwindcss@4.3.0, tailwindcss@^4.3.0:
   version "4.3.0"

@@ -1,6 +1,6 @@
 // src/components/SearchFilterList.tsx
 import type { Episode, Feed } from '@/api/client'
-import { listEpisodes, listFeeds } from '@/api/client'
+import { getFeedArtworkUrl, listEpisodes, listFeeds } from '@/api/client'
 import {
   Accordion,
   AccordionContent,
@@ -8,6 +8,7 @@ import {
   AccordionTrigger,
 } from '@/components/ui/accordion'
 import { Button } from '@/components/ui/button'
+import CoverArt from '@/components/ui/CoverArt'
 import {
   Sheet,
   SheetContent,
@@ -60,7 +61,13 @@ function FeedAccordionItem({ feed, onNavigate }: { feed: Feed; onNavigate: (path
     <AccordionItem value={feed.id}>
       <AccordionTrigger>
         <div className="flex flex-row gap-4">
-          <div>{feed.image_url && <img src={feed.image_url} className="size-24" alt="Feed cover artwork"/>}</div>
+          <div>{feed.image_url &&
+            <CoverArt src={feed.image_url}
+              alt="Feed cover artwork"
+              className="size-42 flex items-center justify-center shadow-md aspect-square text-primary"
+              proxySrc={getFeedArtworkUrl(feed.id)}
+            />
+          }</div>
           <div className="grow flex flex-col justify-center">
             <div className="font-bold">
               {feed.title ?? feed.rss_url}

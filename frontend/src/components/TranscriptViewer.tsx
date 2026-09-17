@@ -60,16 +60,16 @@ export function TranscriptViewer({ episodeId, collapsedSegments = COLLAPSED_SEGM
         </Button>
       )}
       {visible.map((seg, idx) => (
-        <div key={`${seg.sequence_order}`} className="text-sm grid grid-cols-4 sm:grid-cols-6 sm:gap-4 mb-8">
+        <div key={`${seg.sequence_order}`} className="text-sm sm:grid sm:grid-cols-6 sm:gap-4 mb-8">
           {(visible[idx - 1]?.speaker_id === seg.speaker_id) ? <></> :
             (
-              <div className='sm:text-end font-mono col-span-full sm:col-span-1 wrap-anywhere'>
+              <div className='sm:text-end font-mono sm:col-span-1 wrap-anywhere'>
                 <div className='text-primary font-semibold '>{(seg.display_name ?? seg.speaker_id)}</div>
-                <div className='h-0 text-xs text-muted-foreground'>{formatTimestamp(seg.start_ms/1000)}</div>
-                </div>
+                <div className='text-xs text-muted-foreground'>{formatTimestamp(seg.start_ms/1000)}</div>
+              </div>
             )
           }
-          <div className="block col-start-1 sm:col-start-2 col-span-full whitespace-pre-line">{seg.text}</div>
+          <div className="sm:block sm:col-start-2 sm:col-span-full whitespace-pre-line">{seg.text}</div>
         </div>
       ))}
       {canCollapse && (

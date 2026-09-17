@@ -1,15 +1,16 @@
 // src/components/EpisodeRow.tsx
-import type { Episode } from '@/api/client'
+import { getEpisodeArtworkUrl, type Episode } from '@/api/client'
 import EpisodeKebab, { type MutationLike } from '@/components/EpisodeKebab'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import CoverArt from '@/components/ui/CoverArt'
 import StatusBadge from '@/components/ui/StatusBadge'
 import { useEpisodeStatus } from '@/hooks/useEpisodeStatus'
 import { formatDate, formatDuration } from '@/lib/date'
 import { ACTIVE_STATUSES } from '@/lib/episode'
 import { stripMarkdown } from '@/lib/text'
-import { LucideArrowUpRight, LucideCloudDownload, LucideLoaderCircle, LucideSparkles } from 'lucide-react'
+import { LucideCloudDownload, LucideListClock, LucideLoaderCircle, LucideSparkles } from 'lucide-react'
 import { Link, useNavigate } from 'react-router-dom'
 
 
@@ -33,17 +34,23 @@ export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTr
 
   return (
     <Card className={"pb-0 drop-shadow " + (isReady ? 'border-2 border-accent' : '')}>
-      <CardHeader className='flex flex-row gap-(--card-spacing)'>
-        {episode.image_url && <img src={episode.image_url} className="mr-4 w-42 h-42 shadow-md" />}
-          <div className='flex-1 w-100'>
+      {isReady && <LucideSparkles className="text-accent size-4 absolute top-2 left-2" />}
+      <CardHeader className='flex flex-col sm:flex-row gap-(--card-spacing)'>
+        {episode.image_url && <Link to={link}>
+          <CoverArt src={episode.image_url}
+            alt="Episode cover artwork"
+            className="w-42 max-w-full flex items-center justify-center shadow-md aspect-square text-primary"
+            proxySrc={getEpisodeArtworkUrl(episode.id)}
+          />
+      </Link>}
+          <div className='flex-1 w-full'>
 
-          <CardTitle className="text-xl line-clamp-2 flex flex-row gap-2 items-center">
-            {isReady && <LucideSparkles className="text-accent size-4" />}
+          <CardTitle className="text-xl line-clamp-2 flex flex-row gap-2 ">
             <Link to={link} className="hover:text-hover transition-colors">{episode.title ?? 'Untitled'}</Link>
           </CardTitle>
           {episode.description && (
             <CardDescription className='text-md'>
-              <div className="flex gap-4 pb-4 items-center">
+              <div className="flex gap-4 pb-4 flex-wrap items-center w-auto">
                 <div>{formatDate(episode.published_at)}</div>
                 <div>{formatDuration(episode.duration_seconds)}</div>
               </div>
@@ -52,19 +59,15 @@ export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTr
                   {stage}{progress != null ? ` — ${Math.round(progress * 100)}%` : ''}
                 </div>
               )}
-              <div className="line-clamp-2 text-foreground">
+              <div className="line-clamp-4 sm:line-clamp-2 text-foreground">
                 {stripMarkdown(episode.description)}
               </div>
             </CardDescription>
           )}
         </div>
 
-        <Button size="icon" className='shrink-0' variant="outline" aria-label={`go to feed: ${episode.title}`} onClick={() => navigate(link)}>
-        <LucideArrowUpRight  />
-        </Button>
-
       </CardHeader>
-      <CardContent className='text-primary py-6'>
+      <CardContent className='text-primary pb-6'>
         <div className="flex justify-end items-center">
 
           <div className="flex flex-col items-end gap-2">
@@ -87,8 +90,14 @@ export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTr
             {ACTIVE_STATUSES.includes(status) ? (
               <div className='flex items-center gap-2'>
                 {ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
+                {status != "QUEUED" ? (
+                  <Button size="icon" variant="outline" disabled={true}>
+                    <LucideLoaderCircle className='animate-spin' />
+                  </Button>
+                ) : (
+                    <LucideListClock size={20}  className="text-foreground"/>
+                  ) }
 
-              <Button size="icon" variant="outline" disabled={true}><LucideLoaderCircle className='animate-spin' /></Button>
               </div>
             ) : (status === "READY" ? (
               <EpisodeKebab

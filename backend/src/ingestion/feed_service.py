@@ -8,6 +8,12 @@ from uuid import UUID
 from src.models.db import EpisodeSpeaker, Feed, Episode, Chunk, TranscriptSegment
 from src.ingestion.rss_parser import parse_feed
 
+from urllib.parse import urlparse
+
+def _is_valid_feed_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
 
 async def add_feed(rss_url: str, db: AsyncSession) -> Feed:
     # Check for existing feed
@@ -15,6 +21,9 @@ async def add_feed(rss_url: str, db: AsyncSession) -> Feed:
     existing = result.scalar_one_or_none()
     if existing:
         return existing
+
+    if not _is_valid_feed_url(rss_url):
+        raise ValueError(f"'{rss_url}' does not look like a valid http(s) URL.")
 
     parsed = parse_feed(rss_url)
 
@@ -36,6 +45,7 @@ async def add_feed(rss_url: str, db: AsyncSession) -> Feed:
             description=ep.description,
             published_at=ep.published_at,
             audio_url=ep.audio_url,
+            image_url=ep.image_url,
             duration_seconds=ep.duration_seconds,
             pipeline_status="PENDING",
         )

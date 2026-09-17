@@ -1,14 +1,15 @@
 // src/pages/FeedsPage.tsx
-import { addFeed, deleteFeed, listFeeds, refreshFeed } from '@/api/client';
+import { addFeed, deleteFeed, getFeedArtworkUrl, listFeeds, refreshFeed } from '@/api/client';
 import FeedKebab from '@/components/FeedKebab';
 import { Button } from '@/components/ui/button';
 import { Card, CardTitle } from '@/components/ui/card';
+import CoverArt from '@/components/ui/CoverArt';
 
 import { Input } from '@/components/ui/input';
 import { formatRelativeDate } from '@/lib/date';
 import { invalidateFeedAndEpisodes } from '@/lib/queryInvalidation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { LucideActivity, LucideAlertCircle, LucideArrowUpRight } from 'lucide-react';
+import { LucideActivity, LucideAlertCircle } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
@@ -89,26 +90,38 @@ export default function FeedsPage() {
                 {feeds?.map(feed => (
                     <Card className='shadow-md' key={`feed-card-${feed.id}`}>
 
-                        <div className="flex gap-6 items-stretch px-(--card-spacing) ">
+                        <div className="flex flex-col sm:flex-row gap-2 sm:gap-6 items-stretch px-(--card-spacing) ">
                             {feed.image_url && (
                                 <Link to={`/feeds/${feed.id}/episodes`} className="shrink-0" aria-label={`go to feed: ${feed.title}`}>
 
-                                <img className="shadow aspect-square h-42"
+                                {/* <img className="shadow aspect-square h-24 sm:h-42"
                                     onClick={() => navigate(`/feeds/${feed.id}/episodes`)}
                                         src={feed.image_url}
+                                        referrerPolicy="no-referrer"
                                         alt="Feed cover artwork"
-                                />
+                                /> */}
+
+                                    <div className="">
+                                        <CoverArt src={feed.image_url}
+                                            alt="Episode cover artwork"
+                                            className="w-full max-w-42 max-h-42 aspect-saqare shadow-md text-primary"
+                                            proxySrc={getFeedArtworkUrl(feed.id)}
+                                        />
+                                    </div>
+
                                 </Link>
                             )}
 
                             <div className='space-y-2 flex-1'>
                                 <CardTitle>
-                                    <h1 className="text-2xl font-bold ">
+                                    <h1 className="text-xl sm:text-2xl font-bold">
                                         <Link to={`/feeds/${feed.id}/episodes`}
                                             className='hover:text-hover'
                                         >
                                             {feed.title ?? feed.rss_url}
                                         </Link>
+
+
                                     </h1>
                                 </CardTitle>
                                 <div className='flex gap-2 items-center text-muted-foreground'>
@@ -116,14 +129,11 @@ export default function FeedsPage() {
                                     {feed.episode_count > 0 && (<p><LucideActivity size={12} /></p>)}
                                     <p>{feed.latest_episode_published_at && formatRelativeDate(feed.latest_episode_published_at)}</p>
                                 </div>
-                                {feed.description && <p>{feed.description}</p>}
+                                {feed.description && <p className='line-clamp-3'>{feed.description}</p>}
                             </div>
 
-                            <div className='flex flex-col justify-between'>
-                                <Button size="icon" variant="outline" aria-label={`go to feed: ${feed.title}`} onClick={() => navigate(`/feeds/${feed.id}/episodes`)}>
-                                    <LucideArrowUpRight  />
-                                </Button>
-                                <FeedKebab feedTitle={feed.title}  feedId={feed.id} refreshMutation={refreshMutation} deleteMutation={deleteMutation} />
+                            <div className='flex flex-row justify-end-safe sm:flex-col'>
+                                <FeedKebab feedTitle={feed.title} feedId={feed.id} refreshMutation={refreshMutation} deleteMutation={deleteMutation} className="flex-item-end" />
                             </div>
                         </div>
 

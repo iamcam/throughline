@@ -233,6 +233,16 @@ export function isError404(error: unknown): boolean {
   )
 }
 
+// -- Misc -----------------------------------------------------------------------
+
+export function getEpisodeArtworkUrl(episodeId: string): string {
+  return `${api.defaults.baseURL}/episodes/${episodeId}/artwork`;
+}
+
+export function getFeedArtworkUrl(feedId: string): string {
+  return `${api.defaults.baseURL}/feeds/${feedId}/artwork`;
+}
+
 // -- Additions ------------------------------------------------------------------
 
 // Generic: turns a fetch Response's streaming body into SSE (event, data) pairs.
