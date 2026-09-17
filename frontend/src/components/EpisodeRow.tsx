@@ -11,7 +11,7 @@ import { formatDate, formatDuration } from '@/lib/date'
 import { ACTIVE_STATUSES } from '@/lib/episode'
 import { stripMarkdown } from '@/lib/text'
 import { LucideCloudDownload, LucideListClock, LucideLoaderCircle, LucideSparkles } from 'lucide-react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 
 
 interface EpisodeRowProps {
@@ -23,7 +23,6 @@ interface EpisodeRowProps {
 }
 
 export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTranscriptMutation }: EpisodeRowProps) {
-  const navigate = useNavigate()
 
   const liveStatus = useEpisodeStatus(ACTIVE_STATUSES.includes(episode.pipeline_status) ? episode.id : null)
   const status = liveStatus?.status ?? episode.pipeline_status

@@ -124,7 +124,6 @@ export default function EpisodeDetailPage() {
   const stage = liveStatus?.stage ?? episode?.pipeline_stage
   const progress = liveStatus?.progress ?? episode?.pipeline_progress
   const isActive = ACTIVE_STATUSES.includes(status ?? '')
-  const coverArt = episode?.image_url || feed?.image_url || null
 
   const ingestMutation = useMutation({
     mutationFn: () => ingestEpisode(episodeId!),

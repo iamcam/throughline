@@ -11,13 +11,12 @@ import { invalidateFeedAndEpisodes } from '@/lib/queryInvalidation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { LucideActivity, LucideAlertCircle } from 'lucide-react';
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 
 
 export default function FeedsPage() {
     const [url, setUrl] = useState('')
     const queryClient = useQueryClient()
-    const navigate = useNavigate()
 
     const { data: feeds, isLoading, isError } = useQuery({
         queryKey: ['feeds'],
