@@ -3,6 +3,8 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
+ENV UV_NO_SYNC=1
+
 RUN apt-get update && apt-get install -y ffmpeg gcc g++ python3-dev cmake ninja-build git && rm -rf /var/lib/apt/lists/*
 
 RUN pip install uv
