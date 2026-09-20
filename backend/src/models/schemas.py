@@ -59,9 +59,7 @@ class PipelineStatusUpdate(BaseModel):
     error: str | None = None
 
 class IngestRequest(BaseModel):
-    """Reserved for future per-job ingestion options"""
-    pass
-
+    run_label: str | None = None
 
 class SpeakerResponse(BaseModel):
     speaker_id: str

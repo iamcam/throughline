@@ -78,6 +78,10 @@ async def ingest_episode(
 
         span.set_attribute("episode.id", str(episode_id))
         span.set_attribute("episode.title", episode.title or "untitled")
+        span.set_attribute("episode.duration_seconds", episode.duration_seconds)
+        if run_label := job_args.get("run_label"):
+            span.set_attribute("run_label", run_label)
+
         audio_path = None
 
         try:

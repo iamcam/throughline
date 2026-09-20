@@ -137,7 +137,7 @@ async def ingest_episode_handler(
             detail=f"Episode is already in-flight: {episode.pipeline_status}. Try /reingest when the pipeline is finished.",
         )
 
-    job_args: dict = {}
+    job_args = {"run_label": body.run_label} if body.run_label else {}
     job_id = await queue.enqueue(episode_id=episode_id, job_args=job_args)
 
     await db.execute(
@@ -176,7 +176,7 @@ async def reingest_episode_handler(
             detail=f"Episode is already in-flight: {episode.pipeline_status}. Try again when the pipeline is finished.",
         )
 
-    job_args: dict = {}
+    job_args = {"run_label": body.run_label} if body.run_label else {}
     job_id = await queue.enqueue(episode_id=episode_id, job_args=job_args)
 
     await db.execute(delete(Chunk).where(Chunk.episode_id == episode_id))
