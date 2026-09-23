@@ -3,6 +3,7 @@ import asyncio
 import logging
 import subprocess
 from concurrent.futures import ProcessPoolExecutor
+import traceback
 from opentelemetry import trace
 
 from src.diarization.base import DiarizationResult, SpeakerTurn
@@ -46,6 +47,10 @@ def _diarize_sync(audio_path: str) -> DiarizationResult:
     wav_path = _make_wav(audio_path)
     try:
         result = _diarizer.diarize(wav_path)
+    except Exception as e:
+        logger.exception(e)
+        raise
+
     finally:
         _cleanup_wav(wav_path)
 
@@ -130,6 +135,8 @@ class LocalDiarizationService:
                 return result
 
             except Exception as e:
+                logger.exception(e)
+
                 span.record_exception(e)
                 span.set_status(trace.StatusCode.ERROR, str(e))
                 raise
