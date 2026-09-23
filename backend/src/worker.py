@@ -1,6 +1,6 @@
 # src/worker.py
 """
-streaQ worker process entry point (`streaq run src.worker:worker`).
+streaQ worker process. For cli entry point see worker_cli.py
 
 Builds the WorkerContext dependencies once at process startup and reuses
 them across every job -- the LLM/embedding clients and transcription
@@ -53,14 +53,17 @@ async def lifespan() -> AsyncGenerator[WorkerContext, None]:
     if isinstance(diarization_service, LocalDiarizationService):
         diarization_service.shutdown()
 
-worker = Worker(
-    redis_url=settings.redis_url,
-    concurrency=settings.max_concurrent_ingestions,
-    lifespan=lifespan,
-)
 
+def build_worker() -> Worker:
+    worker = Worker(
+        redis_url=settings.redis_url,
+        concurrency=settings.max_concurrent_ingestions,
+        lifespan=lifespan,
+    )
 
-@worker.task(name=INGEST_EPISODE_JOB)
-async def ingest_episode_job(episode_id: UUID, job_args: dict) -> None:
-    services = build_pipeline_services(settings, ingest_episode_job.worker.context)
-    await run_ingest(episode_id, job_args, services)
+    @worker.task(name=INGEST_EPISODE_JOB)
+    async def ingest_episode_job(episode_id: UUID, job_args: dict) -> None:
+        services = build_pipeline_services(settings, ingest_episode_job.worker.context)
+        await run_ingest(episode_id, job_args, services)
+
+    return worker

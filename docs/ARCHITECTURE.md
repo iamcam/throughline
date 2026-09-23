@@ -329,12 +329,12 @@ GET    /api/v1/feeds/{feed_id}/episodes
 ### Episodes
 ```
 GET    /api/v1/episodes/{episode_id}
-POST   /api/v1/episodes/{episode_id}/ingest
-POST   /api/v1/episodes/{episode_id}/reingest
+POST   /api/v1/episodes/{episode_id}/ingest          Body: { run_label?: str }
+POST   /api/v1/episodes/{episode_id}/reingest        Body: { run_label?: str }
 GET    /api/v1/episodes/{episode_id}/transcript
 DELETE /api/v1/episodes/{episode_id}/transcript
-GET    /api/v1/episodes/{episode_id}/status         (polling)
-GET    /api/v1/episodes/{episode_id}/status/stream  (SSE)
+GET    /api/v1/episodes/{episode_id}/status          (polling)
+GET    /api/v1/episodes/{episode_id}/status/stream   (SSE)
 ```
 
 ### Speakers
@@ -371,7 +371,7 @@ curl -X POST http://localhost:3001/api/v1/feeds \
 # Ingest episode
 curl -X POST http://localhost:3001/api/v1/episodes/ep-uuid/ingest \
   -H "Content-Type: application/json" \
-  -d '{"speaker_count_hint": 2}'
+  -d '{"run_label": "eg-otel-trace-label"}'
 # → { "status": "accepted", "job_id": "job-uuid", "queue_position": 1 }
 
 # Stream status

@@ -10,7 +10,7 @@
 # src/ingestion/pipeline.py
 async def ingest_episode(
     episode_id: UUID,
-    job_args: dict,
+    job_args: dict, # run_label (optional, str)
     services: PipelineServices,   # injected dataclass of all services
 ) -> None:
     try:
@@ -20,7 +20,6 @@ async def ingest_episode(
         await services.status.set(episode_id, "TRANSCRIBING")
         transcript = await services.transcription.transcribe(
             audio_path,
-            speaker_count_hint=job_args.get("speaker_count_hint")
         )
         await services.transcript_store.save(episode_id, transcript)
         # All segments written with speaker_id = 'UNKNOWN' (no diarization in v1)

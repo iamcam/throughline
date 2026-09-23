@@ -158,6 +158,8 @@ class IngestionQueue(Protocol):
 Implementations: `StreaqQueue` (default, Redis-backed via streaQ, separate worker process), `BackgroundTaskQueue`
 (in-process fallback when `REDIS_URL` is unset).
 
+`job_args` currently carries one optional key, `run_label` (`str`), propagated through to OTel span attributes for pipeline-run benchmarking.
+
 The queue never generates or accepts a caller-supplied job id — `enqueue()` always returns an id the queue
 itself assigns. **Postgres, not the queue, is the sole authority for ingestion dedup**: `ingest` and `reingest`
 route handlers guard against duplicate/conflicting requests entirely via `episode.pipeline_status` checks. The queue layer offers no id-collision backstop by design — see `docs/reference/architecture/ingestion-pipeline.md`.

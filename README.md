@@ -111,7 +111,7 @@ cd backend && ./scripts/bootstrap.sh
 uv run uvicorn src.api.main:app --reload --port 3001
 
 # If REDIS_URL is set in backend/.env, jobs need a worker to run them (separate terminal):
-# cd backend && uv run streaq run src.worker:worker
+# cd backend && uv run streaq run src.worker_cli:worker
 
 # Frontend (separate terminal)
 cd frontend && yarn && yarn dev

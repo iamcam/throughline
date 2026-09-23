@@ -182,7 +182,7 @@ export default function EpisodeDetailPage() {
               {/* Left column - cover art, if any */}
               <div className="flex flex-row flex-wrap justify-between">
                   <div className="">
-                    <CoverArt src={episode.image_url}
+                    <CoverArt src={episode.image_url || feed?.image_url}
                       alt="Episode cover artwork"
                       className="w-42 min-w-18 max-w-full aspect-saqare shadow-md text-primary"
                       proxySrc={getEpisodeArtworkUrl(episode.id)}
