@@ -26,6 +26,26 @@ Full setup steps, environment configuration, and useful commands (migrations, te
 
 Summary: backend needs Python 3.13+ / uv, a running Postgres+pgvector (`docker-compose.db.yml`), and `alembic upgrade head` before `uv run uvicorn src.api.main:app --reload --port 3001`. Frontend needs Node 20+ / Yarn (`yarn && yarn dev` — http://localhost:3000, proxying `/api/*` to `http://localhost:3001`). Redis is optional — set `REDIS_URL` to route ingestion jobs through a real streaQ worker instead of the in-process fallback.
 
+### Test Database Setup
+
+Integration tests (`tests/integration/`) run against their own database,
+named by appending `_test` to the app database's name — same connection
+config (host, port, user, password) as the dev DB, just a different
+database. This keeps integration tests from ever touching your dev data.
+
+Running `uv run pytest` creates this database and its `pgvector` extension
+automatically on first run in a fresh container — no manual `CREATE
+DATABASE` or `CREATE EXTENSION` step required. This needs the DB user in
+`settings.database_url` to have `CREATEDB` privilege (the default app user
+in `docker-compose.db.yml` has this).
+
+Handled by a session-scoped fixture in `tests/integration/conftest.py`
+(`_test_database_ready`), which:
+1. Connects to the `postgres` maintenance database and creates the test
+   database if it doesn't exist.
+2. Connects to the test database and runs
+   `CREATE EXTENSION IF NOT EXISTS vector`.
+
 ### Local LLM options
 
 **Ollama (recommended for local dev):**

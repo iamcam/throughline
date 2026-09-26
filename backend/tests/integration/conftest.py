@@ -3,8 +3,11 @@ import pytest
 import time
 
 from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from asgi_lifespan import LifespanManager
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy import text
+from sqlalchemy.engine import make_url
+
 
 from src.api.dependencies import get_ingestion_queue
 from src.api.main import app
@@ -20,8 +23,49 @@ settings = get_settings()
 TEST_DATABASE_URL = f"{settings.database_url}_test"
 
 
+## Setup
+async def _ensure_database_exists(target_url: str) -> None:
+    url = make_url(target_url)
+    target_db_name = url.database
+
+    # Connect to the default 'postgres' maintenance DB instead of the
+    # (possibly nonexistent) target DB.
+    maintenance_url = url.set(database="postgres")
+    maintenance_engine = create_async_engine(
+        maintenance_url, isolation_level="AUTOCOMMIT"
+    )
+
+    async with maintenance_engine.connect() as conn:
+        exists = await conn.scalar(
+            text("SELECT 1 FROM pg_database WHERE datname = :name"),
+            {"name": target_db_name},
+        )
+        if not exists:
+            # Can't parameterize a database name -- quote_ident is the
+            # standard safe way to interpolate an identifier here.
+            await conn.execute(
+                text(f'CREATE DATABASE "{target_db_name}"')
+            )
+
+    await maintenance_engine.dispose()
+
+
+async def _ensure_pgvector_extension(target_url: str) -> None:
+    engine = create_async_engine(target_url)
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    await engine.dispose()
+
+
+@pytest.fixture(scope="session")
+async def _test_database_ready():
+    await _ensure_database_exists(TEST_DATABASE_URL)
+    await _ensure_pgvector_extension(TEST_DATABASE_URL)
+
+# Remaining test config
+
 @pytest.fixture
-async def db_engine():
+async def db_engine(_test_database_ready):
     engine = create_async_engine(TEST_DATABASE_URL)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
