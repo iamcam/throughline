@@ -1,9 +1,11 @@
 # src/ingestion/pipeline.py
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
 from uuid import UUID
+import anyio
 from opentelemetry import trace
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -114,7 +116,9 @@ async def ingest_episode(
             await services.status.set(episode_id, "DIARIZING", db=db)
             logger.info(f"Audio path: {audio_path}")
             diarization = await services.diarization.diarize(audio_path)
-            transcript.segments = align_segments(transcript.segments, diarization)
+            transcript.segments = await asyncio.to_thread(
+                align_segments, transcript.segments, diarization
+            )
 
             span.set_attribute("episode.speaker_count", diarization.speaker_count)
 
@@ -179,7 +183,8 @@ async def ingest_episode(
                 episode_id, len(segment_texts), time.monotonic() - t0
             )
 
-            chunks = services.chunker.chunk(
+            chunks = await asyncio.to_thread(
+                services.chunker.chunk,
                 episode_id=episode_id,
                 segments=[
                     # Convert DB model rows to TranscriptSegment dataclasses
@@ -220,6 +225,15 @@ async def ingest_episode(
             if audio_path:
                 await services.downloader.delete(audio_path)
 
+        except asyncio.CancelledError as e:
+            span.record_exception(e)
+            span.set_status(trace.StatusCode.ERROR, "cancelled")
+            logger.warning("Ingestion cancelled or timed out for episode %s", episode_id)
+            with anyio.CancelScope(shield=True):
+                await services.status.set(
+                    episode_id, "ERROR", error="Ingestion cancelled or timed out", db=db
+                )
+            raise
         except Exception as e:
             span.record_exception(e)
             span.set_status(trace.StatusCode.ERROR, str(e))

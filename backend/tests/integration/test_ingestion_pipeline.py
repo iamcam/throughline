@@ -4,6 +4,7 @@ import pytest
 from uuid import uuid4
 from unittest.mock import AsyncMock
 from sqlalchemy import select
+import anyio
 
 from src.diarization.base import DiarizationService
 from src.diarization.local import LocalDiarizationService, SpeakerTurn, DiarizationResult
@@ -300,6 +301,27 @@ async def test_error_stored_on_failure(episode, mock_services, db_session):
     await db_session.refresh(episode)
     assert episode.pipeline_status == "ERROR"
     assert "network failure" in episode.pipeline_error
+
+
+async def test_timeout_leaves_error_status(episode, mock_services, db_session):
+    """
+    streaQ enforces STREAQ_TASK_TIMEOUT by wrapping the task in an anyio cancel
+    scope. anyio cancellation is level-triggered: every await inside a cancelled
+    scope is cancelled again, so ingest_episode's ERROR write only lands because
+    it's shielded (Phase 20.2). Without the shield, status stays TRANSCRIBING.
+    """
+    async def hang(*args, **kwargs):
+        await anyio.sleep_forever()
+
+    mock_services.transcription.transcribe.side_effect = hang
+
+    with anyio.move_on_after(0.2) as scope:
+        await ingest_episode(episode, {}, mock_services, db_session)
+
+    assert scope.cancelled_caught
+    await db_session.refresh(episode)
+    assert episode.pipeline_status == "ERROR"
+    assert "cancelled or timed out" in episode.pipeline_error
 
 
 async def test_episode_response_includes_pipeline_error(client, db_session):

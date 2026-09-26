@@ -191,7 +191,7 @@ Full code, dataclasses, and design notes: `docs/reference/architecture/protocols
 
 `pipeline.py` is a thin orchestrator (`ingest_episode`) that sequences discrete injected services — download, transcribe, diarize + align, infer speakers, chunk, embed — via a `PipelineServices` dataclass, with status written to Postgres at every stage transition. No stage has knowledge of other stages.
 
-Ingestion runs in a **separate worker process** (`streaq run src.worker:worker`), decoupled from the API via a Redis-backed queue (streaQ). The API only ever enqueues; the worker is the only thing that executes pipeline code. This means a page refresh, API restart, or worker restart has no effect on a running job — Postgres is the source of truth for status, and SSE reads from it independently. CPU/GPU-bound work (Whisper, Senko) runs inside a `ProcessPoolExecutor` so it never blocks the worker's event loop; Senko's model is kept warm across jobs via the executor's `initializer`.
+Ingestion runs in a **separate worker process** (`streaq run src.worker_cli:worker`), decoupled from the API via a Redis-backed queue (streaQ). The API only ever enqueues; the worker is the only thing that executes pipeline code. This means a page refresh, API restart, or worker restart has no effect on a running job — Postgres is the source of truth for status, and SSE reads from it independently. CPU/GPU-bound work (Whisper, Senko) runs inside a `ProcessPoolExecutor` so it never blocks the worker's event loop; Senko's model is kept warm across jobs via the executor's `initializer`.
 
 Transcription and diarization are fully separate pipeline stages — transcription writes every segment as `speaker_id='UNKNOWN'`; a dedicated **alignment** step (`src/diarization/alignment.py`) then relabels segments by matching them against diarization's speaker turns via millisecond overlap.
 
@@ -278,15 +278,17 @@ TRANSCRIPTION_MAX_SEGMENT_TOKENS=200
 TRANSCRIPTION_PAUSE_THRESHOLD_S=1.2
 
 # Diarization
-PIPELINE_MAX_WORKERS=1                  # ProcessPoolExecutor size shared by local Whisper and local Senko
+PIPELINE_MAX_WORKERS=1                  # ProcessPoolExecutor size per local service (Whisper, Senko); keep equal to MAX_CONCURRENT_INGESTIONS
 
 # Speaker inference
 SPEAKER_INFERENCE_WINDOW_MS=900000
 SPEAKER_INFERENCE_PADDING_MS=60000
 
 # Ingestion
-MAX_CONCURRENT_INGESTIONS=2
+MAX_CONCURRENT_INGESTIONS=2             # streaQ worker concurrency; keep equal to PIPELINE_MAX_WORKERS
 REDIS_URL=                              # empty = in-process BackgroundTaskQueue; set = StreaqQueue (Redis-backed worker)
+STREAQ_WORKER_IDLE_TIMEOUT=120          # s without liveness renewal before a running task is reclaimable
+STREAQ_TASK_TIMEOUT=7200                # per-job hang backstop, not a speed limit (see Phase 20.2)
 
 # Observability
 TRACING_ENABLED=false
@@ -461,7 +463,8 @@ podcast-knowledge-engine/
 │   │   │   ├── setup.py              # OTel provider, exporter, OpenAIInstrumentor
 │   │   │   └── tracer.py             # shared tracer singleton
 │   │   └── config.py
-│   │   ├── worker.py                # streaQ Worker + WorkerContext lifespan; entry point for `streaq run`
+│   │   ├── worker.py                # build_worker() factory: streaQ Worker + WorkerContext lifespan
+│   │   ├── worker_cli.py            # `streaq run src.worker_cli:worker` entry point; calls build_worker()
 │   ├── tests
 │   │   ├── conftest.py
 │   │   ├── fixtures
@@ -631,7 +634,7 @@ git clone https://github.com/youruser/podcast-knowledge-engine
 cp .env.example .env
 # Edit .env — DATABASE_URL, LLM_BASE_URL, LLM_MODEL_NAME at minimum
 
-cd backend && uv sync
+cd backend && uv sync --group diarization
 uv run alembic upgrade head
 uv run uvicorn src.api.main:app --reload --port 3001
 

@@ -218,7 +218,7 @@ Currently no volume; queued/in-flight jobs are lost on container restart. Add a 
 ---
 
 ### 2.1e — Full lifecycle contract tests for StreaqQueue.
-Current contract tests (tests/integration/test_queue.py) cover Protocol conformance and basic enqueue/get_status behavior only, both parametrized over BackgroundTaskQueue and StreaqQueue. Testing real RUNNING → DONE/FAILED/CANCELLED transitions needs a live consuming worker running alongside the test. StreaqQueue's __aenter__/__aexit__ must run within one continuous coroutine for anyio's CancelScope bookkeeping to work -- an async-generator pytest fixture spanning them across its yield point causes a spurious "different task" RuntimeError (worked around in the current tests via a sync fixture returning an unentered context manager, entered directly inside each test function). A second, concurrently-running worker inside the same test would need either careful handling of that same constraint or a real subprocess (matching production's actual process topology) with file- or socket-based signaling instead of shared asyncio.Event objects. Deferred as nontrivial test infrastructure, not core app work.
+Current contract tests (tests/integration/test_queue.py) cover Protocol conformance and basic enqueue/get_status behavior only, both parametrized over BackgroundTaskQueue and StreaqQueue. Testing real RUNNING → DONE/FAILED/CANCELLED transitions needs a live consuming worker running alongside the test. StreaqQueue's __aenter__/__aexit__ must run within one continuous coroutine for anyio's CancelScope bookkeeping to work -- an async-generator pytest fixture spanning them across its yield point causes a spurious "different task" RuntimeError (worked around in the current tests via a sync fixture returning an unentered context manager, entered directly inside each test function). A second, concurrently-running worker inside the same test would need either careful handling of that same constraint or a real subprocess (matching production's actual process topology) with file- or socket-based signaling instead of shared asyncio.Event objects. Deferred as nontrivial test infrastructure, not core app work. Once that infrastructure exists, add a Phase 20.2 regression test: real Redis, `idle_timeout=1`, `concurrency=2`, 4+ tasks that each sleep ~3s and record their task id — assert each id runs exactly once. With streaQ's default prefetch this reproduces the duplicate execution in seconds; with `worker.prefetch = worker.concurrency` it must not.
 
 ---
 
@@ -229,6 +229,28 @@ Currently torch/torchaudio are pinned unconditionally to PyTorch's CPU-only inde
 
 ### 2.1g Stale pipeline-status sweep
 When a worker is killed abnormally mid-episode (OOM kill, a Modal `timeout=` hard-kill, or any SIGKILL-class termination), the process dies before `ingest_episode`'s `try/except` can run, so `pipeline_status` never reaches `ERROR` — the episode is left frozen at whatever stage it was last in, indistinguishable from one still actively processing. Currently requires manually resetting the episode in the DB. Unlike 2.1d's audio sweep, this should *not* run at worker startup — once more than one worker can be running (e.g. scaled to two machines), "this worker just started" says nothing about whether another worker is still legitimately processing that episode. Needs to be a periodic, fleet-independent sweep instead: flag episodes whose `pipeline_status` is an active/non-terminal stage and whose last update is older than a per-stage threshold (a single flat N-minute cutoff is wrong, since stages have very different normal durations — `DOWNLOADING` depends on file size, `EMBEDDING` on chunk count, etc.). Needs the `updated_at` column on `Episode` (`DateTime(timezone=True)`, `onupdate=func.now()`) as a prerequisite — `PipelineStatusService.set()`'s existing `UPDATE` bumps it automatically, no other code change needed for that part. Trigger mechanism TBD, likely the same scheduling path as feed polling.
+
+---
+
+### 2.1h Pipeline throughput / GPU utilization
+
+**What it is:** A set of independent, measure-first improvements to keep the worker's GPU busy. Observed with `MAX_CONCURRENT_INGESTIONS=2`, `PIPELINE_MAX_WORKERS=1`: GPU ~50%, vCPU rarely above 2, and larger machine specs don't meaningfully improve throughput. The bottleneck is the pipeline's serial stage structure (GPU idle during network-bound stages), not raw hardware.
+
+**Reference trace** (single ~200 MB episode, ~29.5 min end-to-end): `audio_download` 20m31s, `transcription` 5m53s, `diarization` 1m41s, `speaker_inference` ~41s across 6 sequential calls, embedding ~18s.
+
+**Candidates** (each independent — benchmark before/after with `run_label` in Phoenix):
+- **Warm Whisper model:** load `WhisperModel` once per subprocess via the executor `initializer`, same pattern as Senko's `_init_diarizer`, instead of constructing it inside `_transcribe_sync` on every call. Removes a model load per episode.
+- **Batched Whisper inference:** faster-whisper's batched transcription pipeline processes multiple audio segments at once and is the main lever for single-episode GPU utilization. Verify the API against the installed faster-whisper version and check transcript quality parity before adopting.
+- **`PIPELINE_MAX_WORKERS` matching `MAX_CONCURRENT_INGESTIONS` (2:2):** every running job always has an executor slot, so all waiting happens in Redis and none counts toward `STREAQ_TASK_TIMEOUT`. Cost: two Whisper and two Senko model instances sharing one GPU — doubled model memory, and per-job stages may slow under contention. The ~50% GPU utilization suggests headroom; measure per-stage durations at 2:2 vs 2:1 before adopting. See the GPU sharing caveat in `docs/reference/architecture/ingestion-pipeline.md`.
+- **Concurrent speaker-inference calls:** the per-speaker LLM calls run sequentially today; `asyncio.gather` with a small semaphore could overlap them. Only helps if the LLM server handles parallel requests (llama-server parallel slots, `OLLAMA_NUM_PARALLEL`), and not at all if the LLM shares the worker's GPU.
+- **numpy `_cosine_similarity`:** the chunker's pure-Python cosine loop is interpreted, GIL-holding work (~hundreds of ms per episode); numpy reduces it to ~ms. Add `numpy` as an explicit dependency rather than relying on it arriving transitively.
+- **Download throughput:** the download dominates the trace (~170 KB/s). Re-check after the progress-callback throttling added alongside the streaQ prefetch fix; if still slow, it's likely provider-side rate limiting.
+
+**Interplay with timeouts:** with `MAX_CONCURRENT_INGESTIONS > PIPELINE_MAX_WORKERS`, a job waiting inside a busy executor has already started from streaQ's point of view, so that wait counts toward `STREAQ_TASK_TIMEOUT`. Any change here that alters concurrency or per-stage durations should revisit that value.
+
+**Larger direction (separate item if pursued):** decoupling the pipeline stages from one another — e.g. transcription and diarization as their own services, local or remote, the same way ingestion was moved out of the API process into its own worker. Each stage could then be scheduled, batched, and scaled independently. Worth evaluating whether that buys anything on a single machine before committing; relates to 1.9 (remote transcription+diarization via Deepgram).
+
+**Effort:** Half a day or less per candidate; batched Whisper ~1 day including quality comparison.
 
 ---
 

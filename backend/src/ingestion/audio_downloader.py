@@ -41,7 +41,10 @@ class AudioDownloader:
             span.set_attribute("audio.url", audio_url)
 
             try:
-                async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
+                async with httpx.AsyncClient(
+                    follow_redirects=True,
+                    timeout=httpx.Timeout(60.0, connect=15.0),  # read/write/pool 60s of silence; connect 15s
+                ) as client:
                     async with client.stream("GET", audio_url) as response:
                         response.raise_for_status()
 
@@ -54,19 +57,24 @@ class AudioDownloader:
                         tmp = dest.with_suffix(".tmp")
                         try:
                             with open(tmp, "wb") as f:
+                                last_progress = 0
                                 async for chunk in response.aiter_bytes(chunk_size=65536):
-                                    f.write(chunk)
+                                    await asyncio.to_thread(f.write, chunk)
                                     received += len(chunk)
 
                                     if on_progress and total:
                                         progress = received / total
-                                        await on_progress(progress)
+                                        if progress - last_progress >= 0.01 or progress == 1.0:
+                                            last_progress = progress
+                                            await on_progress(progress)
+
                             tmp.rename(dest)
 
                         except Exception:
                             if tmp.exists():
                                 tmp.unlink()
                             raise
+
                 span.set_attribute("audio.bytes_received", received)
                 span.set_status(trace.StatusCode.OK)
             except Exception as e:

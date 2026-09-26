@@ -89,7 +89,7 @@ Understanding the execution model is important for reasoning about frontend reco
 
 ### Why a separate worker process
 
-Ingestion involves CPU-bound transcription and can run for minutes. Running it in the same process as the API means a long ingestion job and API responsiveness compete for the same event loop's attention, and a crashed/restarted API process would silently kill any in-flight job with no record of how far it got. The queue is Redis-backed (via [streaQ](https://github.com/tastyware/streaq)) specifically to decouple these: the API process only ever enqueues; a dedicated worker process (`streaq run src.worker:worker`) is the only thing that executes pipeline code.
+Ingestion involves CPU-bound transcription and can run for minutes. Running it in the same process as the API means a long ingestion job and API responsiveness compete for the same event loop's attention, and a crashed/restarted API process would silently kill any in-flight job with no record of how far it got. The queue is Redis-backed (via [streaQ](https://github.com/tastyware/streaq)) specifically to decouple these: the API process only ever enqueues; a dedicated worker process (`streaq run src.worker_cli:worker` — `src/worker_cli.py` just calls `build_worker()` from `src/worker.py`, so importing the factory elsewhere never constructs a worker as a side effect) is the only thing that executes pipeline code.
 
 ### Execution model
 
@@ -141,6 +141,10 @@ Consequence: a mismatched name between `INGEST_EPISODE_JOB` and the worker's reg
 
 **Cancellation:** `cancel()` is a real operation for both queued and in-progress jobs, via streaQ's `Task.abort()` / `Worker.abort_by_id()`. Known limitation: aborting a job blocked on Whisper transcription stops the job, but the underlying `ProcessPoolExecutor` subprocess runs to completion unobserved — actually killing that subprocess would require tracking its OS PID directly. See Future Scope.
 
+**Task liveness, prefetch, and duplicate execution (Phase 20.2):** streaQ keeps a message pending in Redis until the task finishes, and tracks liveness with an idle clock per message. A background loop renews that clock every `0.9 × STREAQ_WORKER_IDLE_TIMEOUT` — but only for tasks that are *running*. Any message idle longer than `idle_timeout` is reclaimed (`XAUTOCLAIM`) on the worker's next fetch, even by the same worker that already holds it. Slow jobs are safe: streaQ doesn't measure progress, so a 40-minute job keeps being renewed. What wasn't safe was streaQ's default prefetch buffer — tasks fetched ahead of a free slot sit unrenewed behind long episodes, get reclaimed, and the duplicate copy can run concurrently with the original. `build_worker()` therefore sets `worker.prefetch = worker.concurrency` (the attribute is the *total* held, running + buffered), so the worker only fetches when a slot is free and everything it holds is running. The remaining duplicate path is an event loop blocked longer than `idle_timeout`, which is why synchronous CPU work (alignment, chunking) runs via `asyncio.to_thread` and Whisper/Senko run in `ProcessPoolExecutor`. A per-episode Redis lock in the task handler was tried and rejected — it acks the shared message on skip and blocks legitimate crash retries. Full root-cause analysis, streaQ internals to check on upgrade, and the coredis `delete()` list-argument gotcha: `docs/reference/phases/phase-20.2-streaq-duplicate-execution.md`.
+
+**Timeouts:** `STREAQ_TASK_TIMEOUT` (default 2h) is a hang backstop, not a speed limit — it must never kill a legitimately long episode. Stalled downloads are caught earlier by httpx's read timeout in `AudioDownloader` (no bytes for 300s). On timeout or cancellation, `ingest_episode` writes `ERROR` inside `anyio.CancelScope(shield=True)` — required because streaQ enforces the timeout with an anyio cancel scope and anyio cancellation is level-triggered, so an unshielded status write would itself be cancelled.
+
 ### CPU/GPU-bound work must use ProcessPoolExecutor
 
 Whisper and Senko are both CPU/GPU-bound and will block the worker's event loop if called directly. Each service builds its own `ProcessPoolExecutor` in `__init__` — constructed once, in `pipeline_runner.py`'s `build_transcription_service`/`build_diarization_service`, at worker startup, and held for the life of the worker process via `WorkerContext`:
@@ -188,7 +192,7 @@ class LocalDiarizationService:
 
 Whisper's executor has no equivalent initializer — `WhisperModel(...)` is constructed fresh inside `_transcribe_sync` on every call, even though the subprocess itself is reused across calls. This is an accepted asymmetry, not an oversight: Whisper's load cost is smaller relative to its own inference time than Senko's, and unifying the two patterns is tracked as a possible future improvement, not a current requirement.
 
-`PIPELINE_MAX_WORKERS` and the worker's `concurrency` are deliberately independent settings: `concurrency` bounds how many jobs the worker process runs concurrently (I/O-bound stages — downloads, LLM calls — genuinely run in parallel up to this limit); `PIPELINE_MAX_WORKERS` bounds how many of those concurrently-running jobs can be doing actual Whisper/Senko compute at the same literal instant, regardless of `concurrency`. A job whose transcription or diarization call arrives while all executor slots are full queues inside that executor, not in Redis. Both default to `1` for local-first, single-machine deployment.
+`PIPELINE_MAX_WORKERS` and the worker's `concurrency` are deliberately independent settings: `concurrency` bounds how many jobs the worker process runs concurrently (I/O-bound stages — downloads, LLM calls — genuinely run in parallel up to this limit); `PIPELINE_MAX_WORKERS` bounds how many of those concurrently-running jobs can be doing actual Whisper/Senko compute at the same literal instant, regardless of `concurrency`. A job whose transcription or diarization call arrives while all executor slots are full queues inside that executor, not in Redis. Both default to `1` for local-first, single-machine deployment. Recommended since Phase 20.2: keep them equal. A job waiting for a busy executor slot has already started from streaQ's point of view, so that wait counts toward `STREAQ_TASK_TIMEOUT`; with matching values, jobs only ever wait in Redis. Note that each local service (Whisper, Senko) owns its own pool of this size — at 2:1, one job can transcribe while another diarizes, but two can't transcribe at once.
 
 **GPU sharing caveat:** on a single-GPU machine (Metal or CUDA), raising `PIPELINE_MAX_WORKERS` above `1` does not give the same clean parallelism CPU-only concurrency would - GPU compute is generally serialized per-device, and multiple subprocesses competing for one GPU risk memory contention rather than a speedup. It's also each Senko subprocess's own warm model held in memory for the life of the worker, so raising this setting multiplies both compute contention and memory footprint. Treat `PIPELINE_MAX_WORKERS > 1` as something to measure on real hardware, not a default to raise speculatively.
 
@@ -217,8 +221,10 @@ episodes
 
 ```
 MAX_CONCURRENT_INGESTIONS=1          # streaQ Worker(concurrency=...)
-PIPELINE_MAX_WORKERS=1               # ProcessPoolExecutor size, shared by local Whisper and local Senko
+PIPELINE_MAX_WORKERS=1               # ProcessPoolExecutor size per local service (Whisper, Senko); keep equal to MAX_CONCURRENT_INGESTIONS
 REDIS_URL=redis://redis:6379         # presence implies StreaqQueue; empty/unset falls back to BackgroundTaskQueue (in-process, no Redis)
+STREAQ_WORKER_IDLE_TIMEOUT=120       # s without liveness renewal before a running task is reclaimable; also crash-recovery delay
+STREAQ_TASK_TIMEOUT=7200             # hang backstop per job, not a speed limit
 ```
 
 ---

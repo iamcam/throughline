@@ -11,7 +11,7 @@ Phases 0 through 18 (including the unplanned 10.1 follow-up) are **✅ Complete*
 
 For what to build next, see `FUTURE_SCOPE.md` — in particular its "What to Build Next (Recommended Order)" section.
 
-Phase 19 (Local Embedding Support) is 🚧 in progress — see the task breakdown below. Phase 19.1 (Remote Embedding `dimensions` Parameter) is ✅ Complete — see `docs/reference/phases/phase-19.1-embedding-dimensions-param.md`. Phase 20 (OpenAI Model Compatibility) is ✅ Complete as of `v1.7.3`. Phase 20.1 (Transcript Segmentation Hardening) is ✅ Complete as of `v1.7.4` — see `docs/reference/phases/phase-20.1-transcript-segmentation-hardening.md`.
+Phase 19 (Local Embedding Support) is 🚧 in progress — see the task breakdown below. Phase 19.1 (Remote Embedding `dimensions` Parameter) is ✅ Complete — see `docs/reference/phases/phase-19.1-embedding-dimensions-param.md`. Phase 20 (OpenAI Model Compatibility) is ✅ Complete as of `v1.7.3`. Phase 20.1 (Transcript Segmentation Hardening) is ✅ Complete as of `v1.7.4` — see `docs/reference/phases/phase-20.1-transcript-segmentation-hardening.md`. Phase 20.2 (streaQ Duplicate Execution Fix) is ✅ Complete as of `v1.8.3` — see `docs/reference/phases/phase-20.2-streaq-duplicate-execution.md`.
 
 ## Before You Start
 
@@ -65,6 +65,7 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 | 19.1  | Remote embedding `dimensions` param ✅ Complete                | Remote embedding endpoints that support OpenAI's `dimensions` parameter can request 768-dim output directly, matching the pgvector schema without relying on the provider's default | `docs/reference/phases/phase-19.1-embedding-dimensions-param.md` |
 | 20    | OpenAI model compatibility ✅ Complete                        | LLM calls adapt automatically for OpenAI's gpt-5+ family: non-default `temperature` is omitted, and `reasoning_effort` is set to `"none"` when tools are used, instead of erroring | See "Phase 20" section below |
 | 20.1  | Transcript segmentation hardening ✅ Complete                 | Local transcription segments never exceed the embedding token limit even when Whisper drops sentence punctuation on a long run of speech | `docs/reference/phases/phase-20.1-transcript-segmentation-hardening.md` |
+| 20.2  | streaQ duplicate execution fix ✅ Complete                   | Concurrent workers never run the same ingestion job twice; timeouts/cancellation leave a clean ERROR status | `docs/reference/phases/phase-20.2-streaq-duplicate-execution.md` |
 
 ---
 
@@ -202,3 +203,4 @@ Test that BackgroundTaskQueue satisfies the IngestionQueue Protocol."
 | `v1.8.0`                              | Artwork proxy fallback: `CoverArt` component tries direct embed, falls back to new `/episodes/{id}/artwork` and `/feeds/{id}/artwork` same-origin proxy endpoints on failure, then a placeholder; fixes broken images on podcast hosts with hotlink/referrer protection. Also fixes a feed-level `image_url` variable-shadowing bug in `rss_parser.py` where the per-episode loop was clobbering the feed's own artwork URL |
 | `v1.8.1`                              | Dockerfile fix: `ENV UV_NO_SYNC=1`, resolving CUDA lib installation issues caused by unnecessary reinstalls during build |
 | `v1.8.2`                              | Added `run_label` to `IngestRequest`, ingest and reingest endpoints, propagated to OTEL span attributes for pipeline-run benchmarking (e.g. filtering by `attributes["run_label"]` in Phoenix); `build_worker()` factory in `src/worker.py` now builds a fresh Modal `Worker` per invocation instead of reusing the cached singleton, fixing the warm-container lifespan-reuse crash |
+| `v1.8.3`                              | Phase 20.2 — streaQ duplicate execution fix: `worker.prefetch = worker.concurrency` stops unrenewed prefetched tasks being reclaimed and run twice; configurable `STREAQ_WORKER_IDLE_TIMEOUT`/`STREAQ_TASK_TIMEOUT` (2h hang backstop); shielded ERROR write on timeout/cancel; CPU work in alignment/chunking moved off the event loop |

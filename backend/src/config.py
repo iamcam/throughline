@@ -21,7 +21,8 @@ class Settings(BaseSettings):
     redis_url: str = ""  # empty = BackgroundTaskQueue; set = StreaqQueue
     max_concurrent_ingestions: int = 1  # in-process semaphore size, or streaQ concurrency when REDIS_URL is set
     pipeline_max_workers: int = 1  # ProcessPoolExecutor size, shared by local Whisper and local Senko
-
+    streaq_worker_idle_timeout: int = 120
+    streaq_task_timeout: int = 7200 # 2h
 
     # LLM
     llm_base_url: str

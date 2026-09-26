@@ -8,7 +8,7 @@ service each wrap a real connection pool worth keeping warm.
 """
 import logging
 from typing import AsyncGenerator
-from uuid import UUID
+from uuid import uuid4, UUID
 from contextlib import asynccontextmanager
 
 from streaq import Worker
@@ -34,6 +34,8 @@ logging.basicConfig(
     level=settings.log_level,
     format="%(asctime)s %(levelname)s %(name)s — %(message)s",
 )
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan() -> AsyncGenerator[WorkerContext, None]:
@@ -55,15 +57,30 @@ async def lifespan() -> AsyncGenerator[WorkerContext, None]:
 
 
 def build_worker() -> Worker:
+    w_id = uuid4().hex[:8]
+    logger.info(f"👷‍♂️ 🧱 build_worker instance {w_id}")
     worker = Worker(
         redis_url=settings.redis_url,
         concurrency=settings.max_concurrent_ingestions,
+        idle_timeout=settings.streaq_worker_idle_timeout,
         lifespan=lifespan,
     )
+    # streaq buffers 2x concurrency by default, and prefetch=0 can't disable it (0 treated as unset).
+    # Buffered tasks aren't renewed, so on long jobs they pass idle_timeout, get reclaimed by the
+    # same worker, and run twice concurrently. Only fetch when a slot is actually free.
+    worker.prefetch = worker.concurrency
 
-    @worker.task(name=INGEST_EPISODE_JOB)
+    @worker.task(name=INGEST_EPISODE_JOB, timeout=settings.streaq_task_timeout)
     async def ingest_episode_job(episode_id: UUID, job_args: dict) -> None:
+        logger.info(
+            "👷‍♂️ 🔰 ingest_episode_job starting: task_id=%s try=%s episode_id=%s worker=%s",
+            ingest_episode_job.context.task_id,
+            ingest_episode_job.context.tries,
+            episode_id,
+            w_id,
+        )
         services = build_pipeline_services(settings, ingest_episode_job.worker.context)
         await run_ingest(episode_id, job_args, services)
 
     return worker
+
