@@ -5,6 +5,7 @@ import subprocess
 from concurrent.futures import ProcessPoolExecutor
 import traceback
 from opentelemetry import trace
+from concurrent.futures.process import BrokenProcessPool
 
 from src.diarization.base import DiarizationResult, SpeakerTurn
 from src.telemetry.tracer import tracer
@@ -100,43 +101,45 @@ class LocalDiarizationService:
         max_workers: int = 1,
         executor: ProcessPoolExecutor | None = None,
     ):
-        self._executor = executor or ProcessPoolExecutor(
-            max_workers=max_workers,
-            initializer=_init_diarizer,
-            initargs=(
-                device,
-                logging.getLogger().getEffectiveLevel(),
-            ),
-        )
+        self._device = device
+        self._max_workers = max_workers
+        self._executor = executor or self._build_executor()
+
 
     def shutdown(self):
         """Performs a proper shutdown; cleans up any leaked semaphores."""
         self._executor.shutdown(wait=True)
 
-    async def diarize(
-        self,
-        audio_path: str,
-    ) -> DiarizationResult:
+    def _build_executor(self) -> ProcessPoolExecutor:
+        return ProcessPoolExecutor(
+            max_workers=self._max_workers,
+            initializer=_init_diarizer,
+            initargs=(self._device, logging.getLogger().getEffectiveLevel()),
+        )
+
+    async def diarize(self, audio_path: str) -> DiarizationResult:
         with tracer.start_as_current_span("diarization") as span:
             span.set_attribute("openinference.span.kind", "CHAIN")
-
             try:
                 loop = asyncio.get_running_loop()
                 result = await loop.run_in_executor(
-                    self._executor,
-                    _diarize_sync,
-                    audio_path,
+                    self._executor, _diarize_sync, audio_path,
                 )
-
                 span.set_attribute("diarization.turn_count", len(result.turns))
                 span.set_attribute("diarization.speaker_count", result.speaker_count)
                 span.set_status(trace.StatusCode.OK)
-
                 return result
-
+            except BrokenProcessPool as e:
+                # A subprocess died (OOM-kill, segfault). The pool is permanently dead;
+                # without this, every subsequent job fails immediately and hides the
+                # real cause. This episode still fails, but the next one gets a fresh pool.
+                logger.critical("Senko process pool broken, rebuilding: %s", e)
+                self._executor = self._build_executor()
+                span.record_exception(e)
+                span.set_status(trace.StatusCode.ERROR, "process pool broken, rebuilt")
+                raise
             except Exception as e:
                 logger.exception(e)
-
                 span.record_exception(e)
                 span.set_status(trace.StatusCode.ERROR, str(e))
                 raise
