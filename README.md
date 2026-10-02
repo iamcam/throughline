@@ -154,7 +154,7 @@ See `backend/README.md` for transcription options, diarization setup, and observ
 
 ## Development Approach
 
-This project was built through deliberate and thoughtful collaboration with Claude Sonnet. Architectural decisions, tradeoffs, and product direction were mine. The model contributed structure, general implementation, and boilerplate. The goal was to provide the meaningful direction and co-creation as a learning project, as if pair programming with an engineer on my team, allowing me to move much faster than if developed on my own. This is not a vibe-coded project - every architectural decision has been reasoned through and documented, and in many cases, revised. AI tooling is most useful when you bring enough context and judgement to evaluate what it produces.
+This project was built through deliberate and thoughtful collaboration with Claude Sonnet and Opus. Architectural decisions, tradeoffs, and product direction were mine. The model contributed structure, general implementation, and boilerplate. The goal was to provide the meaningful direction and co-creation as a learning project, as if pair programming with an engineer on my team, allowing me to move much faster than if developed on my own. This is not a vibe-coded project - every architectural decision has been reasoned through and documented, and in many cases, revised. AI tooling is most useful when you bring enough context and judgement to evaluate what it produces.
 
 ---
 
