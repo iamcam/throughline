@@ -88,10 +88,14 @@ class PgvectorStore:
         conditions = [
             Chunk.chunk_level == "leaf",
             Chunk.embedding.isnot(None),
+            Episode.pipeline_status == "READY",
         ]
 
         if filters.episode_ids:
             conditions.append(Chunk.episode_id.in_(filters.episode_ids))
+
+        if filters.feed_ids:
+            conditions.append(Episode.feed_id.in_(filters.feed_ids))
 
         if filters.speaker_pairs:
             conditions.append(
@@ -103,15 +107,11 @@ class PgvectorStore:
                 Chunk,
                 Chunk.embedding.cosine_distance(embedding).label("distance"),
             )
+            .join(Episode, Chunk.episode_id == Episode.id)
             .where(and_(*conditions))
             .order_by(Chunk.embedding.cosine_distance(embedding))
             .limit(top_k)
         )
-
-        if filters.feed_ids:
-            stmt = stmt.join(Episode, Chunk.episode_id == Episode.id).where(
-                Episode.feed_id.in_(filters.feed_ids)
-            )
 
         result = await db.execute(stmt)
         rows = result.fetchall()

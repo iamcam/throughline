@@ -4,6 +4,7 @@ import Layout from '@/components/Layout'
 import EpisodeDetailPage from '@/pages/EpisodeDetailPage'
 import EpisodesPage from '@/pages/EpisodesPage'
 import FeedsPage from '@/pages/FeedsPage'
+import QueuePage from '@/pages/QueuePage'
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { ThemeProvider } from './components/theme-provider/ThemeProvider'
@@ -26,10 +27,12 @@ export default function App() {
                   <ChatPage />
                 </Suspense>
               } />
+              <Route path="/queue" element={<QueuePage />} />
+
             </Route>
           </Routes>
         </ErrorBoundary>
-      </BrowserRouter>
+        </BrowserRouter>
     </ThemeProvider>
   )
 }

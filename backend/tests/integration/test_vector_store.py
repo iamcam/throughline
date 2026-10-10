@@ -6,8 +6,10 @@ import pytest
 
 from sqlalchemy import text
 
-from src.storage.vector_store import PgvectorStore, SearchFilters
+from src.config import get_settings
 from src.models.db import Feed, Episode, Chunk
+from src.storage.vector_store import PgvectorStore, SearchFilters
+
 
 
 # ---------------------------------------------------------------------------
@@ -375,3 +377,27 @@ async def test_search_parent_text_none_when_no_parent(db_session):
 
     assert len(results) == 1
     assert results[0].parent_text is None
+
+
+async def test_search_excludes_chunks_from_non_ready_episodes(db_session, make_episode):
+    ready = await make_episode(status="READY")
+    pending = await make_episode(status="PENDING")
+    embedding = [0.1] * get_settings().embedding_dimensions
+
+    for episode in (ready, pending):
+        db_session.add(
+            Chunk(
+                episode_id=episode.id,
+                chunk_level="leaf",
+                speaker_id="SPEAKER_00",
+                text="identical text",
+                start_ms=0,
+                end_ms=1000,
+                embedding=embedding,
+            )
+        )
+    await db_session.commit()
+
+    results = await PgvectorStore().search(embedding, SearchFilters(), top_k=10, db=db_session)
+
+    assert [r.episode_id for r in results] == [ready.id]

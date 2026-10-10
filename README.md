@@ -33,12 +33,14 @@ flowchart LR
 
   subgraph API Process
     direction TB
-    A([RSS / Audio]) --> Q[Enqueue Job]
+    A([RSS / Audio]) --> CL[Claim Episode\nQUEUED + job id]
+    CL --> Q[Enqueue Job]
   end
 
   subgraph Worker Process
     direction TB
-    Q --> B[Download &\nTranscribe]
+    Q --> G{Job still\nowns episode?}
+    G -->|yes| B[Download &\nTranscribe]
     B --> B2[Diarize &\nAlign]
     B2 --> C[Infer Speaker]
     C --> D[Chunk & Embed]
@@ -53,6 +55,7 @@ flowchart LR
 
   D --> Pg[(pgvector)]
   Pg --> H
+  Pg --> QO([Queue Overview\npolled])
 ```
 
 
@@ -104,7 +107,7 @@ cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env
 # Defaults work for local dev
 
-# Optional: Skip if you already have Postgres and Redis running; update .env accordingly. See backend/README.md for manual migration steps.
+# Optional: Skip if you already have Postgres and Redis running; update .env accordingly. See docs/README-backend.md for manual migration steps.
 cd backend && ./scripts/bootstrap.sh
 
 # Backend
@@ -148,7 +151,7 @@ EMBEDDING_BASE_URL=http://host.docker.internal:11434/v1
 
 ---
 
-See `backend/README.md` for transcription options, diarization setup, and observability configuration.
+See `docs/README-backend.md` for transcription options, diarization setup, and observability configuration.
 
 ---
 

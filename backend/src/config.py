@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     streaq_worker_idle_timeout: int = 120
     streaq_task_timeout: int = 7200 # 2h
 
+    # Each pipeline stage has a limit before it's flagged as possibly_stuck, allowing
+    # it to be reset for the episode. Total should below the STREAQ_TASK_TIMEOUT
+    # or streaQ will timeout and kill the job.
+    stuck_threshold_downloading_min: int = 60
+    stuck_threshold_transcribing_min: int = 45
+    stuck_threshold_diarizing_min: int = 20
+    stuck_threshold_inferring_speakers_min: int = 15
+    stuck_threshold_chunking_min: int = 10
+    stuck_threshold_embedding_min: int = 15
+
     # LLM
     llm_base_url: str
     llm_api_key: str = "none"

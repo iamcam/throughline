@@ -1,6 +1,6 @@
 // src/components/EpisodeRow.tsx
 import { getEpisodeArtworkUrl, type Episode } from '@/api/client'
-import EpisodeKebab, { type MutationLike } from '@/components/EpisodeKebab'
+import EpisodeKebab from '@/components/EpisodeKebab'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -8,26 +8,22 @@ import CoverArt from '@/components/ui/CoverArt'
 import StatusBadge from '@/components/ui/StatusBadge'
 import { useEpisodeStatus } from '@/hooks/useEpisodeStatus'
 import { formatDate, formatDuration } from '@/lib/date'
-import { ACTIVE_STATUSES } from '@/lib/episode'
+import { ACTIVE_STATUSES, canReset } from '@/lib/episode'
 import { stripMarkdown } from '@/lib/text'
-import { LucideCloudDownload, LucideListClock, LucideLoaderCircle, LucideSparkles } from 'lucide-react'
+import { LucideCloudDownload, LucideSparkles } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 
 interface EpisodeRowProps {
   episode: Episode
   onIngest: (episodeId: string) => void
-  reingestMutation: MutationLike
-  deleteTranscriptMutation: MutationLike
   link: string
 }
 
-export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTranscriptMutation }: EpisodeRowProps) {
+export function EpisodeRow({ episode, link, onIngest }: EpisodeRowProps) {
 
-  const liveStatus = useEpisodeStatus(ACTIVE_STATUSES.includes(episode.pipeline_status) ? episode.id : null)
+  const liveStatus = useEpisodeStatus(episode.id, episode.pipeline_status)
   const status = liveStatus?.status ?? episode.pipeline_status
-  const stage = liveStatus?.stage ?? episode.pipeline_stage
-  const progress = liveStatus?.progress ?? episode.pipeline_progress
   const isActive = ACTIVE_STATUSES.includes(status)
   const isReady = status === 'READY'
 
@@ -53,11 +49,6 @@ export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTr
                 <div>{formatDate(episode.published_at)}</div>
                 <div>{formatDuration(episode.duration_seconds)}</div>
               </div>
-              {isActive && stage && (
-                <div className="text-sm text-muted-foreground">
-                  {stage}{progress != null ? ` — ${Math.round(progress * 100)}%` : ''}
-                </div>
-              )}
               <div className="line-clamp-4 sm:line-clamp-2 text-foreground">
                 {stripMarkdown(episode.description)}
               </div>
@@ -86,28 +77,22 @@ export function EpisodeRow({ episode, link, onIngest, reingestMutation, deleteTr
                 </Button>
                 </div>
             ) : undefined}
-            {ACTIVE_STATUSES.includes(status) ? (
-              <div className='flex items-center gap-2'>
-                {ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
-                {status != "QUEUED" ? (
-                  <Button size="icon" variant="outline" disabled={true}>
-                    <LucideLoaderCircle className='animate-spin' />
-                  </Button>
-                ) : (
-                    <LucideListClock size={20}  className="text-foreground"/>
-                  ) }
 
+
+            <div className='flex items-center gap-2'>
+              {ACTIVE_STATUSES.includes(status) && (
+                <StatusBadge status={status} />
+              )}
+              {(ACTIVE_STATUSES.includes(status) || status === "READY") && (
+                  <EpisodeKebab
+                    disabled={!canReset(status)}
+                    episodeId={episode.id}
+                    episodeTitle={episode.title}
+                    feedId={episode.feed_id}
+                    status={status}
+                  />
+                )}
               </div>
-            ) : (status === "READY" ? (
-              <EpisodeKebab
-                disabled={isActive}
-                episodeId={episode.id}
-                episodeTitle={episode.title}
-                reingestMutation={reingestMutation}
-                deleteTranscriptMutation={deleteTranscriptMutation}
-              />
-            ) : undefined)
-            }
 
 
           </div>

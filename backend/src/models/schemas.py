@@ -29,7 +29,6 @@ class EpisodeResponse(BaseModel):
     published_at: datetime | None
     duration_seconds: int | None
     pipeline_status: str
-    pipeline_stage: str | None
     pipeline_progress: float | None
     pipeline_error: str | None
     audio_url: str | None
@@ -53,9 +52,7 @@ class TranscriptResponse(BaseModel):
 
 class PipelineStatusUpdate(BaseModel):
     status: str
-    stage: str | None = None
     progress: float | None = None
-    position: int | None = None
     error: str | None = None
 
 class IngestRequest(BaseModel):
@@ -78,3 +75,34 @@ class SpeakerPreviewResponse(BaseModel):
 class UpdateSpeakerRequest(BaseModel):
     speaker_id: str
     display_name: str | None
+
+class QueueFeedSummary(BaseModel):
+    id: UUID
+    title: str | None
+    image_url: str | None
+
+class QueueEpisodeItem(BaseModel):
+    id: UUID
+    title: str | None
+    image_url: str | None
+    published_at: datetime | None
+    duration_seconds: int | None
+    pipeline_status: str
+    pipeline_error: str | None
+    queued_at: datetime | None
+    status_changed_at: datetime | None
+    possibly_stuck: bool
+    feed: QueueFeedSummary
+
+class QueueGroup(BaseModel):
+    total: int
+    items: list[QueueEpisodeItem]
+
+class QueueResponse(BaseModel):
+    queued: QueueGroup
+    in_progress: QueueGroup
+    finished: QueueGroup
+    error: QueueGroup
+
+class ResetCountResponse(BaseModel):
+    reset: int

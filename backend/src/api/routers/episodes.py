@@ -1,23 +1,79 @@
 # src/api/routers/episodes.py
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
+import logging
 from uuid import UUID
 import asyncio
+
+import asyncpg
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import update, delete, select
 
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from sse_starlette.sse import EventSourceResponse
+
+from src.api.episode_guards import require_ready_episode
 from src.api.artwork_proxy import fetch_artwork
-from src.shared.db import AsyncSessionLocal
-from src.api.dependencies import get_ingestion_queue
-from src.ingestion.queue import IngestionQueue
+from src.api.dependencies import get_ingestion_queue, get_pipeline_status_service
+
+from src.ingestion import feed_service
+from src.ingestion.queue import IngestionQueue, QueueConnectionError
+from src.ingestion.status_service import PipelineStatusService
 from src.models.db import Episode as EpisodeModel, Chunk, TranscriptSegment, EpisodeSpeaker
 from src.models.schemas import EpisodeResponse, PipelineStatusUpdate, IngestRequest, TranscriptResponse, TranscriptSegmentResponse
-from src.ingestion import feed_service
-from src.shared.db import get_db
+from src.shared.db import AsyncSessionLocal, get_db
+
 
 router = APIRouter(prefix="/episodes", tags=["episodes"])
+logger = logging.getLogger(__name__)
 
-TERMINAL_STATUSES = {"READY", "ERROR"}
+TERMINAL_STATUSES = {"READY", "ERROR", "PENDING"}
+
+class _ClaimLost(Exception):
+    """Another request claimed the episode between the status pre-check and the claim."""
+
+
+
+async def _claim_and_enqueue(
+    episode_id: UUID,
+    job_args: dict,
+    *,
+    allowed_from: tuple[str, ...],
+    db: AsyncSession,
+    queue: IngestionQueue,
+    status_service: PipelineStatusService,
+) -> str:
+    claimed_job_id: str | None = None
+
+    async def claim(job_id: str) -> None:
+        nonlocal claimed_job_id
+        claimed = await status_service.claim_for_queue(
+            episode_id, job_id, db, allowed_from=allowed_from
+        )
+        if not claimed:
+            await db.rollback()
+            raise _ClaimLost()
+        await feed_service.delete_episode_data(episode_id, db)
+        await db.commit()
+        claimed_job_id = job_id
+
+    try:
+        return await queue.enqueue(
+            episode_id=episode_id, job_args=job_args, before_submit=claim
+        )
+    except _ClaimLost:
+        raise HTTPException(status_code=409, detail="Episode was queued by another request.")
+    except QueueConnectionError as e:
+        if claimed_job_id is not None:
+            await status_service.set(
+                episode_id,
+                "ERROR",
+                db,
+                error="Could not submit the job to the queue.",
+                job_id=claimed_job_id,
+            )
+        raise HTTPException(status_code=503, detail="Ingestion queue is unavailable.") from e
+
 
 
 @router.get("/{episode_id}", response_model=EpisodeResponse)
@@ -28,12 +84,10 @@ async def get_episode(episode_id: UUID, db: AsyncSession = Depends(get_db)):
     return EpisodeResponse.model_validate(episode)
 
 
-
 @router.get("/{episode_id}/transcript", response_model=TranscriptResponse)
 async def get_transcript(episode_id: UUID, db: AsyncSession = Depends(get_db)):
     episode = await feed_service.get_episode(episode_id, db)
-    if not episode:
-        raise HTTPException(status_code=404, detail="Episode not found")
+    await require_ready_episode(episode_id, db)
 
     # Load segments ordered by sequence
     segments_result = await db.execute(
@@ -66,11 +120,51 @@ async def get_transcript(episode_id: UUID, db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.delete("/{episode_id}/transcript", status_code=204)
-async def delete_episode_transcription_handler(episode_id: UUID, db: AsyncSession = Depends(get_db)):
-    deleted = await feed_service.delete_episode_transcription(episode_id, db)
-    if not deleted:
+@router.post("/{episode_id}/reset", status_code=204)
+async def reset_episode_handler(
+    episode_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    queue: IngestionQueue = Depends(get_ingestion_queue),
+):
+    episode = await feed_service.get_episode(episode_id, db)
+    if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
+
+    if episode.pipeline_status == "PENDING":
+        return  # already reset -- idempotent no-op
+
+    observed_status = episode.pipeline_status
+    observed_job_id = episode.ingestion_job_id
+    try:
+        reset = await feed_service.reset_episode(
+            episode_id,
+            db,
+            expected_status=observed_status,
+            expected_job_id=observed_job_id,
+        )
+    except DBAPIError as exc:
+        if not isinstance(exc.orig.__cause__, asyncpg.exceptions.LockNotAvailableError):
+            raise
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Episode is being written to right now. Try again in a moment.",
+        )
+
+    if not reset:
+        raise HTTPException(
+            status_code=409,
+            detail="Episode changed while resetting. Refresh and try again.",
+        )
+
+    if observed_job_id and observed_status not in ("READY", "ERROR"):
+        try:
+            await queue.cancel(observed_job_id)
+        except QueueConnectionError:
+            # Best-effort: the reset already removed this job's ownership,
+            # so if it still runs, the pickup guard / bound writer neutralize it.
+            logger.warning("Could not cancel job %s after reset of episode %s", observed_job_id, episode_id)
+
 
 
 @router.get("/{episode_id}/status", response_model=PipelineStatusUpdate)
@@ -80,7 +174,6 @@ async def get_episode_status(episode_id: UUID, db: AsyncSession = Depends(get_db
         raise HTTPException(status_code=404, detail="Episode not found")
     return PipelineStatusUpdate(
         status=episode.pipeline_status,
-        stage=episode.pipeline_stage,
         progress=episode.pipeline_progress,
         error=episode.pipeline_error,
     )
@@ -107,7 +200,6 @@ async def stream_episode_status(
             yield {
                 "data": PipelineStatusUpdate(
                     status = episode.pipeline_status,
-                    stage = episode.pipeline_stage,
                     progress = episode.pipeline_progress,
                 ).model_dump_json()
             }
@@ -126,6 +218,7 @@ async def ingest_episode_handler(
     body: IngestRequest = IngestRequest(),
     db: AsyncSession = Depends(get_db),
     queue: IngestionQueue = Depends(get_ingestion_queue),
+    status_service: PipelineStatusService = Depends(get_pipeline_status_service),
 ):
     episode = await feed_service.get_episode(episode_id, db)
     if not episode:
@@ -138,14 +231,14 @@ async def ingest_episode_handler(
         )
 
     job_args = {"run_label": body.run_label} if body.run_label else {}
-    job_id = await queue.enqueue(episode_id=episode_id, job_args=job_args)
-
-    await db.execute(
-        update(EpisodeModel)
-        .where(EpisodeModel.id == episode_id)
-        .values(pipeline_status="QUEUED", ingestion_job_id=job_id)
+    job_id = await _claim_and_enqueue(
+        episode_id,
+        job_args,
+        allowed_from=("PENDING", "ERROR"),
+        db=db,
+        queue=queue,
+        status_service=status_service,
     )
-    await db.commit()
 
     return {
         "status": "accepted",
@@ -159,6 +252,7 @@ async def reingest_episode_handler(
     body: IngestRequest = IngestRequest(),
     db: AsyncSession = Depends(get_db),
     queue: IngestionQueue = Depends(get_ingestion_queue),
+    status_service: PipelineStatusService = Depends(get_pipeline_status_service),
 ):
     episode = await feed_service.get_episode(episode_id, db)
     if not episode:
@@ -177,29 +271,20 @@ async def reingest_episode_handler(
         )
 
     job_args = {"run_label": body.run_label} if body.run_label else {}
-    job_id = await queue.enqueue(episode_id=episode_id, job_args=job_args)
-
-    await db.execute(delete(Chunk).where(Chunk.episode_id == episode_id))
-    await db.execute(delete(TranscriptSegment).where(TranscriptSegment.episode_id == episode_id))
-    await db.execute(delete(EpisodeSpeaker).where(EpisodeSpeaker.episode_id == episode_id))
-
-    await db.execute(
-        update(EpisodeModel)
-        .where(EpisodeModel.id == episode_id)
-        .values(
-            pipeline_status="QUEUED",
-            pipeline_stage=None,
-            pipeline_progress=None,
-            pipeline_error=None,
-            ingestion_job_id=job_id
-        )
+    job_id = await _claim_and_enqueue(
+        episode_id,
+        job_args,
+        allowed_from=("ERROR", "READY"),
+        db=db,
+        queue=queue,
+        status_service=status_service,
     )
-    await db.commit()
 
     return {
         "status": "accepted",
         "job_id": job_id,
     }
+
 
 @router.get("/{episode_id}/artwork")
 async def get_episode_artwork(episode_id: UUID, db: AsyncSession = Depends(get_db)):

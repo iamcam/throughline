@@ -193,17 +193,7 @@ Scheduled — see IMPLEMENTATION_PLAN.md Phase 12 and ARCHITECTURE.md section 3.
 
 ### 2.1b Queue Overview UI
 
-**What it is:** A dashboard view showing episodes grouped by pipeline stage — queued, in progress, recently completed — so the user can see everything happening across the system at a glance, not just one episode's status.
-
-**Why it matters:** Today, status is only visible per-episode (via SSE on that episode's detail view). With more than a couple of episodes queued at once, there's no single place to see overall progress.
-
-**Implementation path:**
-- Add `queued_at` / `finished_at` timestamp columns to `Episode` (small Alembic migration; existing rows get `NULL`)
-- `PipelineStatusService` writes `queued_at` on the `QUEUED` transition, `finished_at` on `READY`/`ERROR`
-- New read endpoint: episodes grouped by `pipeline_status`, ordered by `queued_at`/`finished_at` — a plain Postgres query, no queue involvement at all (`IngestionQueue` deliberately doesn't expose queue-position/ordering — see ARCHITECTURE.md 3.4)
-- Frontend: new grouped list view, likely a tab or section on the Episodes page
-
-**Effort:** 1 weekend
+Shipped in Phase 21 (`v1.9.0`) — see `docs/reference/phases/phase-21-queue-ui.md`.
 
 ---
 
@@ -223,7 +213,7 @@ Current contract tests (tests/integration/test_queue.py) cover Protocol conforma
 ---
 
 ### 2.1f — Extras-based PyTorch accelerator split.
-Currently torch/torchaudio are pinned unconditionally to PyTorch's CPU-only index (see pyproject.toml tool.uv.sources) so Docker/Linux doesn't pull CUDA by default. This means the NVIDIA-GPU local-dev path documented in backend/README.md (uv add torch torchaudio --index .../cu121) works but silently rewrites the same pyproject.toml/uv.lock -- committing after running it would flip Docker back to CUDA. A proper fix is Astral's documented extras-based split (uv sync --extra cpu vs. --extra cu121, coexisting permanently in one lockfile via [tool.uv] conflicts + [project.optional-dependencies]) so CPU and CUDA never collide regardless of who runs what locally. Deferred since this is effectively a single-developer project today -- worth doing if that changes, or before a CUDA machine is used again.
+Currently torch/torchaudio are pinned unconditionally to PyTorch's CPU-only index (see pyproject.toml tool.uv.sources) so Docker/Linux doesn't pull CUDA by default. This means the NVIDIA-GPU local-dev path documented in docs/README-backend.md (uv add torch torchaudio --index .../cu121) works but silently rewrites the same pyproject.toml/uv.lock -- committing after running it would flip Docker back to CUDA. A proper fix is Astral's documented extras-based split (uv sync --extra cpu vs. --extra cu121, coexisting permanently in one lockfile via [tool.uv] conflicts + [project.optional-dependencies]) so CPU and CUDA never collide regardless of who runs what locally. Deferred since this is effectively a single-developer project today -- worth doing if that changes, or before a CUDA machine is used again.
 
 ---
 
@@ -251,6 +241,18 @@ When a worker is killed abnormally mid-episode (OOM kill, a Modal `timeout=` har
 **Larger direction (separate item if pursued):** decoupling the pipeline stages from one another — e.g. transcription and diarization as their own services, local or remote, the same way ingestion was moved out of the API process into its own worker. Each stage could then be scheduled, batched, and scaled independently. Worth evaluating whether that buys anything on a single machine before committing; relates to 1.9 (remote transcription+diarization via Deepgram).
 
 **Effort:** Half a day or less per candidate; batched Whisper ~1 day including quality comparison.
+
+---
+
+### 2.1i Per-job audio filenames
+
+Audio downloads are named `<episode_id><ext>` and reused whenever the file exists (temp-file + rename already guarantees a present file is complete). Every later run therefore reuses the file, not just crash retries — so a Retry can't replace a complete-but-bad download, and two live jobs on one episode would share a `.tmp` path. Naming files `<episode_id>.<job_id><ext>` would limit reuse to crash retries (same job id), let each job delete its own file on success/error/early stop via `finally`, and leave orphans to the startup sweep and 2.1d. Trade-off: Retry after a non-audio failure re-downloads. Low priority — bad audio fails loudly at ffmpeg, and Phase 21's claim + ownership checks make concurrent jobs on one episode effectively impossible.
+
+---
+
+### 2.1j Ownership-locked data writes
+
+Shipped in Phase 21 (21c) — implemented more simply than first proposed (per-store `FOR UPDATE` and changed signatures): `PipelineStatusService.still_owns` takes `FOR SHARE` in the same transaction as the write it guards, so no store signatures changed. See `docs/reference/phases/phase-21-queue-ui.md`.
 
 ---
 
@@ -383,7 +385,7 @@ Shipped in Phase 14. See `docs/reference/phases/phase-14-speaker-labeled-retriev
 
 **What it is:** Several modern embedding models (`nomic-embed-text-v1.5`, `nomic-ai/modernbert-embed-base`, `google/embeddinggemma-300m`, `intfloat/e5-base-v2`) produce meaningfully better retrieval results when the text passed to them is prefixed differently depending on whether it's a document being indexed or a query being searched with (e.g. `"search_document: "` vs `"search_query: "`). The model actually chosen for Phase 19 (`Alibaba-NLP/gte-modernbert-base`) does not need this — plain text in, no prefix — so Phase 19 ships without it.
 
-**Why it matters:** If the embedding model is ever swapped for one of the prefix-sensitive alternatives above, skipping the prefix doesn't error — it just leaves retrieval quality on the table silently, the same failure mode documented for cross-deployment model mismatches (see `backend/README.md` §3.3). Worth having the plumbing in place *before* that swap is needed, since it touches call sites (`Embedder`, `Retriever`) that are easy to forget once the code is written and working.
+**Why it matters:** If the embedding model is ever swapped for one of the prefix-sensitive alternatives above, skipping the prefix doesn't error — it just leaves retrieval quality on the table silently, the same failure mode documented for cross-deployment model mismatches (see `ARCHITECTURE.md` §3.3). Worth having the plumbing in place *before* that swap is needed, since it touches call sites (`Embedder`, `Retriever`) that are easy to forget once the code is written and working.
 
 **Investigated and ruled out:** there's no reliable way to auto-detect a model's prefix requirement at runtime. `sentence-transformers` has a real mechanism for this (`SentenceTransformer.prompts` / `default_prompt_name`, loaded from a `config_sentence_transformers.json` file in the model repo, with `encode_query()`/`encode_document()` auto-applying them when present) — but it's opt-in per model author and inconsistently used even when a prefix convention is documented in prose. Confirmed by inspecting real repos: `nomic-ai/modernbert-embed-base`'s `config_sentence_transformers.json` has `"prompts": {}` despite its model card explicitly documenting the `search_query:`/`search_document:` convention; `BAAI/bge-base-en-v1.5` doesn't have the field at all. A hardcoded lookup table, not introspection, is the only reliable approach.
 

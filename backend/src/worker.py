@@ -80,7 +80,9 @@ def build_worker() -> Worker:
             w_id,
         )
         services = build_pipeline_services(settings, ingest_episode_job.worker.context)
-        await run_ingest(episode_id, job_args, services)
+        await run_ingest(
+            episode_id, job_args, services, job_id=ingest_episode_job.context.task_id
+        )
 
     return worker
 

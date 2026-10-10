@@ -52,7 +52,7 @@ class PipelineServices:
 #     """
 #     import asyncio
 #     episode_id = episode.id
-#     stages = [
+#     statuses = [
 #         # "DOWNLOADING",
 #         "TRANSCRIBING",
 #         "DIARIZING",
@@ -61,8 +61,8 @@ class PipelineServices:
 #         "EMBEDDING",
 #         "READY",
 #     ]
-#     for stage in stages:
-#         await services.status.set(episode_id, stage, db=db)
+#     for status in statuses:
+#         await services.status.set(episode_id, status, db=db)
 #         await asyncio.sleep(1.5)
 
 
@@ -88,9 +88,33 @@ async def ingest_episode(
 
         try:
 
+            async def enter_stage(status: str) -> bool:
+                """Write the next stage's status. False means this job no longer
+                owns the episode (reset, superseded, or deleted) -- stop quietly."""
+                if await services.status.set(episode_id, status, db=db):
+                    return True
+                logger.info(
+                    "Episode %s: job no longer owns this episode; stopping before %s",
+                    episode_id, status,
+                )
+                span.set_attribute("ingest.stopped_before", status)
+                return False
+
+            async def may_write(what: str) -> bool:
+                """Check ownership immediately before a data write."""
+                if await services.status.still_owns(episode_id, db):
+                    return True
+                logger.info(
+                    "Episode %s: job no longer owns this episode; skipping %s",
+                    episode_id, what,
+                )
+                span.set_attribute("ingest.stopped_before", what)
+                return False
+
             # ~~~~~~ Audio ~~~~~~
 
-            await services.status.set(episode_id, "DOWNLOADING", db=db)
+            if not await enter_stage("DOWNLOADING"):
+                return
 
             async def on_progress(progress: float) -> None:
                 await services.status.set(
@@ -105,7 +129,9 @@ async def ingest_episode(
 
             # ~~~~~~ Transcription ~~~~~~
 
-            await services.status.set(episode_id, "TRANSCRIBING", db=db)
+            if not await enter_stage("TRANSCRIBING"):
+                return
+
             transcript = await services.transcription.transcribe(audio_path)
 
             # ~~~~~~ Diarization ~~~~~~
@@ -113,7 +139,9 @@ async def ingest_episode(
             # the UNKNOWN placeholders transcription left behind. See
             # src/diarization/alignment.py for how segments get matched to turns.
 
-            await services.status.set(episode_id, "DIARIZING", db=db)
+            if not await enter_stage( "DIARIZING"):
+                return
+
             logger.info(f"Audio path: {audio_path}")
             diarization = await services.diarization.diarize(audio_path)
             transcript.segments = await asyncio.to_thread(
@@ -122,7 +150,12 @@ async def ingest_episode(
 
             span.set_attribute("episode.speaker_count", diarization.speaker_count)
 
+            if not await may_write("transcript save"):
+                return
             await services.transcript_store.save(episode_id, transcript, db=db)
+
+            if not await may_write("speaker init"):
+                return
             await services.speaker_store.initialize_from_transcript(episode_id, transcript, db=db)
 
             # ~~~~~~ Speaker Inference ~~~~~~
@@ -130,8 +163,12 @@ async def ingest_episode(
             # means inference found nothing - that row stays unnamed and the
             # pipeline continues; the user can name it later via PUT /speakers.
 
-            await services.status.set(episode_id, "INFERRING_SPEAKERS", db=db)
+            if not await enter_stage("INFERRING_SPEAKERS"):
+                return
+
             inferred = await services.speaker_resolver.infer(transcript.segments)
+            if not await may_write("speaker names"):
+                return
             await services.speaker_store.save_inferred(episode_id, inferred, db=db)
 
             for speaker_id, result in inferred.items():
@@ -151,7 +188,8 @@ async def ingest_episode(
             # 1. Embed transcript segments - used by chunker for topic boundary detection, not stored
             # 2. Embed leaf chunk text - stored in chunks.embedding for retrieval
 
-            await services.status.set(episode_id, "CHUNKING", db=db)
+            if not await enter_stage("CHUNKING"):
+                return
 
             segments = await services.transcript_store.get_segments(episode_id, db=db)
 
@@ -213,9 +251,13 @@ async def ingest_episode(
 
             # ~~~~~~ Embedding ~~~~~~
 
-            await services.status.set(episode_id, "EMBEDDING", db=db)
+            if not await enter_stage("EMBEDDING"):
+                return
+
             chunks = await services.embedder.embed(chunks)
 
+            if not await may_write("chunk upsert"):
+                return
             await services.vector_store.upsert(chunks, db=db)
 
             # ~~~~~~ Wrap Up ~~~~~~

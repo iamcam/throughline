@@ -3,6 +3,7 @@ import pytest
 import asyncio
 from uuid import uuid4
 
+from tests.conftest import noop_before_submit
 from src.ingestion.queue import BackgroundTaskQueue, IngestionQueue, JobStatus, JobNotFoundError
 
 
@@ -11,7 +12,7 @@ async def test_enqueue_returns_job_id():
         pass
 
     queue = BackgroundTaskQueue(max_concurrent=2, job_runner=worker)
-    job_id = await queue.enqueue(uuid4(), {})
+    job_id = await queue.enqueue(uuid4(), {}, before_submit=noop_before_submit)
     assert isinstance(job_id, str)
 
 
@@ -20,7 +21,7 @@ async def test_get_status_transitions_to_done():
         await asyncio.sleep(0.05)
 
     queue = BackgroundTaskQueue(max_concurrent=1, job_runner=worker)
-    job_id = await queue.enqueue(uuid4(), {})
+    job_id = await queue.enqueue(uuid4(), {}, before_submit=noop_before_submit)
 
     assert await queue.get_status(job_id) in (JobStatus.QUEUED, JobStatus.RUNNING)
 
@@ -33,7 +34,7 @@ async def test_get_status_reports_failed():
         raise RuntimeError("intentional test failure")
 
     queue = BackgroundTaskQueue(max_concurrent=1, job_runner=worker)
-    job_id = await queue.enqueue(uuid4(), {})
+    job_id = await queue.enqueue(uuid4(), {}, before_submit=noop_before_submit)
 
     await asyncio.sleep(0.1)
     assert await queue.get_status(job_id) == JobStatus.FAILED
@@ -53,8 +54,8 @@ async def test_cancel_queued_job_succeeds():
     # claims the semaphore immediately, the second stays QUEUED long
     # enough to cancel before it ever starts running.
     queue = BackgroundTaskQueue(max_concurrent=1, job_runner=worker)
-    await queue.enqueue(uuid4(), {})
-    second_job_id = await queue.enqueue(uuid4(), {})
+    await queue.enqueue(uuid4(), {}, before_submit=noop_before_submit)
+    second_job_id = await queue.enqueue(uuid4(), {}, before_submit=noop_before_submit)
 
     cancelled = await queue.cancel(second_job_id)
     assert cancelled is True
@@ -66,7 +67,7 @@ async def test_cancel_running_job_fails():
         await asyncio.sleep(0.1)
 
     queue = BackgroundTaskQueue(max_concurrent=1, job_runner=worker)
-    job_id = await queue.enqueue(uuid4(), {})
+    job_id = await queue.enqueue(uuid4(), {}, before_submit=noop_before_submit)
     await asyncio.sleep(0.02)  # let it actually start running
 
     cancelled = await queue.cancel(job_id)
@@ -85,7 +86,7 @@ async def test_semaphore_limits_concurrency():
         running.pop()
 
     queue = BackgroundTaskQueue(max_concurrent=2, job_runner=tracking_worker)
-    job_ids = [await queue.enqueue(uuid4(), {}) for _ in range(4)]
+    job_ids = [await queue.enqueue(uuid4(), {}, before_submit=noop_before_submit) for _ in range(4)]
     await asyncio.sleep(0.3)
 
     assert max_seen <= 2
@@ -94,3 +95,21 @@ async def test_semaphore_limits_concurrency():
 def test_satisfies_protocol():
     queue = BackgroundTaskQueue(max_concurrent=2, job_runner=None)
     assert isinstance(queue, IngestionQueue)
+
+
+async def test_running_tasks_are_held_then_released():
+    release = asyncio.Event()
+
+    async def runner(episode_id, job_args, job_id):
+        await release.wait()
+
+    queue = BackgroundTaskQueue(max_concurrent=1, job_runner=runner)
+    await queue.enqueue(uuid4(), {}, before_submit=noop_before_submit)
+    await asyncio.sleep(0)
+
+    assert len(queue._tasks) == 1
+
+    release.set()
+    await asyncio.sleep(0.01)
+
+    assert len(queue._tasks) == 0

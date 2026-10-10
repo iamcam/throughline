@@ -1,4 +1,7 @@
 // src/components/EpisodeKebab.tsx
+import { useEpisodeActions } from '@/hooks/useQueueActions';
+import { ACTIVE_STATUSES, canReset, REINGESTABLE_STATUSES } from '@/lib/episode';
+
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -8,19 +11,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle
-} from "@/components/ui/alert-dialog";
 
-import { LucideEllipsis, LucideRefreshCw, LucideTrash } from 'lucide-react';
+import { LucideEllipsis, LucideIterationCcw, LucideRefreshCw } from 'lucide-react';
 
+import EpisodeResetConfirmation from '@/components/ui/EpisodeDestructiveConfirmation';
 import { useState } from 'react';
 
 
@@ -30,49 +24,29 @@ export interface MutationLike {
 }
 
 interface EpisodeKebabProps {
-  disabled: boolean;
-  episodeId: string;
-  episodeTitle?: string | null;
-  reingestMutation: MutationLike;
-  deleteTranscriptMutation: MutationLike;
+  episodeId: string
+  feedId: string
+  episodeTitle: string | null
+  status: string
+  disabled?: boolean
 }
 
-interface DeleteConfirmationProps {
-  isOpen: boolean;
-  episodeTitle?: string | null;
-  onDelete: () => void;
-  onCancel: () => void;
-}
 
-function DeleteConfirmation({ isOpen, onDelete, onCancel, episodeTitle }: DeleteConfirmationProps) {
-  return (
-    <AlertDialog open={isOpen}>
-      <AlertDialogContent size="sm">
-        <AlertDialogHeader>
-          <AlertDialogTitle>Delete Transcript?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Are you sure you want to delete the transcript for {
-              !episodeTitle ? 'this episode?' :
-                (<span className='text-primary block p-1 text-md font-semibold italic'>{episodeTitle}?</span>)
-            }
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel variant="outline" onClick={onCancel}>Cancel</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={onDelete}>Delete</AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  )
-}
-
-export default function EpisodeKebab({ disabled, episodeId, episodeTitle, reingestMutation, deleteTranscriptMutation }: EpisodeKebabProps) {
+export default function EpisodeKebab({ disabled, episodeId, episodeTitle, feedId, status }: EpisodeKebabProps) {
   const [isOpen, setIsOpen] = useState(false)
+  const { retryMutation: reingestMutation, resetMutation } = useEpisodeActions({ episodeId, feedId })
 
-  const onDelete = () => {
-    if (deleteTranscriptMutation.isPending) return;
-    setIsOpen(false);
-    deleteTranscriptMutation.mutate(episodeId)
+  const busy = reingestMutation.isPending || resetMutation.isPending
+  // const error = reingestMutation.error ?? resetMutation.error
+  const canReingest = REINGESTABLE_STATUSES.includes(status)
+  const showReset = canReset(status)
+
+  const isCancel = ACTIVE_STATUSES.includes(status)
+
+  const onReset = () => {
+    if (resetMutation.isPending) return
+    setIsOpen(false)
+    resetMutation.mutate()
   }
 
   const onCancel = () => {
@@ -81,28 +55,31 @@ export default function EpisodeKebab({ disabled, episodeId, episodeTitle, reinge
 
   return (
     <div>
-      <DeleteConfirmation episodeTitle={episodeTitle} isOpen={isOpen} onDelete={onDelete} onCancel={onCancel} />
+      <EpisodeResetConfirmation episodeTitle={episodeTitle} isOpen={isOpen} onReset={onReset} onCancel={onCancel} status={status} />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button disabled={disabled} variant="outline" aria-label='Episode Actions'><LucideEllipsis /></Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className='w-auto'>
-          <DropdownMenuItem
-            disabled={reingestMutation.isPending}
-            onClick={() => { reingestMutation.mutate(episodeId) }}
-          >
-            <LucideRefreshCw /> Re-transcribe
-          </DropdownMenuItem>
+          {canReingest && (
+            <DropdownMenuItem
+              disabled={busy}
+              onClick={() => reingestMutation.mutate()}
+            >
+              <LucideRefreshCw /> Re-transcribe
+            </DropdownMenuItem>
+          )}
+          {canReingest && showReset && <DropdownMenuSeparator />}
+          {showReset && (
+            <DropdownMenuItem variant="destructive"
+              disabled={busy}
+              onClick={() => setIsOpen(true)}
+            >
+              <LucideIterationCcw />
+              {isCancel ? "Cancel Job" : "Reset Episode"}
+            </DropdownMenuItem>
+          )}
 
-          <DropdownMenuSeparator />
-
-          <DropdownMenuItem variant="destructive"
-            disabled={deleteTranscriptMutation.isPending}
-            onClick={() => { setIsOpen(true); }}
-          >
-            <LucideTrash />
-            Delete transcript
-          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

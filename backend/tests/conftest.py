@@ -1,6 +1,9 @@
 # tests/conftest.py
 from collections.abc import AsyncIterator
 import uuid
+
+from src.ingestion.pipeline import PipelineServices
+from src.ingestion.status_service import PipelineStatusService
 from src.llm.base import LLMResponse, StreamChunk, ToolCall
 from src.query.result_hydrator import ChunkResult
 from src.storage.vector_store import RawChunkResult
@@ -136,13 +139,29 @@ class FakeIngestionQueue:
 
     def __init__(self):
         self.enqueued: list[tuple] = []
+        self.cancelled: list[str] = []
 
-    async def enqueue(self, episode_id, job_args) -> str:
+    async def enqueue(self, episode_id, job_args, *, before_submit) -> str:
+        job_id = "fake-job-id"
+        await before_submit(job_id)
         self.enqueued.append((episode_id, job_args))
-        return "fake-job-id"
+        return job_id
 
     async def get_status(self, job_id: str):
         return None
 
     async def cancel(self, job_id: str) -> bool:
+        self.cancelled.append(job_id)
         return False
+
+async def noop_before_submit(job_id: str) -> None:
+    pass
+
+
+def make_pipeline_services(**overrides) -> PipelineServices:
+    """A PipelineServices with every service None (status unbound) unless
+    overridden -- tests pass only the services the code path touches."""
+    fields = {name: None for name in PipelineServices.__dataclass_fields__}
+    fields["status"] = PipelineStatusService()
+    fields.update(overrides)
+    return PipelineServices(**fields)

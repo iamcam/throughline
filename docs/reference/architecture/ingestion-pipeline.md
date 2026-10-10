@@ -47,6 +47,8 @@ async def ingest_episode(
         raise
 ```
 
+**Ownership checks (Phase 21):** the snippet above is simplified (diarization + alignment is covered below). In the real `ingest_episode`, each stage transition goes through `enter_stage(status)`, which writes the status via the job-bound `PipelineStatusService` and ends the run quietly if the write matched no row — the episode was reset or claimed by a newer job. Data writes that aren't status writes (transcript save, speaker-names save, chunk upsert) are each preceded by `may_write(what)`, a `still_owns` check. `still_owns` takes `SELECT … FOR SHARE` on the episode row, and the lock is held until the guarded write commits: a reset or claim (`UPDATE`s on that row) waits for the write and its wipe includes the new rows, and a check that has to wait re-reads the row and sees it has lost ownership. Because a commit releases the lock, every commit needs its own guard — e.g. `may_write` runs again before `speaker_store.initialize_from_transcript`, which follows the transcript save's commit. Reset sets a 5s `lock_timeout` and answers `409` if a write holds the row longer.
+
 **Note:** `PENDING_NAMES` was considered when diarization was introduced but deliberately not built. The pipeline never pauses for user input — diarization and per-speaker name inference both run unattended as part of the same continuous job. Speaker display names can be updated at any time via `PUT /speakers`, a metadata-only operation with no effect on chunks or embeddings, regardless of how many speakers an episode has.
 
 **`PipelineServices` dataclass** (`src/ingestion/pipeline.py`):
@@ -96,13 +98,18 @@ Ingestion involves CPU-bound transcription and can run for minutes. Running it i
 ```
 POST /ingest (HTTP request)
   │
-  └─► StreaqQueue.enqueue()
+  └─► _claim_and_enqueue() → StreaqQueue.enqueue(..., before_submit=claim)
         │
-        ├─ worker.enqueue_unsafe(INGEST_EPISODE_JOB, episode_id, job_args)
-        │    → serializes args, pushes to Redis, returns immediately
+        ├─ task = worker.enqueue_unsafe(INGEST_EPISODE_JOB, episode_id, job_args)
+        │    → builds the task envelope and its id; nothing pushed yet
         │    → API process never imports pipeline code — dispatch is by
         │      function name string only (see below)
-        ├─ Writes pipeline_status=QUEUED to DB    ← DB is source of truth
+        ├─ await before_submit(task.id)              ← DB is source of truth
+        │    → compare-and-set: pipeline_status=QUEUED, ingestion_job_id,
+        │      queued_at; wipe prior episode data; commit
+        │    → lost claim → 409, nothing pushed
+        ├─ await task → pushes to Redis
+        │    → push fails → ERROR written under the claimed job id → 503
         └─ Returns job_id (streaQ-generated) immediately
 
              [HTTP request ends — frontend can close, refresh, disconnect]
@@ -110,11 +117,14 @@ POST /ingest (HTTP request)
         Separate worker process (streaq run), own event loop:
           │
           ├─ Picks up the job (bounded by Worker(concurrency=N))
+          ├─ run_ingest(..., job_id): pickup guard — exits without writing
+          │    if the episode's ingestion_job_id no longer matches
           ├─ pipeline_runner.py builds PipelineServices — LLM/embedding
           │    clients from Worker lifespan context (built once, reused
-          │    across jobs); AudioDownloader built fresh per job (cheap,
-          │    stateless, no persistent connection worth holding)
-          ├─ Calls PipelineStatusService.set() at every stage transition
+          │    across jobs); AudioDownloader built fresh per job; status
+          │    writer bound via PipelineStatusService.for_job(job_id)
+          ├─ enter_stage() at every stage transition; may_write() before
+          │    each data write — stops quietly once ownership is lost
           ├─ Delegates CPU-bound work to ProcessPoolExecutor (Whisper)
           │    └─► worker's event loop stays free for other jobs
           └─ Writes pipeline_status=READY (or ERROR) to DB when done
@@ -125,6 +135,11 @@ GET /episodes/{id}/status/stream (SSE — separate connection)
         └─ Completely independent of the worker process
            Frontend can connect, disconnect, reconnect at any time
            Status is always current because DB is the source of truth
+
+GET /queue (polled by queue page + header widget)
+  │
+  └─► One grouped read of pipeline_status / queued_at / status_changed_at
+        └─ DB only — no IngestionQueue calls
 ```
 
 **Key point:** the worker process and the SSE stream are fully decoupled from the API process. The pipeline writes to the DB via `PipelineStatusService`. SSE reads from the DB. A page refresh, an API restart, or a worker restart has no effect on a running job — streaQ's pessimistic execution model keeps a job in Redis until it succeeds or fails, so a worker crash mid-job means the job is picked up again on restart, not lost.
@@ -137,9 +152,9 @@ Consequence: a mismatched name between `INGEST_EPISODE_JOB` and the worker's reg
 
 **Queue ordering:** FIFO per Redis stream ordering; `Worker(concurrency=N)` bounds how many jobs run at once within one worker process. Not a strict cross-process guarantee if multiple worker processes are ever run — acceptable for a single-user, single-worker deployment.
 
-**Job dedup lives entirely in Postgres, not the queue:** streaQ always generates a fresh job id on enqueue — there is no supported way to request a specific id. `ingest_episode_handler` and `reingest_episode_handler` guard against duplicate/conflicting requests via `episode.pipeline_status` checks before ever calling `enqueue()`. The queue layer offers no id-collision backstop by design.
+**Job dedup and ownership live entirely in Postgres, not the queue:** streaQ always generates a fresh job id on enqueue — there is no supported way to request a specific id. Since Phase 21, `_claim_and_enqueue` (shared by ingest and reingest) claims the episode inside `before_submit` with a compare-and-set on `pipeline_status` (ingest from `PENDING`/`ERROR`, reingest from `ERROR`/`READY`), so two concurrent requests can't both win — the loser gets `409` and nothing is pushed. The queue layer offers no id-collision backstop by design.
 
-**Cancellation:** `cancel()` is a real operation for both queued and in-progress jobs, via streaQ's `Task.abort()` / `Worker.abort_by_id()`. Known limitation: aborting a job blocked on Whisper transcription stops the job, but the underlying `ProcessPoolExecutor` subprocess runs to completion unobserved — actually killing that subprocess would require tracking its OS PID directly. See Future Scope.
+**Cancellation:** `cancel()` is a real operation for both queued and in-progress jobs, via streaQ's `Task.abort()` / `Worker.abort_by_id()`. Known limitation: aborting a job blocked on Whisper transcription stops the job, but the underlying `ProcessPoolExecutor` subprocess runs to completion unobserved — actually killing that subprocess would require tracking its OS PID directly. See Future Scope. Reset (`POST /episodes/{id}/reset`, allowed from any status except `PENDING` — the user-facing cancel for queued and running jobs) doesn't rely on `cancel()` landing: it moves the episode to `PENDING` with a compare-and-set first, then calls `cancel()` best-effort for anything not `READY`/`ERROR`. If the cancel misses, the old job's next ownership check fails and it stops on its own.
 
 **Task liveness, prefetch, and duplicate execution (Phase 20.2):** streaQ keeps a message pending in Redis until the task finishes, and tracks liveness with an idle clock per message. A background loop renews that clock every `0.9 × STREAQ_WORKER_IDLE_TIMEOUT` — but only for tasks that are *running*. Any message idle longer than `idle_timeout` is reclaimed (`XAUTOCLAIM`) on the worker's next fetch, even by the same worker that already holds it. Slow jobs are safe: streaQ doesn't measure progress, so a 40-minute job keeps being renewed. What wasn't safe was streaQ's default prefetch buffer — tasks fetched ahead of a free slot sit unrenewed behind long episodes, get reclaimed, and the duplicate copy can run concurrently with the original. `build_worker()` therefore sets `worker.prefetch = worker.concurrency` (the attribute is the *total* held, running + buffered), so the worker only fetches when a slot is free and everything it holds is running. The remaining duplicate path is an event loop blocked longer than `idle_timeout`, which is why synchronous CPU work (alignment, chunking) runs via `asyncio.to_thread` and Whisper/Senko run in `ProcessPoolExecutor`. A per-episode Redis lock in the task handler was tried and rejected — it acks the shared message on skip and blocks legitimate crash retries. Full root-cause analysis, streaQ internals to check on upgrade, and the coredis `delete()` list-argument gotcha: `docs/reference/phases/phase-20.2-streaq-duplicate-execution.md`.
 
@@ -204,6 +219,7 @@ Whisper's executor has no equivalent initializer — `WhisperModel(...)` is cons
 | Pipeline status        | Yes               | Written to DB at every stage transition                               |
 | SSE stream             | No                | HTTP connection dropped on refresh                                    |
 | SSE reconnect          | Yes               | Frontend re-opens stream; DB has current status                       |
+| Queue overview          | Yes               | Polled from DB (`GET /queue`); no long-lived connection to drop       |
 | Jobs in queue          | Yes               | Persisted in Redis; survives API and worker process restarts          |
 | Chat sessions          | No                | InMemorySessionStore cleared on process restart                       |
 
@@ -225,6 +241,12 @@ PIPELINE_MAX_WORKERS=1               # ProcessPoolExecutor size per local servic
 REDIS_URL=redis://redis:6379         # presence implies StreaqQueue; empty/unset falls back to BackgroundTaskQueue (in-process, no Redis)
 STREAQ_WORKER_IDLE_TIMEOUT=120       # s without liveness renewal before a running task is reclaimable; also crash-recovery delay
 STREAQ_TASK_TIMEOUT=7200             # hang backstop per job, not a speed limit
+STUCK_THRESHOLD_DOWNLOADING_MIN=60   # per-stage minutes before GET /queue flags possibly_stuck (warning only)
+STUCK_THRESHOLD_TRANSCRIBING_MIN=45
+STUCK_THRESHOLD_DIARIZING_MIN=20
+STUCK_THRESHOLD_INFERRING_SPEAKERS_MIN=15
+STUCK_THRESHOLD_CHUNKING_MIN=10
+STUCK_THRESHOLD_EMBEDDING_MIN=15
 ```
 
 ---

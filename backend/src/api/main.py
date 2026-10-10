@@ -2,9 +2,11 @@
 from contextlib import asynccontextmanager, AsyncExitStack
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from src.config import get_settings
+
 from src.api.middleware.auth import BasicAuthMiddleware
-from src.api.routers import health, feeds, episodes, speakers, chat
+from src.api.routers import health, feeds, episodes, speakers, chat, queue
+
+from src.config import get_settings
 from src.query.session_store import InMemorySessionStore
 from src.telemetry.setup import setup_telemetry
 from src.transcription.local import LocalTranscriptionService
@@ -36,9 +38,9 @@ def _make_job_runner(worker_context: WorkerContext, settings):
     in-process -- the local-dev, no-Redis equivalent of worker.py's
     ingest_episode_job task.
     """
-    async def job_runner(episode_id, job_args: dict) -> None:
+    async def job_runner(episode_id, job_args: dict, job_id: str) -> None:
         services = build_pipeline_services(settings, worker_context)
-        await run_ingest(episode_id, job_args, services)
+        await run_ingest(episode_id, job_args, services, job_id=job_id)
     return job_runner
 
 
@@ -85,7 +87,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Throughline Knowledge Engine",
-    version="1.8.3",
+    version="1.9.0",
     lifespan=lifespan
 )
 
@@ -102,3 +104,4 @@ app.include_router(feeds.router, prefix="/api/v1")
 app.include_router(episodes.router, prefix="/api/v1")
 app.include_router(speakers.router, prefix="/api/v1")
 app.include_router(chat.router, prefix="/api/v1")
+app.include_router(queue.router, prefix="/api/v1")

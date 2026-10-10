@@ -70,7 +70,10 @@ class ToolDispatcher:
             speaker_query = (
                 select(EpisodeSpeaker.speaker_id, EpisodeSpeaker.episode_id)
                 .join(Episode, EpisodeSpeaker.episode_id == Episode.id)
-                .where(EpisodeSpeaker.display_name == speaker_name)
+                .where(
+                    EpisodeSpeaker.display_name == speaker_name,
+                    Episode.pipeline_status == "READY",
+                )
             )
             if session.scope_feed_ids:
                 speaker_query = speaker_query.where(
@@ -119,12 +122,15 @@ class ToolDispatcher:
         window_start = timestamp_ms - padding_ms
         window_end = timestamp_ms + padding_ms
 
+        ep_uuid = UUID(episode_id)
         rows = await db.execute(
             select(TranscriptSegment)
+            .join(Episode, TranscriptSegment.episode_id == Episode.id)
             .where(
-                TranscriptSegment.episode_id == UUID(episode_id),
+                TranscriptSegment.episode_id == ep_uuid,
                 TranscriptSegment.end_ms >= window_start,
                 TranscriptSegment.start_ms <= window_end,
+                Episode.pipeline_status == "READY",
             )
             .order_by(TranscriptSegment.start_ms)
         )
@@ -135,7 +141,7 @@ class ToolDispatcher:
 
         # Resolve speaker display names for all segments in one query
         speaker_ids = list({s.speaker_id for s in segments})
-        ep_uuid = UUID(episode_id)
+
         name_rows = await db.execute(
             select(EpisodeSpeaker.speaker_id, EpisodeSpeaker.display_name)
             .where(
@@ -164,8 +170,13 @@ class ToolDispatcher:
     ) -> str:
         rows = await db.execute(
             select(EpisodeSpeaker)
-            .where(EpisodeSpeaker.display_name == speaker_name)
+            .join(Episode, EpisodeSpeaker.episode_id == Episode.id)
+            .where(
+                EpisodeSpeaker.display_name == speaker_name,
+                Episode.pipeline_status == "READY",
+            )
         )
+
         speakers = rows.scalars().all()
 
         if not speakers:

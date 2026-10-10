@@ -40,17 +40,20 @@ The primary interface is a freeform chat that uses tool-calling to decide when r
 ┌─────────────────────────────────────────────────────────┐
 │                        Frontend                          │
 │                    React.js (Vite)                       │
-│  Feed Mgmt │ Episode Mgmt │ Speaker UI │ Chat Interface  │
+│  Feeds │ Episodes │ Speakers │ Queue │ Chat Interface    │
 └────────────────────────┬─────────────────────────────────┘
                          │ HTTP / REST + SSE
 ┌────────────────────────▼─────────────────────────────────┐
 │                    Backend API                           │
 │                  FastAPI + Python                        │
 │                                                          │
-│  /feeds   /episodes   /transcripts   /query   /health    │
+│  /feeds  /episodes  /speakers  /queue  /chat  /health    │
 │                                                          │
 │  IngestionQueue (Protocol-abstracted; Redis-backed via   │
 │  streaQ — enqueue only, no pipeline code runs here)      │
+│                                                          │
+│  Claims the episode (QUEUED + job id) before each push;  │
+│  /queue reads grouped status straight from Postgres      │
 └──────┬───────────────────────────────────────┬───────────┘
        │                                       │
 ┌──────▼───────────┐                ┌──────────▼──────────┐
@@ -63,11 +66,13 @@ The primary interface is a freeform chat that uses tool-calling to decide when r
 │  ↕               │                │  ToolDispatcher      │
 │ AudioDownloader  │                │  SessionStore        │
 │ TranscriptionSvc │                │  ↕                   │
-│ SpeakerResolver  │                │  VectorStore         │
-│ Chunker          │                │  ResultHydrator      │
+│ DiarizationSvc   │                │  VectorStore         │
+│ SpeakerResolver  │                │  ResultHydrator      │
+│ Chunker          │                │                      │
 │ Embedder         │                │                      │
 │ PipelineStatus   │                │                      │
 │   Service        │                │                      │
+│   (job-bound)    │                │                      │
 └──────┬───────────┘                └─────────┬────────────┘
        │                                      │
 ┌──────▼──────────────────────────────────────▼──────────┐
@@ -75,6 +80,7 @@ The primary interface is a freeform chat that uses tool-calling to decide when r
 │                                                          │
 │   PostgreSQL + pgvector                                  │
 │   (feeds, episodes, transcripts, chunks, embeddings)     │
+│   Episode status + ingestion_job_id (job ownership)      │
 │   Speaker identity linked, never embedded in text        │
 └─────────────────────────────────────────────────────────┘
        │                                      │
@@ -147,8 +153,8 @@ def get_vector_store() -> VectorStore:
 def get_session_store(request: Request) -> SessionStore:
     # Returns InMemorySessionStore singleton from app.state
 
-def get_pipeline_status_service(db: AsyncSession = Depends(get_db)) -> PipelineStatusService:
-    # Returns service for writing pipeline status transitions
+def get_pipeline_status_service() -> PipelineStatusService:
+    # Stateless; db is passed per call. Unbound by default — the worker binds it to a job via .for_job(job_id)
 
 def get_prompt_builder() -> PromptBuilder:
     # Returns stateless PromptBuilder instance
@@ -181,7 +187,7 @@ Full code, dataclasses, and design notes: `docs/reference/architecture/protocols
 | `EmbeddingClient` (`src/llm/base.py`)                | `embed(texts: list[str]) -> list[list[float]]`                                          | `OpenAICompatibleEmbeddingClient`, `MockEmbeddingClient`            |
 | `TranscriptionService` (`src/transcription/base.py`) | `transcribe(audio_path, language="en") -> TranscriptResult`                             | `LocalTranscriptionService` (Whisper), `RemoteTranscriptionService` |
 | `DiarizationService` (`src/diarization/base.py`)     | `diarize(audio_path) -> DiarizationResult`                                              | `LocalDiarizationService` (Senko)                                   |
-| `IngestionQueue` (`src/ingestion/queue.py`)          | `enqueue(episode_id, job_args)`, `get_status(job_id)`, `cancel(job_id)`                 | `StreaqQueue` (default), `BackgroundTaskQueue` (fallback)           |
+| `IngestionQueue` (`src/ingestion/queue.py`)          | `enqueue(episode_id, job_args, *, before_submit)`, `get_status(job_id)`, `cancel(job_id)`                 | `StreaqQueue` (default), `BackgroundTaskQueue` (fallback)           |
 | `VectorStore` (`src/storage/vector_store.py`)        | `search(embedding, filters, top_k=5, db) -> list[RawChunkResult]`, `upsert(chunks, db)` | `PgvectorStore`                                                     |
 | `SessionStore` (`src/query/session_store.py`)        | `get(session_id)`, `save(session)`, `delete(session_id)`, `list_sessions()`             | `InMemorySessionStore`                                              |
 
@@ -194,6 +200,8 @@ Full code, dataclasses, and design notes: `docs/reference/architecture/protocols
 Ingestion runs in a **separate worker process** (`streaq run src.worker_cli:worker`), decoupled from the API via a Redis-backed queue (streaQ). The API only ever enqueues; the worker is the only thing that executes pipeline code. This means a page refresh, API restart, or worker restart has no effect on a running job — Postgres is the source of truth for status, and SSE reads from it independently. CPU/GPU-bound work (Whisper, Senko) runs inside a `ProcessPoolExecutor` so it never blocks the worker's event loop; Senko's model is kept warm across jobs via the executor's `initializer`.
 
 Transcription and diarization are fully separate pipeline stages — transcription writes every segment as `speaker_id='UNKNOWN'`; a dedicated **alignment** step (`src/diarization/alignment.py`) then relabels segments by matching them against diarization's speaker turns via millisecond overlap.
+
+**Job ownership (Phase 21):** every run is identified by `episodes.ingestion_job_id`. Ingest and reingest claim the episode *before* the push: `IngestionQueue.enqueue(..., before_submit=...)` hands the new job id to a callback that runs a compare-and-set `UPDATE` (`PipelineStatusService.claim_for_queue` — sets `QUEUED`, `queued_at`, and the job id) and wipes the episode's prior data, then commits. A lost claim returns `409`; a failed push writes `ERROR` under the claimed job id and returns `503`. In the worker, `run_ingest` refuses to start if the episode no longer carries its job id (pickup guard), then runs with a status writer bound via `.for_job(job_id)`, whose writes only land while that job still owns the row. `ingest_episode` re-checks ownership at each stage boundary (`enter_stage`) and before each data write (`may_write`), so a superseded or reset job stops quietly instead of overwriting newer state. Each ownership check takes `SELECT … FOR SHARE` on the episode row and holds it until the guarded write commits, so a reset or claim either waits for an in-flight write (and its wipe includes those rows) or the waiting check sees lost ownership. Reset (`POST /episodes/{id}/reset`, allowed from any status except `PENDING` — for an active run it is the cancel) is a compare-and-set back to `PENDING` that wipes episode data, followed by a best-effort queue `cancel()`.
 
 Full execution-model diagram, dispatch-by-name mechanics, cancellation/dedup rules, ProcessPoolExecutor details, configuration, and the discrete-services table: `docs/reference/architecture/ingestion-pipeline.md`
 
@@ -209,7 +217,9 @@ Full prompt structure, `SpeakerStore` post-inference logic, speaker-state table,
 
 ### 3.6 SSE Status Streaming and Query Engine
 
-Pipeline status streams over SSE (`GET /episodes/{id}/status/stream`), closing on `READY` or `ERROR`, with a polling fallback.
+Pipeline status streams over SSE (`GET /episodes/{id}/status/stream`), closing on `READY`, `ERROR`, or `PENDING` (reset/cancelled), with a polling fallback. Only `READY` episodes are ever served as content: transcript and speaker routes return `409` otherwise, and retrieval and the chat tools filter on `pipeline_status = 'READY'`.
+
+**Queue overview (Phase 21):** the queue page and header widget poll `GET /queue` instead of opening per-episode SSE streams — one request covers every episode in flight. The endpoint reads Postgres only (no `IngestionQueue` calls) and returns four groups — `queued`, `in_progress` (ordered by pipeline stage), `finished` (`READY`), `error` — each with `items` and a full `total`. `since` (default now − 24h) bounds Finished and Error; `limit` optionally caps `items` per group. Each item carries `possibly_stuck`, true once time in the current status (`status_changed_at`) exceeds that stage's `STUCK_THRESHOLD_*_MIN` setting.
 
 The query engine (`src/query/engine.py`) is a thin orchestrator composing `QueryRewriter` (pre-retrieval conversational query rewriting), `PromptBuilder` (pure, no I/O), `ToolDispatcher` (routes tool calls, resolves speaker names, collects citations), and `ResultHydrator` (resolves `speaker_id` → `display_name`, batched, never N+1). It runs a bounded tool-calling loop (`max_tool_rounds`, default 3) against `LLMClient`, with a `for/else` forced-synthesis fallback if rounds are exhausted, and a per-call timeout (`LLM_REQUEST_TIMEOUT_SECONDS`) that fails safe without saving partial session state.
 
@@ -243,7 +253,7 @@ Full setup code, span attribute reference table, and error-recording pattern: `d
 
 ### 3.9 Frontend — React + Vite
 
-React 19 + TypeScript, Vite 8, Tailwind v4, shadcn/ui, TanStack Query v5, React Router v7. Chat has three scoped entry points (all feeds, single feed, single episode) sharing one `ChatInterface` component. Feed/episode cache invalidation is centralized in `lib/queryInvalidation.ts` to avoid the stale-cache bugs that showed up independently across four mutations before consolidation. SSE and TanStack cache are bridged by `useEpisodeStatus`, invalidating on terminal status.
+React 19 + TypeScript, Vite 8, Tailwind v4, shadcn/ui, TanStack Query v5, React Router v7. Chat has three scoped entry points (all feeds, single feed, single episode) sharing one `ChatInterface` component. Feed/episode cache invalidation is centralized in `lib/queryInvalidation.ts` to avoid the stale-cache bugs that showed up independently across four mutations before consolidation. SSE and TanStack cache are bridged by `useEpisodeStatus`, invalidating on terminal status. The queue UI (Phase 21) — the `/queue` page and the header `QueueActivity` widget — shares one `['queue']` cache entry, with a single `useQueuePoller` owning polling (5s active / 30s idle); per-episode Retry/Reset go through `useEpisodeActions`.
 
 Full component inventory, resizable-panel layout pattern, `useChatSession`/`useEpisodeStatus` hook details, and layout gotchas: `docs/reference/architecture/frontend.md`
 
@@ -331,19 +341,27 @@ GET    /api/v1/feeds/{feed_id}/episodes
 ### Episodes
 ```
 GET    /api/v1/episodes/{episode_id}
-POST   /api/v1/episodes/{episode_id}/ingest          Body: { run_label?: str }
-POST   /api/v1/episodes/{episode_id}/reingest        Body: { run_label?: str }
-GET    /api/v1/episodes/{episode_id}/transcript
-DELETE /api/v1/episodes/{episode_id}/transcript
+POST   /api/v1/episodes/{episode_id}/ingest          Body: { run_label?: str }   (from PENDING/ERROR; 409 claim lost, 503 queue down)
+POST   /api/v1/episodes/{episode_id}/reingest        Body: { run_label?: str }   (from ERROR/READY; 409/503 as ingest)
+POST   /api/v1/episodes/{episode_id}/reset           (204; any status → PENDING, wipes data, cancels job; 409 if the state changed or the row is mid-write; no-op if PENDING)
+GET    /api/v1/episodes/{episode_id}/transcript      (409 unless READY)
 GET    /api/v1/episodes/{episode_id}/status          (polling)
 GET    /api/v1/episodes/{episode_id}/status/stream   (SSE)
 ```
 
 ### Speakers
 ```
-GET    /api/v1/episodes/{episode_id}/speakers
-GET    /api/v1/episodes/{episode_id}/speakers/preview
-PUT    /api/v1/episodes/{episode_id}/speakers       Body: [{speaker_id, display_name}]
+GET    /api/v1/episodes/{episode_id}/speakers                                   (409 unless READY)
+GET    /api/v1/episodes/{episode_id}/speakers/preview                           (409 unless READY)
+PUT    /api/v1/episodes/{episode_id}/speakers       Body: [{speaker_id, display_name}]   (409 unless READY)
+```
+
+Only `READY` episodes count as complete — transcript and speaker routes return `409` for any other status.
+
+### Queue
+```
+GET    /api/v1/queue?since=&limit=                  Groups: queued / in_progress / finished / error, each { items, total }
+POST   /api/v1/queue/errors/reset                   Reset every ERROR episode to PENDING → { reset: int }
 ```
 
 ### Chat
@@ -374,7 +392,7 @@ curl -X POST http://localhost:3001/api/v1/feeds \
 curl -X POST http://localhost:3001/api/v1/episodes/ep-uuid/ingest \
   -H "Content-Type: application/json" \
   -d '{"run_label": "eg-otel-trace-label"}'
-# → { "status": "accepted", "job_id": "job-uuid", "queue_position": 1 }
+# → { "status": "accepted", "job_id": "job-uuid" }   (track progress via /status/stream or GET /queue)
 
 # Stream status
 curl -N http://localhost:3001/api/v1/episodes/ep-uuid/status/stream
@@ -408,31 +426,50 @@ curl http://localhost:3001/api/v1/chat/sess-uuid/history
 ```
 podcast-knowledge-engine/
 ├── backend/
+│   ├── alembic/
+│   │   ├── versions/                # Migrations — `uv run alembic upgrade head`
+│   │   ├── env.py
+│   │   └── script.py.mako
+│   ├── scripts/
+│   │   ├── bootstrap.sh             # Local dev bootstrap (DB/Redis + migrations)
+│   │   ├── create_test_db.py        # One-time integration test database
+│   │   └── feed_polling.py          # poll_all_feeds CLI — dev startup chain + host cron
 │   ├── src/
 │   │   ├── api/
 │   │   │   ├── main.py
+│   │   │   ├── artwork_proxy.py     # Same-origin artwork proxy (/episodes/{id}/artwork, /feeds/{id}/artwork)
 │   │   │   ├── routers/
 │   │   │   │   ├── feeds.py
 │   │   │   │   ├── episodes.py
 │   │   │   │   ├── speakers.py
 │   │   │   │   ├── chat.py
+│   │   │   │   ├── queue.py         # GET /queue overview + POST /queue/errors/reset
 │   │   │   │   └── health.py
 │   │   │   ├── middleware/
 │   │   │   │   └── auth.py
+│   │   │   ├── episode_guards.py    # require_ready_episode (404 / 409 unless READY)
 │   │   │   └── dependencies.py      # ALL dependency wiring lives here
 │   │   ├── llm/
 │   │   │   ├── base.py              # LLMClient + EmbeddingClient Protocols, ToolCall, LLMResponse, StreamChunk, ToolCallDelta
-│   │   │   └── client.py            # OpenAICompatibleLLMClient (complete + stream) + OpenAICompatibleEmbeddingClient
+│   │   │   ├── client.py            # OpenAICompatibleLLMClient (complete + stream) + OpenAICompatibleEmbeddingClient
+│   │   │   ├── local.py             # LocalEmbeddingClient (sentence-transformers); EMBEDDING_BASE_URL=local
+│   │   │   └── model_capabilities.py # gpt-5+ family detection: omit temperature, reasoning_effort with tools
 │   │   ├── ingestion/
 │   │   │   ├── pipeline.py          # Thin orchestrator only
 │   │   │   ├── pipeline_runner.py   # Worker-side: builds PipelineServices, runs ingest_episode
 │   │   │   ├── queue.py             # IngestionQueue Protocol + StreaqQueue + BackgroundTaskQueue
-│   │   │   ├── rss_parser.py
-│   │   │   ├── audio_downloader.py
+│   │   │   ├── rss_parser.py        # rss parsing
+│   │   │   ├── itunes.py            # iTunes ingestion
+│   │   │   ├── html.py              # Html parsing
+│   │   │   ├── feed_service.py      # Feed/episode reads + writes; delete_episode_data, reset_episode (compare-and-set + lock_timeout), reset_errored_episodes
+│   │   │   ├── feed_poller.py       # poll_all_feeds — refresh_feed per feed; no ingestion
+│   │   │   ├── audio_downloader.py  # Epiosde audio downloading functions
 │   │   │   ├── transcript_store.py  # Save/retrieve transcript_segments
 │   │   │   ├── speaker_resolver.py  # LLM inference via LLMClient
 │   │   │   ├── speaker_store.py     # Read/write episode_speakers
-│   │   │   ├── status_service.py    # PipelineStatusService
+│   │   │   ├── status_service.py    # PipelineStatusService; claim_for_queue, job-bound writes via .for_job()
+│   │   │   ├── pipeline_stages.py   # ACTIVE_STAGES, stuck thresholds
+│   │   │   ├── queue_overview.py    # Grouped queue query behind GET /queue
 │   │   │   ├── chunker.py           # Speaker-boundary + topic segmentation + min_tokens merge
 │   │   │   └── embedder.py          # Uses EmbeddingClient
 │   │   ├── transcription/
@@ -443,6 +480,10 @@ podcast-knowledge-engine/
 │   │   │   ├── base.py              # DiarizationService Protocol + data types
 │   │   │   ├── local.py             # Senko via ProcessPoolExecutor with warm-model initializer
 │   │   │   └── alignment.py         # Segment-to-turn overlap matching
+│   │   ├── shared/
+│   │   │   ├── db.py                # DB session creation
+│   │   │   ├── jobs.py
+│   │   │   └── llm.py
 │   │   ├── storage/
 │   │   │   └── vector_store.py      # VectorStore Protocol + PgvectorStore; SearchFilters with feed_ids
 │   │   ├── query/
@@ -462,10 +503,10 @@ podcast-knowledge-engine/
 │   │   ├── telemetry/
 │   │   │   ├── setup.py              # OTel provider, exporter, OpenAIInstrumentor
 │   │   │   └── tracer.py             # shared tracer singleton
-│   │   └── config.py
+│   │   ├── config.py
 │   │   ├── worker.py                # build_worker() factory: streaQ Worker + WorkerContext lifespan
-│   │   ├── worker_cli.py            # `streaq run src.worker_cli:worker` entry point; calls build_worker()
-│   ├── tests
+│   │   └── worker_cli.py            # `streaq run src.worker_cli:worker` entry point; calls build_worker()
+│   ├── tests/
 │   │   ├── conftest.py
 │   │   ├── fixtures
 │   │   │   ├── sample_feed.xml
@@ -473,10 +514,20 @@ podcast-knowledge-engine/
 │   │   ├── integration
 │   │   │   ├── conftest.py
 │   │   │   ├── test_chat_streaming.py
+│   │   │   ├── test_episode_reset.py
+│   │   │   ├── test_episodes_queueing.py
+│   │   │   ├── test_feed_service.py
 │   │   │   ├── test_feeds.py
 │   │   │   ├── test_ingestion_pipeline.py
+│   │   │   ├── test_pipeline_ownership.py
+│   │   │   ├── test_pipeline_runner.py
 │   │   │   ├── test_queue.py
-│   │   │   └── test_speakers.py
+│   │   │   ├── test_queue_api.py
+│   │   │   ├── test_queue_overview.py
+│   │   │   ├── test_speakers.py
+│   │   │   ├── test_status_service.py
+│   │   │   ├── test_tool_dispatcher_ready.py
+│   │   │   └── test_vector_store.py
 │   │   └── unit
 │   │       ├── test_alignment.py
 │   │       ├── test_async_utils.py
@@ -485,6 +536,10 @@ podcast-knowledge-engine/
 │   │       ├── test_chunker.py
 │   │       ├── test_engine.py
 │   │       ├── test_itunes.py
+│   │       ├── test_llm_client.py
+│   │       ├── test_local_transcription_segmentation.py
+│   │       ├── test_model_capabilities.py
+│   │       ├── test_pipeline_stages.py
 │   │       ├── test_prompt_builder.py
 │   │       ├── test_query_rewriter.py
 │   │       ├── test_result_hydrator.py
@@ -493,7 +548,14 @@ podcast-knowledge-engine/
 │   │       ├── test_schemas.py
 │   │       ├── test_speaker_resolver.py
 │   │       ├── test_stream_accumulator.py
-│   │       └── test_tool_dispatcher.py
+│   │       ├── test_tool_dispatcher.py
+│   │       └── test_worker.py
+│   ├── alembic.ini
+│   ├── docker-compose.db.yml        # Postgres + pgvector for local dev
+│   ├── docker-compose.redis.yml     # Redis for local dev (StreaqQueue)
+│   ├── Dockerfile
+│   ├── entrypoint.sh                # Container start; runs feed polling before the server
+│   ├── main.py
 │   ├── pyproject.toml
 │   └── .env.example
 ├── frontend/
@@ -503,52 +565,73 @@ podcast-knowledge-engine/
 │   │   ├── components/
 │   │   │   ├── ui/                  # shadcn/ui components (button, badge, card, input, sheet,
 │   │   │   │                        #   accordion, collapsible, resizable, separator, popover,
-│   │   │   │                        #   dropdown-menu, alert-dialog, etc.)
+│   │   │   │                        #   dropdown-menu, alert-dialog, scroll-area, tooltip, etc.)
+│   │   │   │                        #   custom: StatusBadge, ResetEpisodeButton, EpisodeDestructiveConfirmation
 │   │   │   ├── ChatInterface.tsx    # Reusable chat UI; scopeFeedIds/scopeEpisodeIds props
 │   │   │   ├── CitationList.tsx     # Collapsible citations; audio playback via #t= fragment
+│   │   │   ├── ElapsedTime.tsx      # Live duration via useNow; only this <time> re-renders each second
 │   │   │   ├── ErrorBoundary.tsx    # Class component wrapping all routes
-│   │   │   ├── EpisodeKebab.tsx     # Episode reingest/delete-transcript menu; AlertDialog confirm; MutationLike exported
-│   │   │   ├── EpisodeRow.tsx       # Episode card; owns SSE connection; EpisodeKebab when status !== PENDING
+│   │   │   ├── EpisodeKebab.tsx     # Re-transcribe/Reset menu; owns useEpisodeActions; items by status; AlertDialog confirm
+│   │   │   ├── EpisodeRow.tsx       # Episode card; owns SSE connection; EpisodeKebab for resettable statuses
 │   │   │   ├── ExpandableDescription.tsx # Plain text preview + markdown expanded view
 │   │   │   ├── FeedKebab.tsx        # Reusable refresh/delete menu; AlertDialog confirm; narrow MutationLike prop type
 │   │   │   ├── Layout.tsx           # Nav shell; h-screen flex flex-col; main is flex-1 overflow-auto
+│   │   │   ├── QueueActivity.tsx    # Header icon + popover; reads the active flag (useQueueActive)
+│   │   │   ├── QueueRow.tsx         # Queue row; compact for the widget; per-row Retry/Reset
 │   │   │   ├── SearchFilterList.tsx # Sheet-based knowledge base browser; self-contained data fetch
 │   │   │   ├── SpeakerRow.tsx       # Speaker display + popover edit
+│   │   │   ├── theme-provider/
+│   │   │   │   ├── ThemeProvider.tsx
+│   │   │   │   └── theme-provider-context.ts
+│   │   │   ├── ThemeModeToggle.tsx  # Light/dark/system toggle
 │   │   │   └── TranscriptViewer.tsx # Expand/collapse; standalone and reusable
 │   │   ├── hooks/
 │   │   │   ├── useChatSession.ts    # TanStack useQuery session creation; StrictMode-safe
-│   │   │   └── useEpisodeStatus.ts  # SSE hook; invalidates TanStack cache on terminal status
+│   │   │   ├── useEpisodeStatus.ts  # SSE hook; streams only while cached status is active; ends on READY/ERROR/PENDING
+│   │   │   ├── useNow.ts            # One shared 1s clock (useSyncExternalStore); interval only while subscribed
+│   │   │   ├── useQueue.ts          # useQueuePoller (mounted once in Layout) / useQueueActive / useQueue / useQueueWidget; one ['queue'] cache entry
+│   │   │   ├── useQueueActions.ts   # useEpisodeActions (per-episode Retry/Reset), useResetAllErrors
+│   │   │   └── useQueueClearedAt.ts # Widget Clear cookie (server-time watermark)
 │   │   ├── lib/
-│   │   │   ├── date.ts              # formatDate, formatDuration, formatRelativeDate (Intl.RelativeTimeFormat)
-│   │   │   ├── episode.ts           # ACTIVE_STATUSES; episode-specific logic only — date helpers moved to date.ts
-│   │   │   ├── queryInvalidation.ts # invalidateFeedAndEpisodes, invalidateAfterFeedDelete, invalidateEpisode — shared cache invalidation rules
+│   │   │   ├── date.ts              # One set of second-based units; formatElapsed, formatDuration, formatTimestamp, formatDate, formatRelativeDate
+│   │   │   ├── episode.ts           # ACTIVE_STATUSES, REINGESTABLE_STATUSES; canReset, resetActionLabel, formatPipelineStatus
+│   │   │   ├── queryInvalidation.ts # invalidateFeedAndEpisodes, invalidateAfterFeedDelete, invalidateEpisode, invalidateQueue, invalidateAfterPipelineChange, invalidateAfterBulkReset
+│   │   │   ├── queue.ts             # QUEUE_SECTIONS (group keys + titles)
 │   │   │   ├── text.ts              # stripMarkdown()
 │   │   │   └── utils.ts             # shadcn cn() helper
 │   │   ├── pages/
 │   │   │   ├── ChatPage.tsx         # Thin wrapper around ChatInterface; lazy-loaded
-│   │   │   ├── EpisodeDetailPage.tsx # Full detail, ingest/EpisodeKebab (reingest + delete transcript), speakers, transcript; resizable chat panel
+│   │   │   ├── EpisodeDetailPage.tsx # Full detail, ingest/EpisodeKebab (reingest + reset), speakers, transcript; resizable chat panel
 │   │   │   ├── EpisodesPage.tsx     # List with search, filter, pagination; resizable chat panel
-│   │   │   └── FeedsPage.tsx        # Add/sort feeds; refresh/delete via FeedKebab
+│   │   │   ├── FeedsPage.tsx        # Add/sort feeds; refresh/delete via FeedKebab
+│   │   │   └── QueuePage.tsx        # /queue; four groups; Reset all
 │   │   ├── App.tsx                  # Route definitions; ErrorBoundary wraps routes; ChatPage lazy-loaded
 │   │   ├── index.css                # @import "tailwindcss"
-│   │   └── main.tsx                 # QueryClientProvider + StrictMode + App mount
+│   │   └── main.tsx                 # QueryClientProvider (no retry on 4xx) + StrictMode + App mount
+│   ├── public/
+│   │   └── favicon.svg
 │   ├── components.json              # shadcn config; aliases use explicit src/ paths
+│   ├── Dockerfile
+│   ├── eslint.config.js             # react-refresh/only-export-components off for components/ui
+│   ├── index.html
 │   ├── package.json
 │   ├── tsconfig.app.json            # @/* alias → src/*
+│   ├── tsconfig.json
+│   ├── tsconfig.node.json
 │   ├── vite.config.ts               # Tailwind v4 plugin, proxy, @/* alias
-│   └── yarn.lock
-├── transcription-service/
-│   ├── main.py
-│   ├── pyproject.toml
-│   └── Dockerfile
+│   ├── yarn.lock
+│   └── .env.example
 ├── docker-compose.yml
-├── docker-compose.db.yml
 ├── .env.example
+├── AGENTS.md
+├── LICENSE
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── IMPLEMENTATION_PLAN.md
 │   ├── FUTURE_SCOPE.md
 │   ├── OPERATIONS.md
+│   ├── README-backend.md
+│   ├── README-frontend.md
 │   └── reference/
 │       ├── architecture/
 │       └── phases/
@@ -618,7 +701,7 @@ uv run pytest --cov=src --cov-report=term-missing
 | Graph RAG                | Post-chunking NER → entity/relationship tables; `search_graph` tool; new `GraphStore` Protocol                                                       |
 | Persistent conversations | Implement `DBSessionStore` satisfying `SessionStore` Protocol; swap in `dependencies.py`                                                             |
 | Subprocess-level cancel  | Kill the OS-level Whisper subprocess on `cancel()`, not just the asyncio task — requires tracking PID across the `ProcessPoolExecutor` boundary        |
-| Queue overview UI        | `queued_at`/`finished_at` columns on `Episode`; grouped-by-status read endpoint — pure Postgres, no `IngestionQueue` involvement                        |
+| Queue overview UI        | Shipped in Phase 21 — `queued_at`/`status_changed_at` on `Episode`; `GET /queue` (pure Postgres, no `IngestionQueue` involvement); job-ownership claim/guards; `/reset` and bulk error reset; header widget + queue page |
 | Automatic feed polling   | Shipped in Phase 16 — `poll_all_feeds` (`src/ingestion/feed_poller.py`) calls existing `refresh_feed` per feed, no queue/ingestion involvement; invoked via `scripts/feed_polling.py`, chained before the dev server and inside `entrypoint.sh` on container start, and via host cron (`docker compose run --rm --no-deps`) on deployed instances |
 | Alternative vector DBs   | Implement `VectorStore` Protocol for Qdrant/Pinecone; swap in `dependencies.py`; ~1 day                                                              |
 | Non-OpenAI LLM SDK       | Implement `LLMClient` Protocol; swap in `dependencies.py`; no business logic changes                                                                 |

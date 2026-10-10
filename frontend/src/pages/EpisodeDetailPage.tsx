@@ -1,5 +1,5 @@
 // src/pages/EpisodeDetailPage.tsx
-import { deleteEpisodeTranscript, getEpisode, getEpisodeArtworkUrl, getFeed, getSpeakerPreviews, ingestEpisode, isError404, listSpeakers, reingestEpisode } from '@/api/client'
+import { getEpisode, getEpisodeArtworkUrl, getFeed, getSpeakerPreviews, ingestEpisode, isError404, listSpeakers, reingestEpisode } from '@/api/client'
 import { ChatInterface } from '@/components/ChatInterface'
 import EpisodeKebab from '@/components/EpisodeKebab'
 import { ExpandableDescription } from '@/components/ExpandableDescription'
@@ -18,10 +18,10 @@ import { Separator } from '@/components/ui/separator'
 import StatusBadge from '@/components/ui/StatusBadge'
 import { useEpisodeStatus } from '@/hooks/useEpisodeStatus'
 import { formatDate, formatDuration } from '@/lib/date'
-import { ACTIVE_STATUSES } from '@/lib/episode'
-import { invalidateEpisode } from '@/lib/queryInvalidation'
+import { ACTIVE_STATUSES, canReset } from '@/lib/episode'
+import { invalidateAfterPipelineChange } from '@/lib/queryInvalidation'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { LucideChevronLeft, LucideCircleAlert, LucideCloudDownload, LucideEllipsis, LucideLoaderCircle, LucideMessageCircleDashed, LucideX, LucideXCircle } from 'lucide-react'
+import { LucideChevronLeft, LucideCircleAlert, LucideCloudDownload, LucideEllipsis, LucideMessageCircleDashed, LucideX, LucideXCircle } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePanelRef } from 'react-resizable-panels'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -116,28 +116,21 @@ export default function EpisodeDetailPage() {
 
   const previewBySpeaker = new Map(previews?.map(p => [p.speaker_id, p]))
 
-  const liveStatus = useEpisodeStatus(
-    episode && ACTIVE_STATUSES.includes(episode.pipeline_status) ? episodeId! : null
-  )
+  const liveStatus = useEpisodeStatus(episode?.id ?? null, episode?.pipeline_status)
 
   const status = liveStatus?.status ?? episode?.pipeline_status
-  const stage = liveStatus?.stage ?? episode?.pipeline_stage
-  const progress = liveStatus?.progress ?? episode?.pipeline_progress
   const isActive = ACTIVE_STATUSES.includes(status ?? '')
 
   const ingestMutation = useMutation({
     mutationFn: () => ingestEpisode(episodeId!),
-    onSuccess: () => invalidateEpisode(queryClient, episodeId!, episode!.feed_id),
+    onSettled: (_data, error) =>
+      invalidateAfterPipelineChange(queryClient, episodeId!, episode!.feed_id, error ? undefined : "QUEUED"),
   })
 
   const reingestMutation = useMutation({
     mutationFn: (episodeId: string) => reingestEpisode(episodeId),
-    onSuccess: (_data, episodeId) => invalidateEpisode(queryClient, episodeId, episode!.feed_id),
-  })
-
-  const deleteTranscriptMutation = useMutation({
-    mutationFn: (episodeId: string) => deleteEpisodeTranscript(episodeId),
-    onSuccess: (_data, episodeId) => invalidateEpisode(queryClient, episodeId, episode!.feed_id),
+    onSettled: (_data, error, episodeId) =>
+      invalidateAfterPipelineChange(queryClient, episodeId, episode!.feed_id, error ? undefined : "QUEUED"),
   })
 
   if (isLoading) return (
@@ -162,7 +155,7 @@ export default function EpisodeDetailPage() {
         // defaultSize="100%"
         minSize={175}
         maxSize="100%"
-        className='scrollbar-thin scrollbar-gutter-auto bg-page-background'
+        className='scrollbar-thin dark:scrollbar-track-card dark:scrollbar-thumb-card-foreground scrollbar-gutter-auto bg-page-background'
       >
         {/* Episode Content */}
         <div className="space-y-6 h-full p-6">
@@ -231,24 +224,20 @@ export default function EpisodeDetailPage() {
                     </Button>
                   </div>
                 )}
-
-                {ACTIVE_STATUSES.includes(status) ? (
-                  <div className='flex items-center gap-2'>
-                  {ACTIVE_STATUSES.includes(status) && <StatusBadge status={status} />}
-                  <Button size="icon" variant="outline" aria-label="loading" disabled={true}><LucideLoaderCircle className='animate-spin' /></Button>
-                  </div>
-                ) : (status === "READY" ? (
+                <div className='flex items-center gap-2'>
+                {ACTIVE_STATUSES.includes(status) && (
+                  <StatusBadge status={status} />
+                )}
+                  {status !== "PENDING"  && (
                   <EpisodeKebab
-                    disabled={isActive}
+                      disabled={!canReset(status)}
                     episodeId={episode.id}
                     episodeTitle={episode.title}
-                    reingestMutation={reingestMutation}
-                    deleteTranscriptMutation={deleteTranscriptMutation}
+                    feedId={episode.feed_id}
+                    status={status}
                   />
-                ) : undefined)
-                }
-
-
+                )}
+                </div>
               </div>
 
             </div>
@@ -270,11 +259,6 @@ export default function EpisodeDetailPage() {
             </>
           )}
 
-        {isActive && stage && (
-          <p className="text-sm text-muted-foreground">
-            {stage}{progress != null ? ` — ${Math.round(progress * 100)}%` : ''}
-          </p>
-        )}
         {ingestMutation.isError && (
           <p className="text-sm text-destructive"><LucideXCircle className='inline-block mr-2'/>Failed to start transcription. Please try again.</p>
         )}

@@ -29,7 +29,6 @@ export interface Episode {
   audio_url: string | null;
   image_url: string | null;
   pipeline_status: string;
-  pipeline_stage: string | null;
   pipeline_progress: number | null;
   pipeline_error: string | null;
   ingestion_job_id: string | null;
@@ -52,9 +51,7 @@ export interface Transcript {
 
 export interface PipelineStatusUpdate {
   status: string;
-  stage: string | null;
   progress: number | null;
-  position: number | null;
   error: string | null;
 }
 
@@ -138,14 +135,13 @@ export const reingestEpisode = (episodeId: string) =>
     .post(`/episodes/${episodeId}/reingest`, { })
     .then((r) => r.data);
 
+export const resetEpisode = (episodeId: string) =>
+  api.post(`/episodes/${episodeId}/reset`);
 
 // -- Transcript ----------------------------------------------------------------
 
 export const getTranscript = (episodeId: string) =>
   api.get<Transcript>(`/episodes/${episodeId}/transcript`).then((r) => r.data);
-
-export const deleteEpisodeTranscript = (episodeId: string) =>
-  api.delete(`/episodes/${episodeId}/transcript`);
 
 // -- Speakers ------------------------------------------------------------------
 
@@ -161,6 +157,14 @@ export const updateSpeakers = (
   episodeId: string,
   speakers: Pick<Speaker, "speaker_id" | "display_name">[]
 ) => api.put(`/episodes/${episodeId}/speakers`, speakers).then((r) => r.data);
+
+// -- Queue ---------------------------------------------------------------------
+
+export const getQueue = () =>
+  api.get<QueueResponse>("/queue").then((r) => r.data);
+
+export const resetErroredEpisodes = () =>
+  api.post<ResetCountResponse>("/queue/errors/reset").then((r) => r.data);
 
 // -- Chat ----------------------------------------------------------------------
 
@@ -224,14 +228,14 @@ export async function streamChatMessage(
 
 // -- Error helpers -------------------------------------------------------------
 
-export function isError404(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'response' in error &&
-    (error as { response?: { status?: number } }).response?.status === 404
-  )
+export function getResponseStatus(error: unknown): number | undefined {
+  if (typeof error === "object" && error !== null && "response" in error) {
+    return (error as { response?: { status?: number } }).response?.status;
+  }
+  return undefined;
 }
+
+export const isError404 = (error: unknown) => getResponseStatus(error) === 404;
 
 // -- Misc -----------------------------------------------------------------------
 
@@ -283,6 +287,45 @@ async function* parseSSEStream(response: Response): AsyncGenerator<{ event: stri
   }
 }
 
-// -----------------------------------------
+
+// -- Types ------------------------------------------------------------------
+
+export interface QueueFeedSummary {
+  id: string;
+  title: string | null;
+  image_url: string | null;
+}
+
+export interface QueueEpisodeItem {
+  id: string;
+  title: string | null;
+  image_url: string | null;
+  published_at: string | null;
+  duration_seconds: number | null;
+  pipeline_status: string;
+  pipeline_error: string | null;
+  queued_at: string | null;
+  status_changed_at: string | null;
+  possibly_stuck: boolean;
+  feed: QueueFeedSummary;
+}
+
+export interface QueueGroup {
+  total: number;
+  items: QueueEpisodeItem[];
+}
+
+export interface QueueResponse {
+  queued: QueueGroup;
+  in_progress: QueueGroup;
+  finished: QueueGroup;
+  error: QueueGroup;
+}
+
+export type QueueGroupKey = keyof QueueResponse;
+
+export interface ResetCountResponse {
+  reset: number;
+}
 
 export default api;

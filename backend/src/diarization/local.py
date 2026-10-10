@@ -3,7 +3,7 @@ import asyncio
 import logging
 import subprocess
 from concurrent.futures import ProcessPoolExecutor
-import traceback
+import faulthandler
 from opentelemetry import trace
 from concurrent.futures.process import BrokenProcessPool
 
@@ -27,6 +27,8 @@ def _init_diarizer(device: str, log_level: int) -> None:
     ProcessPoolExecutor initializer -- runs once when a subprocess starts,
     before any tasks are submitted to it. No async, no event loop.
     """
+    faulthandler.enable()  # dumps a traceback on SIGSEGV/SIGABRT instead of a silent kill
+
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s %(levelname)s %(name)s — %(message)s",

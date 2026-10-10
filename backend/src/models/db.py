@@ -32,6 +32,9 @@ class Feed(Base):
 
 class Episode(Base):
     __tablename__ = "episodes"
+    __table_args__ = (
+        Index("ix_episodes_pipeline_status_status_changed_at", "pipeline_status", "status_changed_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     feed_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("feeds.id", ondelete="CASCADE"))
@@ -47,10 +50,11 @@ class Episode(Base):
 
     # Pipeline state — DB is source of truth, SSE reads from here
     pipeline_status: Mapped[str] = mapped_column(Text, nullable=False, default="PENDING")
-    pipeline_stage: Mapped[str | None] = mapped_column(Text)
     pipeline_progress: Mapped[float | None] = mapped_column(Float)
     pipeline_error: Mapped[str | None] = mapped_column(Text)
     ingestion_job_id: Mapped[str | None] = mapped_column(Text)
+    queued_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
+    status_changed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

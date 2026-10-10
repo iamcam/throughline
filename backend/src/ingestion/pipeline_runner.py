@@ -7,7 +7,7 @@ this is the worker-side equivalent. Only the worker process imports this
 module; the API process enqueues jobs by name only and never touches
 pipeline code directly.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 from pathlib import Path
 from src.llm.base import LLMClient
@@ -91,14 +91,21 @@ def build_pipeline_services(settings, worker_context) -> PipelineServices:
     )
 
 
-async def run_ingest(episode_id: UUID, job_args: dict, services: PipelineServices) -> None:
+async def run_ingest(
+    episode_id: UUID,
+    job_args: dict,
+    services: PipelineServices,
+    *,
+    job_id: str,
+) -> None:
     """
     Run the ingestion pipeline for one episode.
 
-    Called from the worker's @worker.task-decorated function (src/worker.py).
-    Opens its own DB session, same two-phase pattern as before the queue was
-    decoupled: one session to look up the episode, a second held for the
-    duration of the actual pipeline run.
+    Called from the worker's @worker.task-decorated function (src/worker.py)
+    and BackgroundTaskQueue's job_runner (src/api/main.py). Opens its own DB
+    session, same two-phase pattern as before the queue was decoupled: one
+    session to look up the episode, a second held for the duration of the
+    actual pipeline run.
     """
     async with AsyncSessionLocal() as db:
         episode = await feed_service.get_episode(episode_id, db)
@@ -111,8 +118,28 @@ async def run_ingest(episode_id: UUID, job_args: dict, services: PipelineService
             )
             return
 
+        if episode.ingestion_job_id != job_id:
+            # This job no longer owns the episode: it was reset while queued
+            # (owner is now None) or superseded by a later ingest/reingest
+            # (owner is a newer job). A crash retry re-delivers the same job
+            # id, so it still passes this check and resumes.
+            logger.warning(
+                "Job %s no longer owns episode %s (owner: %s) - skipping ingest.",
+                job_id,
+                episode_id,
+                episode.ingestion_job_id,
+            )
+            return
+
+    # Every status write from here on -- including the ERROR writes in
+    # ingest_episode's exception handlers -- only applies while this job
+    # still owns the episode. A copy, not a mutation: the caller's services
+    # object is never changed, so this stays correct even if services are
+    # ever shared across jobs.
+    job_services = replace(services, status=services.status.for_job(job_id))
+
     async with AsyncSessionLocal() as db:
-        await ingest_episode(episode, job_args, services, db)
+        await ingest_episode(episode, job_args, job_services, db)
 
 def clear_audio_storage(settings) -> None:
     """

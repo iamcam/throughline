@@ -1,37 +1,60 @@
 // src/hooks/useEpisodeStatus.ts
 import type { PipelineStatusUpdate } from "@/api/client";
+import { ACTIVE_STATUSES } from "@/lib/episode";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
+// Any of these ends a run: finished, failed, or reset/cancelled.
+const STREAM_END_STATUSES = ["READY", "ERROR", "PENDING"];
 
-const TERMINAL_STATUSES = ["READY", "ERROR"];
+interface LiveUpdate {
+  episodeId: string;
+  update: PipelineStatusUpdate;
+}
 
-export function useEpisodeStatus(episodeId: string | null) {
-  const [status, setStatus] = useState<PipelineStatusUpdate | null>(null);
+/**
+ * Streams live pipeline status while the *cached* status says the episode is
+ * active. Returns null otherwise -- callers fall back to the cached status.
+ */
+export function useEpisodeStatus(
+  episodeId: string | null,
+  cachedStatus: string | undefined
+) {
+  const [live, setLive] = useState<LiveUpdate | null>(null);
   const queryClient = useQueryClient();
 
+  const streamId =
+    episodeId && cachedStatus && ACTIVE_STATUSES.includes(cachedStatus)
+      ? episodeId
+      : null;
+
   useEffect(() => {
-    if (!episodeId) return;
+    if (!streamId) return;
 
     const source = new EventSource(
-      `/api/v1/episodes/${episodeId}/status/stream`
+      `/api/v1/episodes/${streamId}/status/stream`
     );
 
     source.onmessage = (e) => {
       const update: PipelineStatusUpdate = JSON.parse(e.data);
-      setStatus(update);
-      if (TERMINAL_STATUSES.includes(update.status)) {
+      if (STREAM_END_STATUSES.includes(update.status)) {
         source.close();
+        setLive(null);
         queryClient.invalidateQueries({ queryKey: ["episodes"] });
-        queryClient.invalidateQueries({ queryKey: ["episode", episodeId] });
-        setStatus(null)
+        queryClient.invalidateQueries({ queryKey: ["episode", streamId] });
+        return;
       }
+      setLive({ episodeId: streamId, update });
     };
 
     source.onerror = () => source.close();
 
-    return () => source.close();
-  }, [episodeId, queryClient]);
+    return () => {
+      source.close();
+      setLive(null);
+    };
+  }, [streamId, queryClient]);
 
-  return status;
+  // Only trust a live value from the stream that is open right now.
+  return live && live.episodeId === streamId ? live.update : null;
 }

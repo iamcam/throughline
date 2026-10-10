@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from src.api.dependencies import get_speaker_store
+from src.api.episode_guards import require_ready_episode
 from src.shared.db import get_db
 from src.ingestion.speaker_store import SpeakerStore
 from src.models.db import TranscriptSegment
@@ -17,6 +18,7 @@ async def get_speakers(
     db: AsyncSession = Depends(get_db),
     speaker_store: SpeakerStore = Depends(get_speaker_store)
 ):
+    await require_ready_episode(episode_id, db)
     speakers = await speaker_store.get_speakers(episode_id, db)
     if not speakers:
         raise HTTPException(status_code=404, detail="No speakers found for this episode")
@@ -36,6 +38,7 @@ async def get_speakers_preview(
     """
     # NOTE: this could be optimized if we were to include inference or diarization hints into the episode_speakers table, such as inference_start_ms, which would map to start_ms on transcript_segments.
 
+    await require_ready_episode(episode_id, db)
     speakers = await speaker_store.get_speakers(episode_id, db)
     if not speakers:
         raise HTTPException(status_code=404, detail="No speakers found for this episode")
@@ -73,6 +76,8 @@ async def update_speakers(
     """
     Confirm or correct speaker names. No pipeline effect — this is a metadata-only operation. Chunks and embeddings are unchanged.
     """
+
+    await require_ready_episode(episode_id, db)
     speakers = await speaker_store.get_speakers(episode_id, db)
     if not speakers:
         raise HTTPException(status_code=404, detail="No speakers found for this episode")

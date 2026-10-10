@@ -11,7 +11,7 @@ Phases 0 through 18 (including the unplanned 10.1 follow-up) are **✅ Complete*
 
 For what to build next, see `FUTURE_SCOPE.md` — in particular its "What to Build Next (Recommended Order)" section.
 
-Phase 19 (Local Embedding Support) is 🚧 in progress — see the task breakdown below. Phase 19.1 (Remote Embedding `dimensions` Parameter) is ✅ Complete — see `docs/reference/phases/phase-19.1-embedding-dimensions-param.md`. Phase 20 (OpenAI Model Compatibility) is ✅ Complete as of `v1.7.3`. Phase 20.1 (Transcript Segmentation Hardening) is ✅ Complete as of `v1.7.4` — see `docs/reference/phases/phase-20.1-transcript-segmentation-hardening.md`. Phase 20.2 (streaQ Duplicate Execution Fix) is ✅ Complete as of `v1.8.3` — see `docs/reference/phases/phase-20.2-streaq-duplicate-execution.md`.
+Phase 19 (Local Embedding Support) is ✅ Complete — CPU and MPS verified; CUDA not yet verified on any CUDA device. Phase 19.1 (Remote Embedding `dimensions` Parameter) is ✅ Complete — see `docs/reference/phases/phase-19.1-embedding-dimensions-param.md`. Phase 20 (OpenAI Model Compatibility) is ✅ Complete as of `v1.7.3`. Phase 20.1 (Transcript Segmentation Hardening) is ✅ Complete as of `v1.7.4` — see `docs/reference/phases/phase-20.1-transcript-segmentation-hardening.md`. Phase 20.2 (streaQ Duplicate Execution Fix) is ✅ Complete as of `v1.8.3` — see `docs/reference/phases/phase-20.2-streaq-duplicate-execution.md`. Phase 21 (Queue Overview UI) is ✅ Complete as of `v1.9.0` — see `docs/reference/phases/phase-21-queue-ui.md`.
 
 ## Before You Start
 
@@ -61,15 +61,16 @@ This is the implementation plan for the **Podcast Knowledge Engine** — a local
 | 16    | Automatic feed polling ✅ Complete                           | Feeds refresh automatically on server startup and via cron in deployed environments; ingestion stays manual | `docs/reference/phases/phase-16-feed-polling.md` |
 | 17    | Chat response streaming ✅ Complete                          | Multi-round tool-calling queries show live status while tools run, then stream the final answer token-by-token | `docs/reference/phases/phase-17-chat-streaming.md` |
 | 18    | Episode UI updates ✅ Complete                               | Per-episode artwork with feed-artwork fallback; transcript layout/formatting improvements | `docs/reference/phases/phase-18-episode-ui-updates.md` |
-| 19    | Local embedding support 🚧 In Progress                       | Embeddings can be produced locally (sentence-transformers) or via external API, selected per-deployment via `.env` | See "Phase 19" section below |
+| 19    | Local embedding support ✅ Complete                          | Embeddings can be produced locally (sentence-transformers) or via external API, selected per-deployment via `.env` (CUDA unverified) | See "Phase 19" section below |
 | 19.1  | Remote embedding `dimensions` param ✅ Complete                | Remote embedding endpoints that support OpenAI's `dimensions` parameter can request 768-dim output directly, matching the pgvector schema without relying on the provider's default | `docs/reference/phases/phase-19.1-embedding-dimensions-param.md` |
 | 20    | OpenAI model compatibility ✅ Complete                        | LLM calls adapt automatically for OpenAI's gpt-5+ family: non-default `temperature` is omitted, and `reasoning_effort` is set to `"none"` when tools are used, instead of erroring | See "Phase 20" section below |
 | 20.1  | Transcript segmentation hardening ✅ Complete                 | Local transcription segments never exceed the embedding token limit even when Whisper drops sentence punctuation on a long run of speech | `docs/reference/phases/phase-20.1-transcript-segmentation-hardening.md` |
 | 20.2  | streaQ duplicate execution fix ✅ Complete                   | Concurrent workers never run the same ingestion job twice; timeouts/cancellation leave a clean ERROR status | `docs/reference/phases/phase-20.2-streaq-duplicate-execution.md` |
+| 21    | Queue overview UI ✅ Complete                                | Queued, in-progress, finished, and errored episodes visible in one place (dedicated page + header popover), polled at a regular interval; any queued or running job can be cancelled and any finished or errored episode reset | `docs/reference/phases/phase-21-queue-ui.md` |
 
 ---
 
-## Phase 19 — Local Embedding Support (In Progress)
+## Phase 19 — Local Embedding Support ✅ Complete (CUDA unverified)
 
 **Why:** the external embedding API in use doesn't support the 768-dim output the existing pgvector schema and already-embedded chunks depend on. Local embedding removes that dependency entirely, using the same `device="auto"`-style pattern already used by `senko.Diarizer`.
 
@@ -205,3 +206,4 @@ Test that BackgroundTaskQueue satisfies the IngestionQueue Protocol."
 | `v1.8.2`                              | Added `run_label` to `IngestRequest`, ingest and reingest endpoints, propagated to OTEL span attributes for pipeline-run benchmarking (e.g. filtering by `attributes["run_label"]` in Phoenix); `build_worker()` factory in `src/worker.py` now builds a fresh Modal `Worker` per invocation instead of reusing the cached singleton, fixing the warm-container lifespan-reuse crash |
 | `v1.8.3`                              | Phase 20.2 — streaQ duplicate execution fix: `worker.prefetch = worker.concurrency` stops unrenewed prefetched tasks being reclaimed and run twice; configurable `STREAQ_WORKER_IDLE_TIMEOUT`/`STREAQ_TASK_TIMEOUT` (2h hang backstop); shielded ERROR write on timeout/cancel; CPU work in alignment/chunking moved off the event loop |
 | `v1.8.4`                              | Diarization resilience: `LocalDiarizationService` catches `BrokenProcessPool` and rebuilds the executor so a single crashed Senko subprocess no longer cascades into failing every queued episode behind it; root cause of the underlying crash is unresolved. |
+| `v1.9.0`                              | Phase 21 — queue overview UI: `GET /queue` grouped overview (queued / in progress / finished / error) with `possibly_stuck` per-stage thresholds; `queued_at`/`status_changed_at` replace `pipeline_stage`; job-id ownership (claim before push, pickup guard, stage and pre-write checks); `POST /episodes/{id}/reset` and `POST /queue/errors/reset`; transcript/speaker routes `READY`-only; queue page + header activity widget; cancel any queued or running job (reset from any status); ownership-locked writes and `READY`-only reads; live elapsed times |

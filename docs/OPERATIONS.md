@@ -22,7 +22,7 @@
 
 Fastest iteration loop: run Postgres (and optionally Redis) in Docker, everything else natively.
 
-Full setup steps, environment configuration, and useful commands (migrations, testing, etc.): `../backend/README.md` and `../frontend/README.md`.
+Full setup steps, environment configuration, and useful commands (migrations, testing, etc.): `README-backend.md` and `README-frontend.md`.
 
 Summary: backend needs Python 3.13+ / uv, a running Postgres+pgvector (`docker-compose.db.yml`), and `alembic upgrade head` before `uv run uvicorn src.api.main:app --reload --port 3001`. Frontend needs Node 20+ / Yarn (`yarn && yarn dev` — http://localhost:3000, proxying `/api/*` to `http://localhost:3001`). Redis is optional — set `REDIS_URL` to route ingestion jobs through a real streaQ worker instead of the in-process fallback.
 
@@ -83,7 +83,7 @@ LLM_MODEL_NAME=claude-sonnet-4-20250514     # or gpt-4o
 
 ### Transcription and diarization options
 
-Full detail (local Whisper backends, remote transcription, Senko diarization — always-on, no opt-in setting): `../backend/README.md`.
+Full detail (local Whisper backends, remote transcription, Senko diarization — always-on, no opt-in setting): `README-backend.md`.
 
 ---
 

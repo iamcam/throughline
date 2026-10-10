@@ -1,4 +1,6 @@
 import { Badge } from '@/components/ui/badge'
+import { ACTIVE_STATUSES } from '@/lib/episode'
+import { LucideLoaderCircle } from 'lucide-react'
 
 export default function StatusBadge({ status }: { status: string }) {
   const variants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
@@ -18,5 +20,10 @@ export default function StatusBadge({ status }: { status: string }) {
 
   }
   const variant = variants[status] ?? 'secondary'
-  return <Badge variant={variant}>{messages[status] || status}</Badge>
+  return (
+    <Badge variant={variant}>
+      {messages[status] || status}
+      {ACTIVE_STATUSES.includes(status) && <LucideLoaderCircle className="animate-spin" />}
+    </Badge>
+  )
 }

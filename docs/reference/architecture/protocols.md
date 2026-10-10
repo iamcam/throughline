@@ -150,7 +150,13 @@ No speaker-count hint on this Protocol: Senko does not accept one, and no diariz
 
 ```python
 class IngestionQueue(Protocol):
-    async def enqueue(self, episode_id: UUID, job_args: dict) -> str: ...
+    async def enqueue(
+        self,
+        episode_id: UUID,
+        job_args: dict,
+        *,
+        before_submit: Callable[[str], Awaitable[None]],
+    ) -> str: ...
     async def get_status(self, job_id: str) -> JobStatus: ...
     async def cancel(self, job_id: str) -> bool: ...
 ```
@@ -160,9 +166,9 @@ Implementations: `StreaqQueue` (default, Redis-backed via streaQ, separate worke
 
 `job_args` currently carries one optional key, `run_label` (`str`), propagated through to OTel span attributes for pipeline-run benchmarking.
 
-The queue never generates or accepts a caller-supplied job id — `enqueue()` always returns an id the queue
-itself assigns. **Postgres, not the queue, is the sole authority for ingestion dedup**: `ingest` and `reingest`
-route handlers guard against duplicate/conflicting requests entirely via `episode.pipeline_status` checks. The queue layer offers no id-collision backstop by design — see `docs/reference/architecture/ingestion-pipeline.md`.
+The queue never generates or accepts a caller-supplied job id — it assigns the id and hands it to `before_submit` **before** the job becomes visible to a worker. Callers use that hook to claim the episode in Postgres (`PipelineStatusService.claim_for_queue`: a compare-and-set to `QUEUED` that records the new `ingestion_job_id` and `queued_at`), wipe its prior data, and commit; if the hook raises, nothing is pushed. **Postgres, not the queue, is the sole authority for ingestion dedup and job ownership**: a lost claim means another request already owns the episode, and the route returns `409`. The queue layer offers no id-collision backstop by design — see `docs/reference/architecture/ingestion-pipeline.md`.
+
+**`before_submit` ordering contract (Phase 21)** — tested for both implementations in `tests/integration/test_queue.py`: the hook is awaited after the id exists and before the job can run. `StreaqQueue` calls `enqueue_unsafe()` to get the task (and its id) without pushing it, awaits the hook, then awaits the task to push it to Redis. `BackgroundTaskQueue` generates a uuid, awaits the hook, records the job, then starts the runner with `create_task`, holding a strong reference in `self._tasks` until it finishes so the task can't be garbage-collected mid-run.
 
 `JobStatus` (`src/ingestion/queue.py`) is a five-value enum — `QUEUED`, `RUNNING`, `DONE`, `FAILED`, `CANCELLED`
 — that both implementations map their native states onto. `CANCELLED` is not a native state in either backend;
@@ -173,6 +179,8 @@ elapsed), `DuplicateJobError`, and `QueueConnectionError` (Redis unreachable —
 **`get_status()` usage note:** callers should check `episode.pipeline_status` first — it durably answers
 "is this job done" with no TTL. `get_status()`/`cancel()` exist for the narrower case of inspecting or
 interrupting a job that Postgres still shows as in-flight.
+
+**Job ownership (Phase 21):** `episodes.ingestion_job_id` names the one job allowed to write to an episode. The worker passes its own task id into `run_ingest`, which refuses to start if the episode no longer carries that id (pickup guard), then writes status through `PipelineStatusService.for_job(job_id)` — every write includes the id in its `WHERE` clause. Reset (allowed from any status except `PENDING` — the cancel for active runs) moves the episode back to `PENDING` with a compare-and-set first and only then calls `cancel()` best-effort, so a late or failed cancel can't let the old job overwrite the reset episode.
 
 **`cancel()`** is a real operation in `StreaqQueue` (not a stub) — it can interrupt a job at any `await` point,
 which stops most pipeline stages immediately. The one exception: CPU-bound Whisper transcription runs inside a

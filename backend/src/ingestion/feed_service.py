@@ -3,7 +3,7 @@ from typing import Literal
 from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete, update
+from sqlalchemy import select, func, delete, text, update
 from uuid import UUID
 from src.models.db import EpisodeSpeaker, Feed, Episode, Chunk, TranscriptSegment
 from src.ingestion.rss_parser import parse_feed
@@ -152,25 +152,77 @@ async def get_episode(episode_id: UUID, db: AsyncSession) -> Episode | None:
     return result.scalar_one_or_none()
 
 
-async def delete_episode_transcription(episode_id: UUID, db: AsyncSession) -> bool:
-    episode = await get_episode(episode_id, db)
-    if episode is None:
-        return False
-
-    await db.execute(delete(Chunk).where(Chunk.episode_id == episode_id))
-    await db.execute(delete(TranscriptSegment).where(TranscriptSegment.episode_id == episode_id))
-    await db.execute(delete(EpisodeSpeaker).where(EpisodeSpeaker.episode_id == episode_id))
-
-    await db.execute(
+async def reset_episode(
+    episode_id: UUID,
+    db: AsyncSession,
+    *,
+    expected_status: str,
+    expected_job_id: str | None,
+) -> bool:
+    """
+    Return an episode to PENDING and delete its pipeline output -- but only
+    if its status and owning job are still what the caller observed.
+    Returns False if either changed in the meantime (nothing is touched).
+    """
+    # A guarded pipeline write holds FOR SHARE on this row for milliseconds.
+    # If a worker hangs mid-write, fail fast instead of waiting forever.
+    await db.execute(text("SET LOCAL lock_timeout = '5s'"))
+    result = await db.execute(
         update(Episode)
-        .where(Episode.id == episode_id)
+        .where(
+            Episode.id == episode_id,
+            Episode.pipeline_status == expected_status,
+            Episode.ingestion_job_id.is_not_distinct_from(expected_job_id),
+        )
         .values(
             pipeline_status="PENDING",
-            pipeline_stage=None,
             pipeline_progress=None,
             pipeline_error=None,
             ingestion_job_id=None,
+            queued_at=None,
+            status_changed_at=func.now(),
         )
     )
+    if result.rowcount == 0:
+        await db.rollback()
+        return False
+
+    await delete_episode_data(episode_id, db)
     await db.commit()
     return True
+
+
+async def reset_errored_episodes(db: AsyncSession) -> int:
+    """Reset every ERROR episode to PENDING and delete its partial output.
+    Returns how many were reset."""
+    result = await db.execute(
+        update(Episode)
+        .where(Episode.pipeline_status == "ERROR")
+        .values(
+            pipeline_status="PENDING",
+            pipeline_progress=None,
+            pipeline_error=None,
+            ingestion_job_id=None,
+            queued_at=None,
+            status_changed_at=func.now(),
+        )
+        .returning(Episode.id)
+    )
+    episode_ids = list(result.scalars().all())
+
+    if episode_ids:
+        await delete_episodes_data(episode_ids, db)
+    await db.commit()
+    return len(episode_ids)
+
+
+async def delete_episodes_data(episode_ids: list[UUID], db: AsyncSession) -> None:
+    """Delete everything pipeline runs produced for these episodes. Does not commit."""
+    await db.execute(delete(Chunk).where(Chunk.episode_id.in_(episode_ids)))
+    await db.execute(delete(TranscriptSegment).where(TranscriptSegment.episode_id.in_(episode_ids)))
+    await db.execute(delete(EpisodeSpeaker).where(EpisodeSpeaker.episode_id.in_(episode_ids)))
+
+
+async def delete_episode_data(episode_id: UUID, db: AsyncSession) -> None:
+    """Single-episode convenience wrapper. Does not commit."""
+    await delete_episodes_data([episode_id], db)

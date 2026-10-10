@@ -7,6 +7,7 @@ from src.ingestion.chunker import Chunker
 from src.ingestion.embedder import Embedder
 from src.ingestion.queue import IngestionQueue
 from src.ingestion.speaker_store import SpeakerStore
+from src.ingestion.status_service import PipelineStatusService
 from src.llm.base import EmbeddingClient, LLMClient
 from src.query.engine import QueryEngine
 from src.query.prompt_builder import PromptBuilder
@@ -88,6 +89,9 @@ def get_query_engine(
 
 
 # ~~~~~~ Pipeline ~~~~~~
+
+def get_pipeline_status_service() -> PipelineStatusService:
+    return PipelineStatusService()
 
 
 def get_chunker() -> Chunker:

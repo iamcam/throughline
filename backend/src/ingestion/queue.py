@@ -61,7 +61,13 @@ def _wraps_redis_errors(method):
 
 @runtime_checkable
 class IngestionQueue(Protocol):
-    async def enqueue(self, episode_id: UUID, job_args: dict) -> str: ...
+    async def enqueue(
+            self,
+            episode_id: UUID,
+            job_args: dict,
+            *,
+            before_submit: Callable[[str], Awaitable[None]],
+        ) -> str: ...
     async def get_status(self, job_id: str) -> JobStatus: ...
     async def cancel(self, job_id: str) -> bool: ...
 
@@ -78,11 +84,21 @@ class BackgroundTaskQueue:
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._jobs: dict[str, JobRecord] = {}
         self._job_runner = job_runner
+        self._tasks: set[asyncio.Task] = set()
 
-    async def enqueue(self, episode_id: UUID, job_args: dict) -> str:
+    async def enqueue(
+            self,
+            episode_id: UUID,
+            job_args: dict,
+            *,
+            before_submit: Callable[[str], Awaitable[None]]
+        ) -> str:
         job_id = str(uuid4())
+        await before_submit(job_id)
         self._jobs[job_id] = JobRecord(job_id=job_id, episode_id=episode_id)
-        asyncio.create_task(self._run(job_id, episode_id, job_args))
+        task = asyncio.create_task(self._run(job_id, episode_id, job_args))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
         return job_id
 
     async def _run(self, job_id: str, episode_id: UUID, job_args: dict):
@@ -137,8 +153,15 @@ class StreaqQueue:
         await self._stack.aclose()
 
     @_wraps_redis_errors
-    async def enqueue(self, episode_id: UUID, job_args: dict) -> str:
+    async def enqueue(
+        self,
+        episode_id: UUID,
+        job_args: dict,
+        *,
+        before_submit: Callable[[str], Awaitable[None]],
+    ) -> str:
         task = self._worker.enqueue_unsafe(INGEST_EPISODE_JOB, episode_id, job_args)
+        await before_submit(task.id)
         await task
         return task.id
 

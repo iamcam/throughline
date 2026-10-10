@@ -7,17 +7,19 @@
 ```
 GET /api/v1/episodes/{episode_id}/status/stream → text/event-stream
 
-data: {"status": "QUEUED", "position": 3}
+data: {"status": "QUEUED"}
 data: {"status": "DOWNLOADING", "progress": 0.2}
-data: {"status": "TRANSCRIBING", "stage": "whisper", "progress": 0.4}
+data: {"status": "TRANSCRIBING"}
 data: {"status": "DIARIZING"}
 data: {"status": "INFERRING_SPEAKERS"}
-data: {"status": "CHUNKING", "progress": 0.5}
-data: {"status": "EMBEDDING", "progress": 0.8}
+data: {"status": "CHUNKING"}
+data: {"status": "EMBEDDING"}
 data: {"status": "READY"}
 ```
 
-Stream closes on `READY` or `ERROR`. No `PENDING_NAMES` pause in v1 — the pipeline runs to completion without waiting for user input. Polling fallback: `GET /api/v1/episodes/{episode_id}/status`.
+Stream closes on `READY`, `ERROR`, or `PENDING` (the episode was reset or its run cancelled). No `PENDING_NAMES` pause in v1 — the pipeline runs to completion without waiting for user input. Polling fallback: `GET /api/v1/episodes/{episode_id}/status`.
+
+`progress` is only written during `DOWNLOADING` (fraction of bytes received); every other stage sends `status` alone. A failed run ends with `data: {"status": "ERROR", "error": "<message>"}`. The queue overview (`GET /queue`) polls instead of streaming — see ARCHITECTURE.md §3.6.
 
 ---
 
@@ -193,3 +195,5 @@ Three tools in OpenAI function-calling format. The model reads these description
 
 Query strings should be descriptive phrases rather than questions — embedding models match text, not
 question syntax. The tool description instructs the model accordingly.
+
+**`READY`-only reads (Phase 21):** retrieval (`PgvectorStore.search`) and the chat tools (`search_knowledge_base` speaker resolution, `get_episode_context`, `get_speaker_profile`) join `episodes` and require `pipeline_status = 'READY'`, so partial output from a cancelled, errored, or superseded run is never surfaced in chat.
