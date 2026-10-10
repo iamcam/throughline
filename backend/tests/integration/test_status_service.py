@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 import asyncpg
 import pytest
 import uuid
@@ -295,3 +296,29 @@ async def test_ownership_check_waits_for_reset_then_sees_lost_ownership(db_engin
 
         await api_db.commit()
         assert await check is False  # re-read the committed row: job-a no longer owns it
+
+async def test_started_at_set_on_first_download_only(db_session, make_episode):
+    episode = await make_episode(status="QUEUED", job_id="job-a")
+    service = PipelineStatusService(job_id="job-a")
+
+    assert await service.set(episode.id, "DOWNLOADING", db_session)
+    await db_session.refresh(episode)
+    started = episode.started_at
+    assert started is not None
+
+    await service.set(episode.id, "DOWNLOADING", db_session, progress=0.5)
+    await service.set(episode.id, "TRANSCRIBING", db_session)
+    await db_session.refresh(episode)
+    assert episode.started_at == started
+
+
+async def test_claim_and_reset_clear_started_at(db_session, make_episode):
+    episode = await make_episode(status="READY")
+    episode.started_at = datetime.now(timezone.utc)
+    await db_session.commit()
+
+    service = PipelineStatusService()
+    assert await service.claim_for_queue(episode.id, "job-b", db_session, allowed_from=("READY",))
+    await db_session.commit()
+    await db_session.refresh(episode)
+    assert episode.started_at is None

@@ -9,7 +9,7 @@ import {
   useEpisodeActions
 } from "@/hooks/useQueueActions";
 import { formatDuration, formatRelativeDate } from "@/lib/date";
-import { ACTIVE_STATUSES, formatPipelineStatus, resetActionLabel } from "@/lib/episode";
+import { ACTIVE_STATUSES, resetActionLabel, statusLabel } from "@/lib/episode";
 import { LucideCheckCircle2, LucideSpeech, LucideTriangleAlert } from "lucide-react";
 import { Link } from "react-router-dom";
 
@@ -58,10 +58,10 @@ export function QueueRow({ item, compact = false }: QueueRowProps) {
             <div className="flex flex-row items-center gap-6">
 
               {(!item.possibly_stuck && ACTIVE_STATUSES.includes(item.pipeline_status) && (
-                    <div className={(compact ? "text-xs" : "text-xs") + " ml-2"}>
-                  <ElapsedTime since={item.pipeline_status === 'QUEUED' ? item.queued_at : item.status_changed_at} className="block" />
-                      <div className={" "}>{(formatPipelineStatus(item.pipeline_status))}</div>
-                        </div>
+                <div className="text-xs ml-2">
+                  <ElapsedTime since={item.pipeline_status === 'QUEUED' ? item.queued_at : item.started_at} className="block" />
+                  <div>{(statusLabel(item.pipeline_status))}</div>
+                </div>
               ))}
 
               {(!isError && item.possibly_stuck) && (
@@ -69,9 +69,9 @@ export function QueueRow({ item, compact = false }: QueueRowProps) {
                 <div title="Taking longer than expected...">
                   <LucideTriangleAlert size={18} className="inline" />
                 </div>
-                      <div className={(compact ? "text-xs" : "text-xs") + +" ml-2 items-start"}>
-                  <ElapsedTime since={item.pipeline_status === 'QUEUED' ? item.queued_at : item.status_changed_at} className="block" />
-                    <div className={(compact ? "text-xs" : "text-sm") + " text-xs "}>{formatPipelineStatus(item.pipeline_status)}</div>
+                <div className="text-xs ml-2 items-start">
+                  <ElapsedTime since={item.pipeline_status === 'QUEUED' ? item.queued_at : item.started_at} className="block" />
+                  <div className={(compact ? "text-xs" : "text-sm") + " text-xs "}>{statusLabel(item.pipeline_status)}</div>
                 </div>
               </div>
               )}

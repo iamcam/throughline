@@ -90,6 +90,7 @@ class QueueEpisodeItem(BaseModel):
     pipeline_status: str
     pipeline_error: str | None
     queued_at: datetime | None
+    started_at: datetime | None
     status_changed_at: datetime | None
     possibly_stuck: bool
     feed: QueueFeedSummary

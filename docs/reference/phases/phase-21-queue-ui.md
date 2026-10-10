@@ -116,3 +116,13 @@
 **Tests added (21c):** active-episode reset cancels its job and clears ownership; two-session lock tests (a held `FOR SHARE` blocks reset until commit; a waiting check sees lost ownership after a reset commits; `LockNotAvailableError` asserted via `.orig.__cause__`); reset returns `409` on a locked row; retrieval excludes non-`READY` chunks (`test_vector_store.py`); episode context and speaker profile serve only `READY` episodes (`test_tool_dispatcher_ready.py`). `can_reset` tests removed.
 
 **Done when (21c):** ✅ any queued or running episode can be cancelled from the kebab or queue page and returns to not-ingested with nothing left behind; no partial data is readable through any API or chat tool; status views update without a refresh after a cancel or re-transcribe.
+
+## v1.9.1 addendum — queue row progress
+
+Closes FUTURE_SCOPE 2.1k.
+
+- **`episodes.started_at`** (`TIMESTAMPTZ NULL`, no backfill). `PipelineStatusService.set()` writes it only when the status is `ACTIVE_STAGES[0]` (`DOWNLOADING`), using the same `CASE … IS DISTINCT FROM` guard as `status_changed_at`, so progress updates within Downloading don't move it. Cleared (`NULL`) by `claim_for_queue`, `reset_episode`, and `reset_errored_episodes`, so each run starts clean; left in place on `READY`/`ERROR`.
+- **API:** `QueueEpisodeItem.started_at` (backend schema, `_to_item`, frontend `client.ts` type).
+- **UI:** active queue rows show a user-facing label with "{step} x/y" and an `ElapsedTime` — since `queued_at` while `QUEUED` (waiting for the worker), since `started_at` once running. Finished and errored rows show no run time.
+- **Tests:** `started_at` set on the first `DOWNLOADING` and unchanged by later progress and stage writes; a queue claim clears it.
+- **Known limitation:** episodes that were mid-run when the migration was applied have no `started_at` until their next run. Accepted for this deployment's traffic.

@@ -256,6 +256,16 @@ Shipped in Phase 21 (21c) — implemented more simply than first proposed (per-s
 
 ---
 
+### 2.1k Queue row progress: friendly labels, step x/y, run time
+
+**Shipped in v1.9.1.** See `docs/reference/phases/phase-21-queue-ui.md` (v1.9.1 addendum).
+
+Active queue rows show a user-facing label instead of the raw stage (`formatPipelineStatus` output like "Diarizing" means nothing to an end user), plus "{step}/{total}" and time in the current step, so the per-step timer reset reads as progress. Labels stay jargon-free — diarizing, chunking, and embedding are folded into plainer wording — and the raw stage name and per-step time go in the hover text for the owner-user.
+
+Backend addition: a nullable `episodes.started_at`, set on the first `DOWNLOADING` write of a run and kept through later stages, so active rows can show run time excluding queue wait. `queued_at` isn't useful for that once the worker runs on a schedule rather than continuously — time since queueing mostly measures the gap until the next worker check-in.
+
+---
+
 ### 2.2 Automatic Feed Polling
 
 Shipped in Phase 16. See IMPLEMENTATION_PLAN.md and `docs/reference/phases/phase-16-feed-polling.md`.

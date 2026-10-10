@@ -305,6 +305,7 @@ export interface QueueEpisodeItem {
   pipeline_status: string;
   pipeline_error: string | null;
   queued_at: string | null;
+  started_at: string | null;
   status_changed_at: string | null;
   possibly_stuck: boolean;
   feed: QueueFeedSummary;

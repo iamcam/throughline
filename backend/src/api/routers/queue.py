@@ -26,6 +26,7 @@ def _to_item(episode: Episode, now: datetime, thresholds) -> QueueEpisodeItem:
         pipeline_status=episode.pipeline_status,
         pipeline_error=episode.pipeline_error,
         queued_at=episode.queued_at,
+        started_at=episode.started_at,
         status_changed_at=episode.status_changed_at,
         possibly_stuck=is_possibly_stuck(
             episode.pipeline_status, episode.status_changed_at, now, thresholds

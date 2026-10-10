@@ -3,12 +3,13 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, case, func
 
+from src.ingestion.pipeline_stages import ACTIVE_STAGES
 from src.models.db import Episode
 
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
-
+RUN_START_STATUS = ACTIVE_STAGES[0]  # "DOWNLOADING"
 
 class PipelineStatusService:
     def __init__(self, job_id: str | None = None):
@@ -32,16 +33,27 @@ class PipelineStatusService:
         stmt = (
             update(Episode)
             .where(Episode.id == episode_id)
-            .values(
-                pipeline_status=status,
-                pipeline_progress=progress,
-                pipeline_error=error if error else None,
-                status_changed_at=case(
-                    (Episode.pipeline_status.is_distinct_from(status), func.now()),
-                    else_=Episode.status_changed_at,
-                ),
-            )
         )
+
+        values = dict(
+            pipeline_status=status,
+            pipeline_progress=progress,
+            pipeline_error=error if error else None,
+            status_changed_at=case(
+                (Episode.pipeline_status.is_distinct_from(status), func.now()),
+                else_=Episode.status_changed_at,
+            ),
+        )
+        if status == RUN_START_STATUS:
+            # The run starts when the episode first enters DOWNLOADING;
+            # repeated DOWNLOADING writes (progress) must not move it.
+            values["started_at"] = case(
+                (Episode.pipeline_status.is_distinct_from(status), func.now()),
+                else_=Episode.started_at,
+            )
+
+        stmt = update(Episode).where(Episode.id == episode_id).values(**values)
+
         if owner_job_id is not None:
             stmt = stmt.where(Episode.ingestion_job_id == owner_job_id)
 
@@ -78,6 +90,7 @@ class PipelineStatusService:
                     pipeline_error=None,
                     ingestion_job_id=job_id,
                     queued_at=func.now(),
+                    started_at=None,
                     status_changed_at=func.now(),
                 )
             )

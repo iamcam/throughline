@@ -27,6 +27,7 @@ episodes (
   ingestion_job_id TEXT,           -- owning queue job; claims, resets, and worker writes check it (Phase 21)
   queued_at TIMESTAMPTZ,           -- set when the episode is claimed for the queue (Phase 21)
   status_changed_at TIMESTAMPTZ,   -- bumped only when pipeline_status actually changes (Phase 21)
+  started_at TIMESTAMPTZ,          -- set on the first DOWNLOADING of a run; cleared by queue claims and resets, kept on READY/ERROR (v1.9.1)
   created_at TIMESTAMPTZ DEFAULT now()
 )
 

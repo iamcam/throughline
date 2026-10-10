@@ -180,6 +180,7 @@ async def reset_episode(
             pipeline_error=None,
             ingestion_job_id=None,
             queued_at=None,
+            started_at=None,
             status_changed_at=func.now(),
         )
     )
@@ -204,6 +205,7 @@ async def reset_errored_episodes(db: AsyncSession) -> int:
             pipeline_error=None,
             ingestion_job_id=None,
             queued_at=None,
+            started_at=None,
             status_changed_at=func.now(),
         )
         .returning(Episode.id)
